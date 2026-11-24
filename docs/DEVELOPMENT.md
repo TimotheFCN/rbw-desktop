@@ -279,7 +279,8 @@ rendered whole in the panel and the main window's popover, or only
 value. It remembers its options in the preferences, makes a new value as
 soon as an option changes (one request at a time, the latest options
 next), and lays the value over the room the widest value of these options
-would take, so that a new one never moves anything. Its strength comes
+would take, so that a new one never moves anything; when that room
+changes, with the length, it grows to it (`motion::grow`). Its strength comes
 from `GeneratorOptions::strength`, never from the value.
 
 **Recently used.** Call `recent::used(account, item, cx)` when something of
@@ -400,8 +401,10 @@ the call runs on the background executor and the result comes back to the
 view. Keep the returned `Task` in a field when a newer request should cancel
 an older one (`load_task`), or `.detach()` it. Use `backend::request_in` when
 the answer needs the window, such as setting a text field. Show data as
-`Load<T>`. Keep the previous content on screen while new data loads rather
-than blanking it (`ItemDetail::loaded`). Show a failure as the sentence from
+`Load<T>`. Never blank a pane or show the previous item's data while new
+data loads: show what is known already (the item pane draws the list's
+summary, and a login's fields from it, until the item arrives, and
+copies what was asked meanwhile once it does). Show a failure as the sentence from
 `backend::describe(&error)`: in place where data failed to load, in the
 window's `ToastSlot` when an action failed. Match on `Error` variants, never
 on their text.
@@ -456,11 +459,28 @@ cancels, Return goes on.
 Timings of behaviour, such as how often the accounts are asked or how long
 a selection rests before its item is fetched, are named constants where
 they are used. A new colour goes into `Colors` for all four palettes; text
-that says something reads at 4.5:1 on every surface. Motion uses the
-`motion` helpers (`fade`, `presence`, `content_enter`, `refresh`,
-`screen_enter`, `screen_replace` and `screen_leave`, `shake`, `spin`, the
-`SELECTION` spring), which follow the system's reduced-motion setting and
-never lay out what is around them again.
+that says something reads at 4.5:1 on every surface.
+
+**Motion** goes through `rbw_desktop_ui::motion`, whose module comment says
+how the app moves, and nothing else names a duration or a curve. What
+moves or resizes is on a spring (`SELECTION`, `RESIZE`, `SETTLE`), so that
+a new target takes over from where it is and how fast it goes; what
+appears in place fades (`ARRIVE`), and what leaves goes faster
+(`DISMISS`, `QUICK`); things arriving with a duration rather than a
+target (sheets, popovers, screens, `PRESENT`, `SCREEN`) follow
+`spring_curve`. The helpers: `presence` for what shows and leaves,
+`replace` for content replacing content in place, `appear` for content
+arriving where there was none, `enter` for a part settling from a few
+points off, `reveal` for a line opening under others, `grow` for a box
+that springs to its content's height (the generator's value), `slide`
+for a selection along rows (drawn by the rows with `Highlight`, or
+`selection_track` for rows of different places, such as a sidebar's),
+`settle` for something let go, `screen_replace` and `screen_leave`,
+`shake`, `spin`. Key an element animation by what it shows, so that
+drawing the same thing again replays nothing: the item pane by its item,
+the list by its filter, sort and choices, a new value by its count. They
+follow the system's reduced-motion setting, and none lays out what is
+around it again except `grow` and `reveal`, whose job it is.
 
 **Keyboard.** Every focusable control draws the focus ring from
 the design system (`row_focus_ring` for a row the app builds on
@@ -472,7 +492,11 @@ Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code; in the panel,
 Return copies what the item is for and Cmd/Ctrl-O opens it in the vault.
 A button with a shortcut says so in its tooltip (`button(…).shortcut(…)`,
 or `WithTooltip::with_tooltip` on another element), which waits the
-platform's delay and takes its style.
+platform's delay, takes its style and shows centred under the control
+(GPUI places tooltips at the pointer; ours moves to the control).
+`key_hint` names an action with its key in a line, as under the panel's
+list. `button(…).toggled(on)` shows that what a button turns on is on.
+Escape in the vault empties the search, then leaves its field.
 
 ## GPUI gotchas
 

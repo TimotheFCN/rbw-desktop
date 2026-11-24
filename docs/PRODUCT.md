@@ -31,9 +31,12 @@ find a password, copy it and save a new one without reading anything.
 4. **Fast.** It opens at once, never blocks the interface on the network or
    on `rbw`, and stays small in memory.
 5. **Polished motion.** Navigation, sheets, selection, copy feedback and
-   lock and unlock are animated with short, eased transitions. Motion
-   explains what changed; none of it is decoration, and it is off when the
-   system asks for reduced motion.
+   lock and unlock move as the platform's own apps do: what moves or
+   resizes on springs that a new change redirects from where it is, what
+   appears in place with a short fade, what leaves faster than it came,
+   over short distances. Motion explains what changed; none of it is
+   decoration, nothing replays when it didn't change, and under the
+   system's reduced motion only fades remain.
 6. **Plain words.** "Verification code", not "TOTP". "Website", not "URI".
 
 The mockups in `design/mockups` are the reference for look and density.
@@ -70,6 +73,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 * The list takes a share of the window, which dragging its edge changes
   (remembered; a double-click puts it back).
 * Item view: every field copies on click, with a brief "Copied" confirmation.
+  Choosing an item shows its name and what the list knows of it at once,
+  then the rest as it arrives; nothing of the previous item stays.
   Passwords and other hidden fields reveal on request. Verification codes
   count down live. Websites open in the browser.
 * Create, edit and delete items; mark favourites; move between folders.
@@ -81,7 +86,13 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 * Copy shortcuts: the password, the username and the verification code of
   the selected login, in the vault as in the menu bar panel.
 * Every button that shows only an icon says what it does, and its
-  shortcut, when the pointer rests on it.
+  shortcut, when the pointer rests on it, in a tooltip under it.
+* Website icons show with their row when they were fetched before; one
+  fetched the first time fades in on a neutral tile, and a website
+  without one shows the item's coloured letter.
+* An item's menu moves it to a folder from a submenu, which opens when
+  the pointer rests on Move to Folder, as native submenus do.
+* Escape empties the search, keeping the item chosen.
 * Sync runs in the background and on request.
 
 ### Generator
@@ -116,8 +127,10 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   it can copy (a login's username, password and verification code, a
   card's number and security code, and so on, leaving out what the item
   hasn't got) and one that opens the item in the main window, each with a
-  tooltip that gives its shortcut. Plus "Open Vault" and "Lock". It shows the account the main window shows. Nothing about SSH
-  lives here.
+  tooltip that gives its shortcut. A line under the list names the button
+  under the pointer, or what Return does, with its key: the buttons are
+  icons, and a tooltip waits a second. Plus "Open Vault" and "Lock". It
+  shows the account the main window shows. Nothing about SSH lives here.
 * The item's menu has Open Vault, Lock and Quit.
 * While the item shows, closing the last window leaves the app running.
   Launching the app again brings the running one forward.
