@@ -204,37 +204,50 @@ pub fn slider(state: &Entity<SliderState>, label: impl Into<SharedString>) -> Sl
 impl RenderOnce for Slider {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = &cx.theme().colors;
+        let value = self.state.read(cx).percentage().end;
         BaseSlider::new(&self.state)
             .accessibility_label(self.label)
             .flex_1()
-            .h(px(20.))
-            .flex()
-            .items_center()
             .child(
                 SliderTrack::new(&self.state)
-                    .relative()
+                    .flex()
+                    .items_center()
+                    .h(px(20.))
                     .w_full()
-                    .h(px(4.))
-                    .rounded(px(2.))
-                    .bg(colors.fill)
                     .child(
+                        // The indicator's bounds are what values map onto; the
+                        // fill and the thumb sit inside it at the value.
                         SliderIndicator::new(&self.state)
-                            .h_full()
+                            .relative()
+                            .w_full()
+                            .h(px(4.))
                             .rounded(px(2.))
-                            .bg(colors.accent),
-                    )
-                    .child(
-                        SliderThumb::new(&self.state)
-                            .top(px(-8.))
-                            .size(px(20.))
-                            .rounded_full()
-                            .bg(white())
-                            .shadow(vec![
-                                BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.3))
-                                    .blur_radius(px(4.)),
-                                BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.08))
-                                    .spread_radius(px(0.5)),
-                            ]),
+                            .bg(colors.fill)
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .h_full()
+                                    .w(relative(value))
+                                    .rounded(px(2.))
+                                    .bg(colors.accent),
+                            )
+                            .child(
+                                SliderThumb::new(&self.state)
+                                    .absolute()
+                                    .top(px(-8.))
+                                    .left(relative(value))
+                                    .ml(px(-10.))
+                                    .size(px(20.))
+                                    .rounded_full()
+                                    .bg(white())
+                                    .shadow(vec![
+                                        BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.3))
+                                            .blur_radius(px(4.)),
+                                        BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.08))
+                                            .spread_radius(px(0.5)),
+                                    ]),
+                            ),
                     ),
             )
     }
@@ -274,8 +287,9 @@ pub fn progress_ring(fraction: f32, cx: &App) -> impl IntoElement {
             if let Some(path) = arc(0., 0.9999) {
                 window.paint_path(path, track);
             }
+            // What remains runs clockwise from twelve o'clock.
             if fraction > 0.
-                && let Some(path) = arc(1. - fraction, 1.)
+                && let Some(path) = arc(0., fraction)
             {
                 window.paint_path(path, fill);
             }
