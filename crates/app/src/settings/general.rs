@@ -44,7 +44,7 @@ impl GeneralPage {
         let subscriptions = vec![
             cx.subscribe(&clear_after, |_, _, Selected(index), cx| {
                 let clear = CLEAR_AFTER[*index].map(Duration::from_secs);
-                preferences::update(cx, |preferences| preferences.clipboard_clear = clear);
+                preferences::update(cx, move |preferences| preferences.clipboard_clear = clear);
             }),
             cx.observe(&prefs, |this, prefs, cx| {
                 let index = clear_index(prefs.read(cx).get().clipboard_clear);
@@ -212,7 +212,7 @@ impl Render for GeneralPage {
                         "Show website icons",
                     )
                     .on_change(|on, _, cx| {
-                        preferences::update(cx, |preferences| preferences.website_icons = on)
+                        preferences::update(cx, move |preferences| preferences.website_icons = on)
                     }),
                     cx,
                 ),
@@ -221,7 +221,7 @@ impl Render for GeneralPage {
                     Some(menu_bar_note.into()),
                     switch("menu-bar", preferences.menu_bar, tray::SETTING).on_change(
                         |on, _, cx| {
-                            preferences::update(cx, |preferences| preferences.menu_bar = on)
+                            preferences::update(cx, move |preferences| preferences.menu_bar = on)
                         },
                     ),
                     cx,

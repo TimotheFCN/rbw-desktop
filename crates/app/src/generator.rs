@@ -279,7 +279,7 @@ impl Generator {
 
     fn remember(&self, cx: &mut App) {
         let options = self.choices.options();
-        preferences::update(cx, |preferences| preferences.generator = options);
+        preferences::update(cx, move |preferences| preferences.generator = options);
     }
 
     /// Applies a change of the choices: a new value now, remembered.

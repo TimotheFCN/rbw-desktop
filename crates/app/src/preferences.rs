@@ -10,10 +10,14 @@ use crate::backend;
 use crate::clipboard;
 use crate::icons::Icons;
 
+type Change = Box<dyn Fn(&mut Preferences)>;
+
 pub struct Prefs {
     preferences: Preferences,
     /// Whether they have been read; until then they are the defaults.
     loaded: bool,
+    /// Changes made before they were read, made again on what was read.
+    early: Vec<Change>,
 }
 
 /// A change could not be saved; the preferences are back as they were.
@@ -32,11 +36,20 @@ pub fn init(cx: &mut App) {
             cx,
             |backend| backend.preferences(),
             |this: &mut Prefs, result, cx| {
+                this.loaded = true;
                 match result {
-                    Ok(preferences) => this.preferences = preferences,
+                    Ok(read) => {
+                        let early = std::mem::take(&mut this.early);
+                        this.preferences = read.clone();
+                        for change in &early {
+                            change(&mut this.preferences);
+                        }
+                        if this.preferences != read {
+                            this.save(read, cx);
+                        }
+                    }
                     Err(error) => log::warn!("reading the preferences: {error}"),
                 }
-                this.loaded = true;
                 apply(&this.preferences, cx);
                 cx.notify();
             },
@@ -45,6 +58,7 @@ pub fn init(cx: &mut App) {
         Prefs {
             preferences: Preferences::default(),
             loaded: false,
+            early: vec![],
         }
     });
     cx.set_global(Shared(prefs));
@@ -63,16 +77,27 @@ impl Prefs {
         self.loaded
     }
 
-    /// Changes the preferences now and saves them.
-    pub fn update(&mut self, change: impl FnOnce(&mut Preferences), cx: &mut Context<Self>) {
+    /// Changes the preferences now and saves them. A change made before
+    /// they were read is saved on top of what was read, so that it never
+    /// writes the defaults over the others.
+    pub fn update(&mut self, change: impl Fn(&mut Preferences) + 'static, cx: &mut Context<Self>) {
         let before = self.preferences.clone();
         change(&mut self.preferences);
         if self.preferences == before {
             return;
         }
-        let saved = self.preferences.clone();
-        apply(&saved, cx);
+        apply(&self.preferences, cx);
         cx.notify();
+        if self.loaded {
+            self.save(before, cx);
+        } else {
+            self.early.push(Box::new(change));
+        }
+    }
+
+    /// Saves the preferences, or puts back `before` if that fails.
+    fn save(&mut self, before: Preferences, cx: &mut Context<Self>) {
+        let saved = self.preferences.clone();
         backend::request(
             cx,
             move |backend| backend.set_preferences(&saved),
@@ -91,7 +116,7 @@ impl Prefs {
 }
 
 /// [`Prefs::update`] from anywhere.
-pub fn update(cx: &mut App, change: impl FnOnce(&mut Preferences)) {
+pub fn update(cx: &mut App, change: impl Fn(&mut Preferences) + 'static) {
     Prefs::global(cx).update(cx, |prefs, cx| prefs.update(change, cx));
 }
 
