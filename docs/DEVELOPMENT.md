@@ -92,8 +92,8 @@ editor's folder menu does.
 **Theme and motion.** Colours, sizes and durations come from
 `cx.theme()` and `rbw_desktop_ui::motion`; app code holds none of its own. A
 new colour goes into `Colors` for all four palettes. Motion uses the
-`motion` helpers (`fade`, `movement`, `presence`, `content_enter`, the
-`SELECTION` spring), which follow the system's reduced-motion setting.
+`motion` helpers (`fade`, `presence`, `content_enter`, the `SELECTION`
+spring), which follow the system's reduced-motion setting.
 
 ## GPUI gotchas
 

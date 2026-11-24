@@ -29,7 +29,7 @@ pub use glass::{Glass, Material, glass};
 pub use icon::{Assets, Icon, IconName, icon};
 pub use rows::{ListRow, NavRow, Tile, avatar, list_row, nav_row, section_label, tile};
 pub use sheet::{SheetSlot, surface};
-pub use theme::{ActiveTheme, Appearance, Colors, Look, Metrics, Theme, mix};
+pub use theme::{ActiveTheme, Appearance, Colors, Look, Metrics, Theme};
 pub use toast::ToastSlot;
 
 use gpui::App;

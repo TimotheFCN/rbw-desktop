@@ -169,8 +169,6 @@ pub struct Colors {
     pub shadow: Hsla,
     pub success: Hsla,
     pub danger: Hsla,
-    /// Symbols inside generated passwords.
-    pub symbol: Hsla,
     pub focus_ring: Hsla,
     /// An account's avatar behind its initial.
     pub avatar: Background,
@@ -242,7 +240,6 @@ impl Colors {
             shadow: ca(0x1e285057),
             success: c(0x34c759),
             danger: c(0xff3b30),
-            symbol: c(0xe8590c),
             focus_ring: accent,
             avatar: linear_gradient(
                 160.,
@@ -288,7 +285,6 @@ impl Colors {
             shadow: ca(0x000000a6),
             success: c(0x30d158),
             danger: c(0xff453a),
-            symbol: c(0xff9f0a),
             focus_ring: accent,
             avatar: linear_gradient(
                 160.,
@@ -330,7 +326,6 @@ impl Colors {
             shadow: ca(0x00000066),
             success: c(0x26a269),
             danger: c(0xe01b24),
-            symbol: c(0xc64600),
             focus_ring: accent,
             avatar: c(0x9141ac).into(),
         }
@@ -368,7 +363,6 @@ impl Colors {
             shadow: ca(0x000000a0),
             success: c(0x78e9ab),
             danger: c(0xff7b63),
-            symbol: c(0xffa348),
             focus_ring: accent,
             avatar: c(0x9141ac).into(),
         }
@@ -479,7 +473,7 @@ impl Theme {
 
 /// The colour a fraction `t` of the way from `from` to `to`, mixed in RGB so
 /// that a fade between two hues does not pass through a third.
-pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+pub(crate) fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     let (a, b) = (from.to_rgb(), to.to_rgb());
     let lerp = |x: f32, y: f32| x + (y - x) * t;
     gpui::Rgba {

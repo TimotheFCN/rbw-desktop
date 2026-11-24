@@ -55,11 +55,6 @@ pub fn fade(duration: Duration) -> Transition {
         .reduced_motion(ReducedMotion::Continue)
 }
 
-/// Movement, which is skipped under reduced motion.
-pub fn movement(duration: Duration) -> Transition {
-    Transition::new(duration).easing(ease_out())
-}
-
 /// Samples an enter/exit transition for something that appears and leaves,
 /// such as a sheet or a confirmation. Its progress runs 0 → 1 while arriving
 /// and back to 0 while leaving, eased each way; the caller keeps rendering it
