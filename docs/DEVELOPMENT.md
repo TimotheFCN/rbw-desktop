@@ -345,20 +345,36 @@ screen's field, for one item); it emits `Unlocked` once `unlock_item` took
 the password, then try again. The detail pane shows it in place of the
 fields, the editor above its buttons.
 
-**Website icons.** `icons::icon(account, summary, cx)` gives the icon once
-it has arrived; call it only while drawing the row that shows it, which is
-what asks for it. At most three are asked for at once, on threads of their
-own (`backend::request_on_thread`), so that a first fetch from the network
-never holds up what people wait for; when one arrives the views observing
-`Icons::global(cx)` redraw and the rows still on screen ask for the next.
+**Website icons.** `icons::icon(account, summary, cx)` says what a tile
+shows: the icon, its letter when the website has none, or `Pending`, a
+neutral tile, while that isn't known; call it only while drawing the row
+that shows it, which is what asks for it. An icon rbw keeps on disk
+(`Backend::cached_website_icon`) is read off the main thread and never
+asks the server: a list's first rows with the list itself
+(`icons::read_cached` in its load, then `Icons::insert_cached`), the rows
+a few screens around those drawn ahead of them (`Icons::prefetch`), any
+other in a batch at the end of the update. Only one rbw never kept is
+asked of the server, at most three at once, on threads of their own
+(`backend::request_on_thread`), so that a first fetch never holds up what
+people wait for; when one arrives the views observing `Icons::global(cx)`
+redraw and the rows still on screen ask for the next. A website without
+an icon is asked again after an hour, one that failed after a minute.
 Icons are decoded to at most 128 pixels a side, the 400 shown last are
-kept, and SVG is never decoded. `tile(name).icon(id, icon)` cross-fades
-from the letter.
+kept, and SVG is never decoded. `tile(name).icon(id, icon)` fades the
+icon, or the letter's colour, in from the neutral tile; what was known
+when the tile first drew shows at once.
 
 **Context menus**: `popover(…).opening(Opening::At(position))`, opened on a
 right-click and from the keyboard with Shift-F10 or the Menu key (the
-vault's list does both). A menu that swaps its items, like Move to Folder,
-moves the keyboard to the menu itself: the item that had it is gone.
+vault's list does both).
+
+**Submenus**: `popover(…).submenu(menu_item(…), items)` adds a row with a
+chevron whose items open beside the menu, as Move to Folder does. The
+popover handles it as AppKit and GTK do: it opens once the pointer rests
+on the row, stays open while the pointer crosses other rows towards it,
+and closes once another row is rested on; Right, Return or a click open
+it with its first item focused, Left closes it, and Up and Down in the
+menu pass it by.
 
 **A screen** is a view entity holding its state, `impl Render`, and methods
 for its actions; long renders split into `render_*` methods in submodules
