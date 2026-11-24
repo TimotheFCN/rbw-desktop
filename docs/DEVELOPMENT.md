@@ -22,9 +22,10 @@ and offers to look again (`backend::connect`, `crate::start`).
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel` and the `ssh-*` words,
-comma-separated, reach the other states (`demo.rs` lists them); `panel`
-opens the menu bar panel alone, as a click on the item would. The demo's
+`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel`, `settings` and the
+`ssh-*` words, comma-separated, reach the other states (`demo.rs` lists
+them); `panel` opens the menu bar panel alone, as a click on the item
+would, and `settings` the Settings window over the main one. The demo's
 master password is `demo` and its codes `123456`; an email with `+device@`
 asks for a new device code and one with `+apikey@` for the API key
 `user.d3m0` / `demo-secret`; a self-hosted address with `.invalid` in it has
@@ -235,7 +236,17 @@ formatting, clippy, `tools/check-macos`, `cargo deny`, shellcheck and the
 metadata validators; the tests; a build, the tests and `tools/smoke-macos`
 on a macOS runner; `tools/e2e` against Vaultwarden; the Linux packages with
 `packaging/linux/check.sh` and the macOS dry run. Pushes to main also build
-the macOS bundle and its .dmg, signed ad hoc. The jobs share
+the macOS bundle and its .dmg, signed ad hoc.
+
+`.github/workflows/mac-check.yaml` runs on pushes to a branch named
+`mac-check` and on request: it builds the app on the macOS runner and
+`tools/mac-check` screenshots it over a busy, colourful desktop
+(`tools/lib/mac-backdrop.swift`, since the runner's own is black and hides
+how translucent surfaces look), in the light and the dark appearance: the
+vault, Settings, the lock screen, the panel and the vault behind another
+app. Download them with `gh run download RUN -n mac-check`. The runner
+draws no blur, so materials show as their solid colours there; its
+display is 1024 by 768 at 1x. The jobs share
 `.github/actions/setup`: the system libraries, the pinned Rust, a cache, and
 rbw-ng at the pinned revision, which must be pushed to GitHub.
 
@@ -388,6 +399,24 @@ shortcuts act behind the sheet, and trap Tab with `focus_trap` on the
 sheet's root. A sheet is no taller than its window: put its fields in a
 `flex_1().min_h_0()` column that scrolls, and the buttons after it.
 
+**The sidebar** of the vault and of Settings is `sidebar(id)`, flush with
+the window's edges, with `chrome::traffic_lights` at its top on macOS and
+its rows in a `scroll_area` padded by `metrics.sidebar_padding`.
+
+**Scrolling.** Anything that scrolls has a scroll bar: a column that
+scrolls is `scroll_area(id)` (with `track_scroll(&handle)` when the view
+scrolls it itself), and a `uniform_list` gets `scrollbar(id, &handle, cx)`
+after it in its parent. Their looks and timing come from `scroll::style`,
+which the theme projects onto gpui-base's scrollbar; popovers scroll on
+their own once taller than the window.
+
+**The list's divider** (`vault/list.rs`) is a deferred strip that
+straddles the list's edge, above the item and the list's scroll bar, and
+drags with GPUI's drag API: the panes' row follows `DragMoveEvent`s and
+the list's share is saved to the preferences once the divider rests. The
+list is a fraction of the row between a minimum and a maximum, so the
+layout follows the window without a frame's lag.
+
 **Popovers and menus**: `popover(id, open, &focus, label)` with
 `menu_item`s, placed inside the element it hangs from, its `Opening` saying
 where it goes. Keep `open` and a `FocusHandle` in the view, focus the handle
@@ -498,7 +527,7 @@ platform's delay and takes its style.
 
 The macOS-only code is small and type-checked from Linux by
 `tools/check-macos`; CI builds and runs it on a macOS runner
-(`tools/smoke-macos`), but nobody has used it on a Mac yet:
+(`tools/smoke-macos`, and `tools/mac-check` over a colourful desktop):
 
 - `ui/src/material.rs`: the system's materials under what GPUI draws, an
   `NSVisualEffectView` placed below GPUI's view and moved with an element's
