@@ -18,10 +18,13 @@ pub enum Error {
     WrongCode,
     #[error("none of the account's two-step login methods are supported")]
     TwoStepUnsupported,
-    #[error(
-        "rbw needs the master password for this, for example for an item that asks for it again"
-    )]
+    #[error("rbw would have to ask for the master password")]
     PasswordRequired,
+    /// The item asks for the master password again before its secrets are
+    /// shown or changed: ask for it, pass it to
+    /// [`Backend::unlock_item`](crate::Backend::unlock_item) and try again.
+    #[error("the item asks for the master password again")]
+    RepromptRequired,
     #[error("Touch ID was canceled")]
     TouchIdCanceled,
     #[error("Touch ID can't unlock the account now")]

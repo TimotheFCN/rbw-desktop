@@ -167,7 +167,38 @@ fn against_vaultwarden() {
     let old = backend.create_item(&id, &note).unwrap();
     backend.delete_item(&id, &old.id).unwrap();
     assert_eq!(backend.item(&id, &old.id), Err(Error::NotFound));
-    assert_eq!(backend.items(&id).unwrap().len(), 4);
+    // and the two organization items that vaultwarden.sh made
+    let items = backend.items(&id).unwrap();
+    assert_eq!(items.len(), 6);
+
+    // an item that asks for the master password again
+    let bank = items.iter().find(|item| item.name == "Bank").unwrap();
+    assert!(bank.reprompt && bank.has_code && bank.organization.is_some());
+    assert_eq!(backend.item(&id, &bank.id), Err(Error::RepromptRequired));
+    assert_eq!(
+        backend.verification_code(&id, &bank.id),
+        Err(Error::RepromptRequired)
+    );
+    assert_eq!(
+        backend.unlock_item(&id, &bank.id, &"wrong".into()),
+        Err(Error::WrongPassword)
+    );
+    backend.unlock_item(&id, &bank.id, &password).unwrap();
+    let unlocked = backend.item(&id, &bank.id).unwrap();
+    assert!(unlocked.reprompt);
+    let ItemContent::Login(bank_login) = &unlocked.data.content else {
+        panic!("not a login");
+    };
+    assert_eq!(bank_login.password.expose(), "bank-password");
+    backend.verification_code(&id, &bank.id).unwrap();
+    backend.set_favorite(&id, &bank.id, true).unwrap();
+    assert!(
+        backend
+            .items(&id)
+            .unwrap()
+            .iter()
+            .any(|item| item.id == bank.id && item.favorite)
+    );
 
     let ssh = backend.ssh_agent(&id).unwrap();
     let keys = ssh.keys.unwrap();
@@ -220,7 +251,8 @@ fn against_vaultwarden() {
         Err(Error::WrongPassword)
     );
     backend.unlock(&id, &password).unwrap();
-    assert_eq!(backend.items(&id).unwrap().len(), 4);
+    assert_eq!(backend.items(&id).unwrap().len(), 6);
+    assert_eq!(backend.item(&id, &bank.id), Err(Error::RepromptRequired));
 
     // an account with two-step login
     let two_step_email = env("RBW_DESKTOP_TEST_TWO_STEP_EMAIL");

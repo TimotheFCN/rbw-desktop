@@ -40,6 +40,9 @@ pub struct ItemSummary {
     pub favorite: bool,
     /// Whether the item has a verification code.
     pub has_code: bool,
+    /// Whether the item asks for the master password again before its
+    /// secrets are shown; see [`Backend::unlock_item`](crate::Backend::unlock_item).
+    pub reprompt: bool,
     /// Whether the item can be edited and deleted. Every item can be marked
     /// favourite and moved between folders.
     pub editable: bool,
@@ -53,6 +56,7 @@ pub struct Item {
     pub organization: Option<String>,
     pub favorite: bool,
     pub editable: bool,
+    pub reprompt: bool,
 }
 
 impl Item {

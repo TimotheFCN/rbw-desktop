@@ -4,9 +4,10 @@
 #
 #     RBW_NG=~/src/rbw-ng crates/core/tests/vaultwarden.sh
 #
-# It starts a throwaway server on 127.0.0.1, makes two accounts with the
-# helpers of rbw-ng's tools/scripting-check (which needs Python 3.10+ and
-# the `cryptography` package), and runs the tests with a private HOME, so
+# It starts a throwaway server on 127.0.0.1, makes the accounts and their
+# shared items with the helpers of rbw-ng's tools/scripting-check (which
+# needs Python 3.10+ and the `cryptography` package), and runs the tests
+# with a private HOME, so
 # that no profile of yours is touched. The server and the HOME go away at
 # the end.
 set -eu
@@ -56,7 +57,9 @@ path, server, email, two_step_email, password = sys.argv[1:]
 loader = importlib.machinery.SourceFileLoader("scripting_check", path)
 check = importlib.util.module_from_spec(importlib.util.spec_from_loader("scripting_check", loader))
 loader.exec_module(check)
-check.register(server, email, password)
+public_key = check.register(server, email, password)
+# a shared login, and one that asks for the master password again
+check.share_login(server, email, password, public_key)
 check.register(server, two_step_email, password)
 check.enable_authenticator(server, two_step_email, password)
 PY

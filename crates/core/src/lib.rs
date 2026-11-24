@@ -77,7 +77,18 @@ pub trait Backend: Send + Sync {
 
     fn items(&self, account: &AccountId) -> Result<Vec<ItemSummary>>;
 
+    /// The item with its secrets. Fails with [`Error::RepromptRequired`] for
+    /// an item that asks for the master password again and isn't unlocked.
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item>;
+
+    /// Unlocks an item that asks for the master password again
+    /// ([`ItemSummary::reprompt`]), once rbw-agent has checked the password:
+    /// [`Backend::item`], [`Backend::verification_code`] and
+    /// [`Backend::edit_item`] then work for it until it goes unread for two
+    /// minutes or the account locks. Each read keeps it unlocked, so
+    /// refreshing its code keeps it open while it is shown. Fails with
+    /// [`Error::WrongPassword`].
+    fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()>;
 
     fn create_item(&self, account: &AccountId, data: &ItemData) -> Result<ItemSummary>;
 

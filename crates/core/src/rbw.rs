@@ -276,6 +276,15 @@ impl Backend for RbwBackend {
             .ok_or_else(|| Error::Other("the item is of a kind rbw-desktop doesn't know".into()))
     }
 
+    fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
+        self.run_with_secret(
+            account,
+            &["item", "unlock", &item.0, "--password-stdin"],
+            password,
+            Wait::Local,
+        )
+    }
+
     fn create_item(&self, account: &AccountId, data: &ItemData) -> Result<ItemSummary> {
         self.save(account, &["item", "create"], &ItemJson::from_data(data))
     }

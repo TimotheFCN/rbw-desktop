@@ -35,6 +35,8 @@ pub struct ItemJson {
     favorite: Option<bool>,
     #[serde(default = "yes", skip_serializing)]
     edit: bool,
+    #[serde(default, skip_serializing)]
+    reprompt: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     login: Option<LoginJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +232,7 @@ impl ItemJson {
             favorite: self.favorite.unwrap_or(false),
             has_code,
             editable: self.edit,
+            reprompt: self.reprompt != 0,
         })
     }
 
@@ -328,6 +331,7 @@ impl ItemJson {
             organization: self.organization_id,
             favorite: self.favorite.unwrap_or(false),
             editable: self.edit,
+            reprompt: self.reprompt != 0,
         })
     }
 
@@ -557,7 +561,7 @@ mod tests {
              "name":"GitHub","favorite":true,"edit":true,"revisionDate":"x","deletedDate":null,
              "login":{"username":"octo","uris":[{"match":null,"uri":"https://github.com"}],"hasTotp":true}},
             {"id":"b","organizationId":"o","type":3,"name":"Visa","favorite":false,"edit":false,
-             "card":{"brand":"Visa"}},
+             "reprompt":1,"card":{"brand":"Visa"}},
             {"id":"c","type":4,"name":"Me","identity":{"title":null,"firstName":"Alex","middleName":null,"lastName":"Martin"}},
             {"id":"d","type":5,"name":"Laptop","sshKey":{"publicKey":"ssh-ed25519 AAAA","keyFingerprint":"SHA256:x"}},
             {"id":"e","type":9,"name":"From the future"}
@@ -573,7 +577,8 @@ mod tests {
         assert!(login.has_code && login.favorite && login.editable);
         assert_eq!(summaries[1].subtitle.as_deref(), Some("Visa"));
         assert_eq!(summaries[1].organization.as_deref(), Some("o"));
-        assert!(!summaries[1].editable);
+        assert!(!summaries[1].editable && summaries[1].reprompt);
+        assert!(!login.reprompt);
         assert_eq!(summaries[2].subtitle.as_deref(), Some("Alex Martin"));
         assert_eq!(summaries[3].subtitle.as_deref(), Some("SHA256:x"));
     }

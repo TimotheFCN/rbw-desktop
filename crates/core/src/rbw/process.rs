@@ -224,6 +224,7 @@ fn error_from(error: JsonError) -> Error {
         "new_device_code_required" => Error::NewDeviceCodeRequired,
         "incorrect_code" => Error::WrongCode,
         "two_step_unsupported" => Error::TwoStepUnsupported,
+        "reprompt_required" => Error::RepromptRequired,
         "touch_id_canceled" => Error::TouchIdCanceled,
         "touch_id_unavailable" => Error::TouchIdUnavailable,
         "not_found" => Error::NotFound,
@@ -269,6 +270,10 @@ mod tests {
         assert_eq!(
             error_from(r#"{"code":"server","status":500,"message":"rbw sync: 500"}"#),
             Error::Server("rbw sync: 500".into())
+        );
+        assert_eq!(
+            error_from(r#"{"code":"reprompt_required","message":"m"}"#),
+            Error::RepromptRequired
         );
         assert_eq!(
             error_from(r#"{"code":"something_new","message":"m"}"#),

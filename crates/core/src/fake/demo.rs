@@ -97,6 +97,7 @@ impl Vault {
             organization: None,
             favorite: false,
             editable: true,
+            reprompt: false,
         });
         self.items.last_mut().expect("just pushed")
     }
@@ -131,6 +132,7 @@ trait ItemExt {
     fn notes(&mut self, notes: &str) -> &mut Self;
     fn field(&mut self, name: &str, value: FieldValue) -> &mut Self;
     fn shared(&mut self, organization: &str, editable: bool) -> &mut Self;
+    fn reprompt(&mut self) -> &mut Self;
 }
 
 impl ItemExt for Item {
@@ -162,6 +164,11 @@ impl ItemExt for Item {
     fn shared(&mut self, organization: &str, editable: bool) -> &mut Self {
         self.organization = Some(organization.to_string());
         self.editable = editable;
+        self
+    }
+
+    fn reprompt(&mut self) -> &mut Self {
+        self.reprompt = true;
         self
     }
 }
@@ -313,6 +320,7 @@ fn personal() -> DemoAccount {
             "40213377",
             "https://online.bank.example",
         )
+        .reprompt()
         .favorite()
         .field("Security answer", FieldValue::Hidden("blue heron".into()))
         .code();
@@ -385,7 +393,7 @@ fn personal() -> DemoAccount {
             code: Secret::new("123"),
         }),
     );
-    visa.favorite();
+    visa.favorite().reprompt();
     vault.add(
         "Mastercard",
         Some("Finance"),

@@ -5,6 +5,7 @@
 
 mod demo;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -47,7 +48,13 @@ struct FakeAccount {
     settings: AccountSettings,
     items: Vec<Item>,
     folders: Vec<Folder>,
+    // items that ask for the password again, unlocked, with their last read
+    unlocked_items: HashMap<ItemId, Instant>,
 }
+
+// How long an unlocked item that asks for the password again stays
+// unlocked without being read, as in rbw-agent.
+const ITEM_UNLOCK_IDLE: Duration = Duration::from_secs(120);
 
 impl FakeBackend {
     /// The master password of every demo account.
@@ -78,6 +85,7 @@ impl FakeBackend {
                 },
                 items: demo.items,
                 folders: demo.folders,
+                unlocked_items: HashMap::new(),
             })
             .collect();
         Self {
@@ -178,7 +186,7 @@ impl State {
             if account.state == LockState::Unlocked
                 && account.last_use.elapsed() >= account.settings.lock_timeout
             {
-                account.state = LockState::Locked;
+                account.lock();
             }
         }
     }
@@ -229,6 +237,26 @@ impl FakeAccount {
             .iter_mut()
             .find(|item| item.id == *id)
             .ok_or(Error::NotFound)
+    }
+
+    fn lock(&mut self) {
+        self.state = LockState::Locked;
+        self.unlocked_items.clear();
+    }
+
+    // The item, with its secrets: one that asks for the password again
+    // must be unlocked, and reading it keeps it unlocked.
+    fn readable_item_mut(&mut self, id: &ItemId) -> Result<&mut Item> {
+        let reprompt = self.item_mut(id)?.reprompt;
+        if reprompt {
+            match self.unlocked_items.get_mut(id) {
+                Some(last_read) if last_read.elapsed() < ITEM_UNLOCK_IDLE => {
+                    *last_read = Instant::now();
+                }
+                _ => return Err(Error::RepromptRequired),
+            }
+        }
+        self.item_mut(id)
     }
 
     fn editable_item_mut(&mut self, id: &ItemId) -> Result<&mut Item> {
@@ -320,6 +348,7 @@ fn summary(item: &Item) -> ItemSummary {
         favorite: item.favorite,
         has_code,
         editable: item.editable,
+        reprompt: item.reprompt,
     }
 }
 
@@ -434,6 +463,7 @@ impl Backend for FakeBackend {
             },
             items: vec![],
             folders: vec![],
+            unlocked_items: HashMap::new(),
         });
         Ok(id)
     }
@@ -492,7 +522,7 @@ impl Backend for FakeBackend {
         let mut state = self.call()?;
         let account = state.account_mut(account)?;
         if account.state == LockState::Unlocked {
-            account.state = LockState::Locked;
+            account.lock();
         }
         Ok(())
     }
@@ -513,7 +543,22 @@ impl Backend for FakeBackend {
     }
 
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item> {
-        Ok(self.call()?.unlocked(account)?.item_mut(item)?.clone())
+        Ok(self
+            .call()?
+            .unlocked(account)?
+            .readable_item_mut(item)?
+            .clone())
+    }
+
+    fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
+        let mut state = self.call()?;
+        let account = state.unlocked(account)?;
+        account.item_mut(item)?;
+        if password.expose() != Self::PASSWORD {
+            return Err(Error::WrongPassword);
+        }
+        account.unlocked_items.insert(item.clone(), Instant::now());
+        Ok(())
     }
 
     fn create_item(&self, account: &AccountId, data: &ItemData) -> Result<ItemSummary> {
@@ -527,6 +572,7 @@ impl Backend for FakeBackend {
             organization: None,
             favorite: false,
             editable: true,
+            reprompt: false,
         };
         let summary = summary(&item);
         account.items.push(item);
@@ -543,6 +589,7 @@ impl Backend for FakeBackend {
         let mut state = self.online()?;
         let account = state.unlocked(account)?;
         account.check(data)?;
+        account.readable_item_mut(item)?;
         let item = account.editable_item_mut(item)?;
         if item.kind() != data.content.kind() {
             return Err(Error::InvalidItem("an item's kind can't change".into()));
@@ -611,7 +658,7 @@ impl Backend for FakeBackend {
 
     fn verification_code(&self, account: &AccountId, item: &ItemId) -> Result<VerificationCode> {
         let mut state = self.call()?;
-        let item = state.unlocked(account)?.item_mut(item)?;
+        let item = state.unlocked(account)?.readable_item_mut(item)?;
         match &item.data.content {
             ItemContent::Login(login) if !login.totp.is_empty() => {
                 Ok(totp(login.totp.expose(), SystemTime::now()))
@@ -921,6 +968,36 @@ mod tests {
         });
         let key = fake.create_item(&id, &key).unwrap();
         assert!(key.subtitle.unwrap().starts_with("SHA256:"));
+    }
+
+    #[test]
+    fn items_that_ask_for_the_password_again() {
+        let fake = unlocked();
+        let id = personal();
+        let bank = fake
+            .items(&id)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.reprompt && item.has_code)
+            .unwrap();
+        assert_eq!(fake.item(&id, &bank.id), Err(Error::RepromptRequired));
+        assert_eq!(
+            fake.verification_code(&id, &bank.id),
+            Err(Error::RepromptRequired)
+        );
+        assert_eq!(
+            fake.unlock_item(&id, &bank.id, &"nope".into()),
+            Err(Error::WrongPassword)
+        );
+        fake.unlock_item(&id, &bank.id, &FakeBackend::PASSWORD.into())
+            .unwrap();
+        let item = fake.item(&id, &bank.id).unwrap();
+        assert!(item.reprompt);
+        fake.verification_code(&id, &bank.id).unwrap();
+        fake.edit_item(&id, &bank.id, &item.data).unwrap();
+        fake.lock(&id).unwrap();
+        fake.unlock(&id, &FakeBackend::PASSWORD.into()).unwrap();
+        assert_eq!(fake.item(&id, &bank.id), Err(Error::RepromptRequired));
     }
 
     #[test]

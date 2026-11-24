@@ -16,7 +16,7 @@ main thread. Errors are `Error` values, never text to parse.
 | --- | --- |
 | Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `remove_account` |
 | Locking | `unlock`, `unlock_with_touch_id`, `lock` |
-| Vault | `sync`, `items`, `item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code` |
+| Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code` |
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
@@ -30,6 +30,15 @@ email.
 
 `items` lists summaries without secrets. Secrets come only from `item` and
 `verification_code`, in `Secret` values that wipe their memory when dropped.
+An item with `reprompt` set asks for the master password again, as
+Bitwarden's "master password re-prompt" does: `item`, `verification_code` and
+`edit_item` fail with `RepromptRequired` until `unlock_item` gets the master
+password, which `rbw-agent` checks. The item then stays unlocked until it
+goes unread for two minutes or the account locks; each read, such as
+refreshing its code, keeps it unlocked. The official clients likewise ask
+each time such an item is opened and not again while it stays open. The
+list (`items`) never needs it.
+
 `ItemSummary::editable` and `Item::editable` say whether an item can be
 edited and deleted: items in read-only collections can't. Every item can be
 marked favourite and moved between folders, which change only what belongs to
@@ -64,7 +73,7 @@ or logged.
 | `remove_account` | `rbw purge --all` |
 | `unlock`, `unlock_with_touch_id`, `lock` | `rbw unlock --password-stdin`, `rbw unlock --touch-id`, `rbw lock` |
 | `sync` | `rbw sync` |
-| `items`, `item` | `rbw item list`, `rbw item get ID` |
+| `items`, `item`, `unlock_item` | `rbw item list`, `rbw item get ID`, `rbw item unlock ID --password-stdin` |
 | `create_item`, `edit_item`, `delete_item` | `rbw item create`, `rbw item edit ID`, `rbw item delete ID` |
 | `set_favorite`, `move_item` | `rbw item favorite ID true\|false`, `rbw item move ID [FOLDER]` |
 | `folders`, `create_folder` | `rbw folder list`, `rbw folder create NAME` |
@@ -90,7 +99,8 @@ JSON mapping and error codes, with no server.
 
 `RBW_NG=path/to/rbw-ng crates/core/tests/vaultwarden.sh` runs the real backend
 against Vaultwarden in Docker. It builds rbw-ng, starts a server on
-127.0.0.1, makes two accounts (one with two-step login) with rbw-ng's
+127.0.0.1, makes two accounts (one with two-step login, the other with an
+organization whose login asks for the master password again) with rbw-ng's
 `tools/scripting-check`, runs the tests with a private `HOME`, and removes the
 server and the `HOME` afterwards. It needs Docker, Python 3.10+ and the
 `cryptography` package.
