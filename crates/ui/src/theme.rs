@@ -172,6 +172,8 @@ pub struct Colors {
     /// Symbols inside generated passwords.
     pub symbol: Hsla,
     pub focus_ring: Hsla,
+    /// An account's avatar behind its initial.
+    pub avatar: Background,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -242,6 +244,11 @@ impl Colors {
             danger: c(0xff3b30),
             symbol: c(0xe8590c),
             focus_ring: accent,
+            avatar: linear_gradient(
+                160.,
+                linear_color_stop(c(0x8e9bff), 0.),
+                linear_color_stop(c(0x5b6cf0), 1.),
+            ),
         }
     }
 
@@ -283,6 +290,11 @@ impl Colors {
             danger: c(0xff453a),
             symbol: c(0xff9f0a),
             focus_ring: accent,
+            avatar: linear_gradient(
+                160.,
+                linear_color_stop(c(0x8e9bff), 0.),
+                linear_color_stop(c(0x5b6cf0), 1.),
+            ),
         }
     }
 
@@ -320,6 +332,7 @@ impl Colors {
             danger: c(0xe01b24),
             symbol: c(0xc64600),
             focus_ring: accent,
+            avatar: c(0x9141ac).into(),
         }
     }
 
@@ -357,6 +370,7 @@ impl Colors {
             danger: c(0xff7b63),
             symbol: c(0xffa348),
             focus_ring: accent,
+            avatar: c(0x9141ac).into(),
         }
     }
 

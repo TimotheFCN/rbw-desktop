@@ -6,8 +6,8 @@ use gpui::{
 };
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Material, button, chrome, glass, nav_row,
-    section_label,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Material, avatar, button, chrome, glass,
+    nav_row, section_label,
 };
 
 use super::{Filter, Lock, VaultView};
@@ -115,16 +115,7 @@ impl VaultView {
         }
 
         let email = self.account.email.clone().unwrap_or_default();
-        let initial = email
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_default();
         let theme = cx.theme();
-        let avatar_fill = match look {
-            Look::MacOs => gpui::rgb(0x6f7ff3).into(),
-            Look::Gnome => gpui::rgb(0x9141ac).into(),
-        };
         let account = div()
             .mt_auto()
             .flex()
@@ -132,20 +123,7 @@ impl VaultView {
             .gap(px(8.))
             .px(px(6.))
             .py(px(6.))
-            .child(
-                div()
-                    .size(px(26.))
-                    .flex_none()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg::<gpui::Hsla>(avatar_fill)
-                    .text_color(gpui::white())
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(initial),
-            )
+            .child(avatar(&email, cx))
             .child(
                 div()
                     .flex_1()

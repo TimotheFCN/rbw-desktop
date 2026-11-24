@@ -166,6 +166,23 @@ impl RenderOnce for Tile {
     }
 }
 
+/// The round badge with an account's initial.
+pub fn avatar(email: &str, cx: &App) -> impl IntoElement {
+    let initial: String = email.chars().take(1).flat_map(char::to_uppercase).collect();
+    div()
+        .size(px(26.))
+        .flex_none()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(cx.theme().colors.avatar)
+        .text_color(gpui::white())
+        .text_size(px(12.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(initial)
+}
+
 /// A row of the item list: tile, name and subtitle.
 #[derive(IntoElement)]
 pub struct ListRow {

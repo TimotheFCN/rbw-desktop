@@ -27,7 +27,7 @@ pub use controls::{
 pub use fields::{SearchField, TextField, search_field, text_field};
 pub use glass::{Glass, Material, glass};
 pub use icon::{Assets, Icon, IconName, icon};
-pub use rows::{ListRow, NavRow, Tile, list_row, nav_row, section_label, tile};
+pub use rows::{ListRow, NavRow, Tile, avatar, list_row, nav_row, section_label, tile};
 pub use sheet::{SheetSlot, surface};
 pub use theme::{ActiveTheme, Appearance, Colors, Look, Metrics, Theme, mix};
 pub use toast::ToastSlot;
