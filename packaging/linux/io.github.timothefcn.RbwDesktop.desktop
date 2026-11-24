@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=rbw Desktop
+Name=Fastwarden
 GenericName=Password Manager
 Comment=Find, copy and save the passwords of your Bitwarden or Vaultwarden vault
 Exec=rbw-desktop

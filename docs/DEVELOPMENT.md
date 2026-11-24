@@ -165,7 +165,7 @@ the `image` crate, which GPUI turns on.
 ```sh
 RBW_NG=~/src/rbw-ng packaging/linux/package.sh    # target/packages: .tar.xz and .deb
 packaging/linux/check.sh                          # install and run them in containers
-RBW_NG=~/src/rbw-ng packaging/macos/bundle.sh     # on a Mac: rbw Desktop.app and a .dmg
+RBW_NG=~/src/rbw-ng packaging/macos/bundle.sh     # on a Mac: Fastwarden.app and a .dmg
 RBW_NG=~/src/rbw-ng packaging/macos/bundle.sh --dry-run --universal   # its layout, anywhere
 packaging/icon/render.py                          # after changing the icon
 ```
@@ -212,7 +212,7 @@ would need host access for each of these (`flatpak-spawn --host`, the
 session's runtime folder, systemd), which leaves little of it while adding
 its costs.
 
-**macOS.** `bundle.sh` builds `rbw Desktop.app` for this Mac's architecture
+**macOS.** `bundle.sh` builds `Fastwarden.app` for this Mac's architecture
 or, with `--universal`, both: `Contents/MacOS/rbw-desktop`,
 `Contents/Helpers/{rbw,rbw-agent}`, `Info.plist` from
 `packaging/macos/Info.plist` (macOS 12 or later, GPUI's Metal shaders'

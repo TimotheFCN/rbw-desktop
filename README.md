@@ -1,8 +1,10 @@
-# rbw Desktop
+# Fastwarden
 
 A fast desktop app for Bitwarden and Vaultwarden vaults, on macOS and Linux.
 Find a password, copy it and save a new one in a window that opens at once.
-It is unofficial: Bitwarden, Inc. doesn't make it.
+It is unofficial: Bitwarden, Inc. doesn't make it. Fastwarden is the app of
+the rbw-desktop project, which is why its files and packages are named
+`rbw-desktop`.
 
 ![The vault on macOS](docs/screenshots/macos-vault.png)
 
@@ -26,9 +28,9 @@ Download the file for your system from the
 [releases](https://github.com/TimotheFCN/rbw-desktop/releases).
 
 **macOS** 12 or later: open `rbw-desktop-VERSION-macos-universal.dmg` and
-drag rbw Desktop to Applications. If macOS says it can't check the app,
+drag Fastwarden to Applications. If macOS says it can't check the app,
 that release isn't notarized: open System Settings, Privacy & Security, and
-choose Open Anyway next to rbw Desktop.
+choose Open Anyway next to Fastwarden.
 
 **Ubuntu, Debian** and their derivatives (Ubuntu 24.04, Debian 13 or later):
 

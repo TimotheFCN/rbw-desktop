@@ -154,9 +154,9 @@ jobs:
             [[ $HAS_NOTARY_KEY == true ]] && options+=(--notarize)
           fi
           RBW_NG=../rbw-ng packaging/macos/bundle.sh "${options[@]}"
-          codesign --display --verbose=4 "target/packages/rbw Desktop.app"
+          codesign --display --verbose=4 "target/packages/Fastwarden.app"
       - name: Run the bundled demo
-        run: tools/smoke-macos "target/packages/rbw Desktop.app/Contents/MacOS/rbw-desktop" target/shots/bundle
+        run: tools/smoke-macos "target/packages/Fastwarden.app/Contents/MacOS/rbw-desktop" target/shots/bundle
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -194,6 +194,6 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" ../dist/* --clobber
           else
-            gh release create "$TAG" --draft --verify-tag --title "rbw Desktop $TAG" \
-              --notes "rbw Desktop $TAG, with rbw-ng $(cat packaging/rbw-ng-revision)." ../dist/*
+            gh release create "$TAG" --draft --verify-tag --title "Fastwarden $TAG" \
+              --notes "Fastwarden $TAG, with rbw-ng $(cat packaging/rbw-ng-revision)." ../dist/*
           fi

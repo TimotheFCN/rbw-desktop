@@ -348,10 +348,10 @@ x11_tray_item
 main=$window
 panel_open() {
 	x11_tray_click 600 300
-	x11_window '^rbw Desktop$' 10
+	x11_window '^Fastwarden$' 10
 }
 panel_open
-step panel "[[ -n \$(xdotool search --name '^rbw Desktop\$') ]]"
+step panel "[[ -n \$(xdotool search --name '^Fastwarden\$') ]]"
 # The Generator tab comes before the search field; its Copy button then has
 # the keyboard.
 keys shift+Tab Right
@@ -366,7 +366,7 @@ keys Return
 step panel-search-copied "[[ \$(clipboard) == router-password ]]"
 keys Escape
 sleep 0.5
-check panel-closed "[[ -z \$(xdotool search --name '^rbw Desktop\$') ]]"
+check panel-closed "[[ -z \$(xdotool search --name '^Fastwarden\$') ]]"
 printf nothing | xclip -selection clipboard
 panel_open
 keys Return

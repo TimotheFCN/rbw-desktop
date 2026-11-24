@@ -107,9 +107,9 @@ jobs:
       - uses: cargo-bins/cargo-binstall@v1.28.0
       - run: cargo binstall -y --locked cargo-about@0.9.3
       - run: RBW_NG=../rbw-ng packaging/macos/bundle.sh
-      - run: codesign --display --verbose=4 "target/packages/rbw Desktop.app"
+      - run: codesign --display --verbose=4 "target/packages/Fastwarden.app"
       - name: Run the bundled demo
-        run: tools/smoke-macos "target/packages/rbw Desktop.app/Contents/MacOS/rbw-desktop" target/shots/bundle
+        run: tools/smoke-macos "target/packages/Fastwarden.app/Contents/MacOS/rbw-desktop" target/shots/bundle
       - uses: actions/upload-artifact@v7
         if: always()
         with:

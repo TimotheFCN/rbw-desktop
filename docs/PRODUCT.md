@@ -5,6 +5,11 @@ because the official desktop app is slow, heavy and awkward to use. It is
 built on [rbw-ng](https://github.com/TimotheFCN/rbw-ng): `rbw-agent` holds the
 vault key, syncs and serves SSH keys, and this app is the window onto it.
 
+People know the app as **Fastwarden**: its windows, menus, Dock, About page,
+desktop entry and README say so. The project, its repository, crates,
+binary (`rbw-desktop`), packages and files, and the application id
+(`io.github.timothefcn.RbwDesktop`) keep the name rbw-desktop.
+
 ## Who it is for
 
 Anyone. A person who has never opened a terminal must be able to sign in,

@@ -26,7 +26,7 @@ pub const APP_ID: &str = "io.github.timothefcn.RbwDesktop";
 
 /// The app's name, as people see it: in the Dock and the menu bar, GNOME's
 /// overview, its menus and its windows.
-pub const APP_NAME: &str = "rbw Desktop";
+pub const APP_NAME: &str = "Fastwarden";
 
 pub use account::{
     Account, AccountId, AccountSettings, LockState, LoginCode, Server, TwoStepMethod,

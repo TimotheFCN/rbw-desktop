@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the macOS app and a disk image holding it into target/packages:
 #
-# - "rbw Desktop.app": the app, with rbw and rbw-agent built from the rbw-ng
+# - "Fastwarden.app": the app, with rbw and rbw-agent built from the rbw-ng
 #   checkout in $RBW_NG in Contents/Helpers, where the app finds them and
 #   where code signing expects helper tools;
 # - rbw-desktop-VERSION-macos-ARCH.dmg: the app and a link to Applications.

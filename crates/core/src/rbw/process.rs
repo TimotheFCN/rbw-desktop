@@ -528,8 +528,8 @@ mod tests {
 
     #[test]
     fn an_agent_on_a_disk_image_or_translocated_is_transient() {
-        let app = "rbw Desktop.app/Contents/Helpers/rbw-agent";
-        assert!(transient(&PathBuf::from("/Volumes/rbw Desktop").join(app)));
+        let app = "Fastwarden.app/Contents/Helpers/rbw-agent";
+        assert!(transient(&PathBuf::from("/Volumes/Fastwarden").join(app)));
         assert!(transient(
             &PathBuf::from("/private/var/folders/x/T/AppTranslocation/1A2B/d").join(app)
         ));
