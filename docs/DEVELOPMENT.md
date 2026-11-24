@@ -22,7 +22,7 @@ and offers to look again (`backend::connect`, `crate::start`).
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `touch-id-cancel`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel`, `settings` and the
+`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel`, `settings`, `new-item` and the
 `ssh-*` words, comma-separated, reach the other states (`demo.rs` lists
 them); `panel` opens the menu bar panel alone, as a click on the item
 would, and `settings` the Settings window over the main one. The demo's
@@ -243,8 +243,8 @@ the macOS bundle and its .dmg, signed ad hoc.
 `tools/mac-check` screenshots it over a busy, colourful desktop
 (`tools/lib/mac-backdrop.swift`, since the runner's own is black and hides
 how translucent surfaces look), in the light and the dark appearance: the
-vault, Settings, the lock screen, the panel and the vault behind another
-app. Download them with `gh run download RUN -n mac-check`. The runner
+vault, Settings, the lock screen, the panel, the New Item sheet, the lock
+screen with Touch ID (the demo's) and the vault behind another app. Download them with `gh run download RUN -n mac-check`. The runner
 draws no blur, so materials show as their solid colours there; its
 display is 1024 by 768 at 1x. The jobs share
 `.github/actions/setup`: the system libraries, the pinned Rust, a cache, and

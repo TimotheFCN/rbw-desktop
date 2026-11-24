@@ -20,7 +20,9 @@
 //!   take 300 ms each, as from the network;
 //! * `panel`: the menu bar item's panel opens alone, as if the item was
 //!   clicked, for systems without one;
-//! * `settings`: the Settings window opens too, over the main window.
+//! * `settings`: the Settings window opens too, over the main window;
+//! * `new-item`: the vault opens the New Item sheet, for screenshots
+//!   where nothing can type or click, as on CI's Mac.
 //!
 //! Without a word, both demo accounts start locked.
 

@@ -346,6 +346,11 @@ impl VaultView {
         };
         this.reload(cx);
         window.focus(&this.list_focus, cx);
+        if crate::demo::wants("new-item") {
+            cx.defer_in(window, |this, window, cx| {
+                this.new_item(&NewItem, window, cx)
+            });
+        }
         this
     }
 

@@ -76,6 +76,8 @@ for look in light dark; do
 	shoot "$look-settings" unlocked,settings || failed=1
 	shoot "$look-lock" "" || failed=1
 	shoot "$look-panel" unlocked,panel || failed=1
+	shoot "$look-sheet" unlocked,new-item || failed=1
+	shoot "$look-touch-id" touch-id-cancel || failed=1
 	shoot "$look-inactive" unlocked inactive || failed=1
 done
 appearance light
