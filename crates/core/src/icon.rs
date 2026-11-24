@@ -77,7 +77,12 @@ pub(crate) fn icon_host(item: &ItemSummary) -> Option<String> {
     };
     let authority = rest.split(['/', '?', '#']).next()?;
     let host_port = authority.rsplit('@').next()?;
-    let host = host_port.split(':').next()?.to_lowercase();
+    // a final dot names the same host
+    let host = host_port
+        .split(':')
+        .next()?
+        .trim_end_matches('.')
+        .to_lowercase();
     let valid = host.contains('.')
         && !host.starts_with('.')
         && host
@@ -122,6 +127,9 @@ mod tests {
             ("androidapp://com.example.app", None),
             ("iosapp://com.example.app", None),
             ("http://hidden.onion", None),
+            ("http://hidden.onion./", None),
+            ("site.i2p..", None),
+            ("https://Example.com./login", Some("example.com")),
             ("site.i2p", None),
             ("https://[::1]/", None),
             ("", None),
