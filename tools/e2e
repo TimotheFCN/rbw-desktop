@@ -217,6 +217,38 @@ step editing
 keys ctrl+Return
 until_true "query 'any(i[\"name\"] == \"E2E renamed\" for i in j)' '' item list | grep -qx True" || true
 step edited "query 'any(i[\"name\"] == \"E2E renamed\" for i in j)' '' item list | grep -qx True"
+# Notes on two lines, a second website and a custom field. Name, Username,
+# Password, its eye, Generate and Options buttons, the website, then the
+# notes.
+keys ctrl+e
+sleep 0.5
+keys Tab Tab Tab Tab Tab Tab Tab
+type_text "first line"
+keys Return
+type_text "second line"
+# Add Field, then its first item, Website, which the new row's field takes.
+keys Tab Return
+sleep 0.4
+keys Down Return
+sleep 0.4
+type_text "e2e.example"
+# Its remove button, the notes, Add Field again, then Text Field: after
+# Website and Authenticator Key.
+keys Tab Tab Tab Return
+sleep 0.4
+keys Down Down Down Return
+sleep 0.4
+type_text "Member"
+keys Tab
+type_text "4471"
+step editing-more
+keys ctrl+Return
+raw() { query "$1" '' get --raw "E2E renamed"; }
+until_true "raw 'j[\"notes\"] == \"first line\\nsecond line\"' | grep -qx True" || true
+step edited-notes "raw 'j[\"notes\"] == \"first line\\nsecond line\"' | grep -qx True"
+check edited-websites "raw '[u[\"uri\"] for u in j[\"data\"][\"uris\"]] == [\"e2e.example\"]' | grep -qx True"
+check edited-fields "raw '[(f[\"name\"], f[\"value\"]) for f in j[\"fields\"]] == [(\"Member\", \"4471\")]' | grep -qx True"
+check edit-kept-the-password "[[ -n \$(raw 'j[\"data\"][\"password\"]') ]]"
 # The list keeps the selection; its menu: Copy Username, Copy Password,
 # then Add to Favorites.
 x11_click $((sidebar + 236 + 100)) $((toolbar + 300))
@@ -254,12 +286,17 @@ x11_click $((sidebar + 120)) $((toolbar + 25))
 type_text "$password"
 keys Return
 step reprompt-unlocked
-keys ctrl+f ctrl+a BackSpace Escape
 
-# Locking and unlocking.
+# Locking clears a password copied from the vault, and unlocking.
+keys ctrl+f Return
+sleep 0.6
+keys ctrl+c
+step copied-password "[[ -n \$(clipboard) ]]"
 keys ctrl+l
 until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
 step locked "query 'j[\"status\"]' '' status --json | grep -qx locked"
+until_true "[[ -z \$(clipboard) ]]" || true
+check clipboard-cleared-on-lock "[[ -z \$(clipboard) ]]"
 type_text "$password"
 keys Return
 until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
@@ -317,7 +354,7 @@ panel_open
 keys Return
 step panel-recent-copied "[[ \$(clipboard) == router-password ]]"
 # Lock, at the end of the panel's last row.
-x11_click 279 373
+x11_click 279 461
 until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
 step panel-locked "query 'j[\"status\"]' '' status --json | grep -qx locked"
 keys Escape
