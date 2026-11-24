@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Prints how long each window takes to draw, for tools/perf.
+frame-stats = ["gpui/profiler"]
+
 [dependencies]
 env_logger = "0.11"
 futures = "0.3"

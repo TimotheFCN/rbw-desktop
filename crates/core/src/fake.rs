@@ -244,6 +244,14 @@ impl FakeBackend {
         }
     }
 
+    /// Adds `count` logins to an account, each with a website of its own,
+    /// to see the interface with a vault as big as the largest ones.
+    pub fn add_logins(&self, account: &AccountId, count: usize) {
+        if let Ok(account) = self.state().account_mut(account) {
+            account.items.extend(demo::many_logins(count));
+        }
+    }
+
     /// Unlocks an account without a password, to start the interface in
     /// the vault.
     pub fn unlock_now(&self, account: &AccountId) {

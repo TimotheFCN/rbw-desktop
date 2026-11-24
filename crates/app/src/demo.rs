@@ -14,6 +14,8 @@
 //!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
 //!   setting it up fails; `ssh-slow`: setting it up takes a while;
 //! * `no-icons`: no website has an icon;
+//! * `big`: 5,000 more logins in the first account, whose websites' icons
+//!   take 300 ms each, as from the network;
 //! * `panel`: the menu bar item's panel opens alone, as if the item was
 //!   clicked, for systems without one.
 //!
@@ -78,6 +80,12 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
             .is_err()
     {
         log::error!("the demo's signed-out account wasn't added");
+    }
+    if wants("big")
+        && let Some(id) = &first
+    {
+        fake.add_logins(id, 5000);
+        fake.set_latency_of(Operation::WebsiteIcon, Duration::from_millis(300));
     }
     if wants("outdated-rbw") {
         fake.set_outdated_rbw(Some(OutdatedRbw {

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Measures how long the app takes to draw while typing, hovering and
+# scrolling through a vault of 5,000 logins (the demo's `big`), in a release
+# build that prints its frame times (the `frame-stats` feature), on the
+# private display of tools/shot. See docs/DEVELOPMENT.md.
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+usage: tools/perf [--theme T] [--no-build]
+
+Runs each scenario and prints the frames drawn during it, the slowest, and
+how many took longer than 16 ms; for the panel, also how long Return takes
+to copy the first result of a search.
+EOF
+	exit 2
+}
+
+theme=macos-light scale=2 build=1
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	--theme) theme=$2; shift 2 ;;
+	--no-build) build=0; shift ;;
+	*) usage ;;
+	esac
+done
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+((build)) && cargo build --release --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop --features frame-stats
+binary=$root/target/release/rbw-desktop
+
+# shellcheck source=tools/lib/x11.sh
+source "$root/tools/lib/x11.sh"
+x11_start
+
+# The frame lines the app printed after line $1 of its log, summed up.
+report() {
+	sleep 1.5
+	awk -v from="$1" -v name="$2" '
+		NR > from && $1 == "frames:" { drawn += $2; if ($5 + 0 > slowest) slowest = $5 + 0; over += $7 }
+		END { printf "%-20s %5d frames, slowest %6.1f ms, %4d over 16 ms\n", name, drawn, slowest, over }
+	' "$work/app.log"
+}
+mark() { wc -l <"$work/app.log"; }
+# Moves the pointer down a column of the window, in points, a step at a time.
+sweep() {
+	local x=$1 y=$2 end=$3
+	for ((; y < end; y += 8)); do
+		xdotool mousemove --window "$window" $(((x + frame) * scale)) $(((y + frame) * scale)) sleep 0.03
+	done
+}
+wheel() {
+	xdotool mousemove --window "$window" $((($1 + frame) * scale)) $((($2 + frame) * scale))
+	xdotool click --repeat 60 --delay 25 5
+	xdotool click --repeat 60 --delay 25 4
+}
+
+case $theme in
+macos-*) sidebar=186 toolbar=50 ;;
+gnome-*) sidebar=196 toolbar=46 ;;
+*) usage ;;
+esac
+
+# The main window.
+export RBW_DESKTOP_DEMO=unlocked,big
+x11_launch "$binary"
+x11_window '^Vault$'
+x11_geometry
+height=$((win_h / scale - 2 * frame))
+list_x=$((sidebar + 110))
+sleep 3
+
+start=$(mark)
+xdotool key ctrl+f type --delay 120 meadow
+xdotool key --delay 120 BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace
+report "$start" "vault: typing"
+
+xdotool key Escape
+start=$(mark)
+sweep "$list_x" $((toolbar + 10)) $((height - 20))
+report "$start" "vault: hovering"
+
+start=$(mark)
+wheel "$list_x" $((height / 2))
+report "$start" "vault: scrolling"
+
+kill "$app_pid"
+wait "$app_pid" 2>/dev/null || true
+
+# The menu bar panel, opened alone.
+export RBW_DESKTOP_DEMO=unlocked,big,panel
+x11_launch "$binary"
+x11_window '^rbw-desktop$'
+sleep 3
+
+start=$(mark)
+printf '' | xclip -selection clipboard
+xdotool type e
+began=$(date +%s%N)
+xdotool key Return
+copied=""
+for _ in $(seq 600); do
+	copied=$(xclip -o -selection clipboard 2>/dev/null || true)
+	[[ -n $copied ]] && break
+	sleep 0.05
+done
+waited=$((($(date +%s%N) - began) / 1000000))
+report "$start" "panel: typing"
+if [[ -n $copied ]]; then
+	echo "panel: Return copied the first result after $waited ms"
+else
+	echo "panel: Return copied nothing within $waited ms"
+fi
+
+start=$(mark)
+sweep 150 110 380
+report "$start" "panel: hovering"
+
+start=$(mark)
+wheel 150 250
+report "$start" "panel: scrolling"

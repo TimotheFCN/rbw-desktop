@@ -2,6 +2,8 @@ mod accounts;
 mod backend;
 mod clipboard;
 mod demo;
+#[cfg(feature = "frame-stats")]
+mod frame_stats;
 mod generator;
 mod icons;
 mod instance;
@@ -70,6 +72,8 @@ fn main() {
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.set_menus(menus());
+        #[cfg(feature = "frame-stats")]
+        frame_stats::init(cx);
         // Without a menu bar item to come back to, closing the last
         // window ends the app.
         cx.on_window_closed(|cx, _| {

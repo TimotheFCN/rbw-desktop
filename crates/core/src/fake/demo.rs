@@ -22,6 +22,36 @@ pub fn accounts() -> Vec<DemoAccount> {
     vec![personal(), work()]
 }
 
+/// `count` logins named after pairs of [`WORDS`], each with a website of its
+/// own, to make a vault as big as the largest ones.
+pub fn many_logins(count: usize) -> Vec<Item> {
+    let title = |word: &str| {
+        let mut chars = word.chars();
+        chars
+            .next()
+            .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+            .unwrap_or_default()
+    };
+    let mut vault = Vault::new("c", &[]);
+    for index in 0..count {
+        let first = WORDS[index % WORDS.len()];
+        let second = WORDS[(index * 11 + 5) % WORDS.len()];
+        let name = format!(
+            "{} {} {}",
+            title(first),
+            title(second),
+            index / WORDS.len() + 1
+        );
+        vault.login(
+            &name,
+            None,
+            &format!("{first}.{second}@example.com"),
+            &format!("https://{first}-{second}-{index}.example"),
+        );
+    }
+    vault.items
+}
+
 pub fn ssh_public_key(private_key: &str) -> (String, String) {
     let mut hash: u64 = 0x8422_2325_cbf2_9ce4;
     for byte in private_key.bytes() {
