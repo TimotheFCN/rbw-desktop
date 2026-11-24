@@ -8,12 +8,13 @@ use gpui::{
     SharedString, Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{
-    Account, AccountId, Error, LockState, Secret, SshAgentStatus, SshKeySummary, SshService,
+    Account, AccountId, Error, ItemId, LockState, SshAgentStatus, SshKeySummary, SshService,
     SshUses,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, Confirmation, IconName, Select, Selected, button, card,
-    field_error, field_row, icon, setting_row, setting_row_with, settings_group, switch,
+    copied_badge, field_error, field_row, icon, setting_row, setting_row_with, settings_group,
+    switch,
 };
 
 use super::note;
@@ -22,6 +23,13 @@ use crate::accounts::{self, Accounts};
 use crate::backend::{self, Load};
 use crate::clipboard;
 use crate::window;
+
+/// What was copied from the page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Copied {
+    Line,
+    Key(ItemId),
+}
 
 /// What the page is doing.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,8 +49,8 @@ pub struct SshPage {
     status: Load<SshAgentStatus>,
     busy: Option<Busy>,
     problem: Option<&'static str>,
-    /// Whether the line to paste was just copied.
-    copied: bool,
+    /// What was just copied: the line to paste, or a key.
+    copied: Option<Copied>,
     /// Whether the account shown was chosen by the person, rather than
     /// guessed: a guess follows the account the agent is set up for.
     chosen: bool,
@@ -82,7 +90,7 @@ impl SshPage {
             status: Load::Loading,
             busy: None,
             problem: None,
-            copied: false,
+            copied: None,
             chosen: false,
             shown: false,
             load_task: Task::ready(()),
@@ -201,9 +209,16 @@ impl SshPage {
     fn remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let confirmation = Confirmation {
             title: "Remove the SSH agent?".into(),
-            message: "ssh and git stop using the keys in your vault. You can set it up again \
-                      at any time."
-                .into(),
+            // launchd stops the agent's process, which holds the unlocked
+            // vault.
+            message: if cfg!(target_os = "macos") {
+                "ssh and git stop using the keys in your vault, and the vault locks. You \
+                 can set it up again at any time."
+            } else {
+                "ssh and git stop using the keys in your vault. You can set it up again at \
+                 any time."
+            }
+            .into(),
             confirm: "Remove".into(),
             destructive: true,
         };
@@ -258,15 +273,15 @@ impl SshPage {
         });
     }
 
-    fn copy_line(&mut self, line: SharedString, cx: &mut Context<Self>) {
-        clipboard::copy_text(&line, cx);
-        self.copied = true;
+    fn copy(&mut self, what: Copied, text: &str, cx: &mut Context<Self>) {
+        clipboard::copy_text(text, cx);
+        self.copied = Some(what);
         self.copied_timer = cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(rbw_desktop_ui::motion::CONFIRMATION_HOLD)
                 .await;
             this.update(cx, |this, cx| {
-                this.copied = false;
+                this.copied = None;
                 cx.notify();
             })
             .ok();
@@ -328,12 +343,9 @@ impl SshPage {
         };
         let theme = cx.theme();
         let (dim, small) = (theme.colors.text_secondary, theme.metrics.small_text_size);
-        // rbw stops the agent that holds the unlocked vault, so that the
-        // service's own takes its place.
         let progress = match self.busy {
             Some(Busy::SettingUp) => Some("Setting up…"),
             Some(Busy::Removing) => Some("Removing…"),
-            None if busy == Busy::SettingUp => Some("Setting it up locks the vault."),
             None => None,
         };
         let removing = busy == Busy::Removing;
@@ -384,7 +396,7 @@ impl SshPage {
                 "ssh still uses another agent. Log out and back in, so that your session \
                  picks this one up. If ssh still doesn’t use it in a terminal, add this line \
                  to your shell’s startup file, such as .bashrc:",
-                format!("export SSH_AUTH_SOCK=\"{socket}\"").into(),
+                format!("export SSH_AUTH_SOCK={}", shell_word(&socket.to_string())).into(),
             )
         };
         let theme = cx.theme();
@@ -399,9 +411,9 @@ impl SshPage {
                 .truncate()
                 .child(line),
         )
-        .copied(self.copied)
+        .copied(self.copied == Some(Copied::Line))
         .action(icon(IconName::Copy))
-        .on_click(cx.listener(move |this, _, _, cx| this.copy_line(copy.clone(), cx)));
+        .on_click(cx.listener(move |this, _, _, cx| this.copy(Copied::Line, &copy, cx)));
         Some(
             div()
                 .flex()
@@ -426,17 +438,52 @@ impl SshPage {
     }
 
     fn render_keys(&self, status: &SshAgentStatus, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let (faint, mono) = (theme.colors.text_tertiary, theme.mono_font_family.clone());
         let rows: Vec<AnyElement> = match &status.keys {
             None => vec![note_row("Unlock the vault to see its keys.", cx)],
             Some(keys) if keys.is_empty() => vec![note_row("This vault has no SSH keys.", cx)],
-            Some(keys) => keys
-                .iter()
-                .map(|key| key_row(key, faint, mono.clone(), cx))
-                .collect(),
+            Some(keys) => keys.iter().map(|key| self.render_key(key, cx)).collect(),
         };
         settings_group(Some("Keys".into()), rows, cx)
+    }
+
+    /// A key: its name, kind and fingerprint, and a button that copies its
+    /// public key, which is what servers and websites ask for.
+    fn render_key(&self, key: &SshKeySummary, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let (dim, mono) = (theme.colors.text_secondary, theme.mono_font_family.clone());
+        let subtitle = div()
+            .flex()
+            .gap(px(6.))
+            .min_w_0()
+            .when(!key.key_type.is_empty(), |d| {
+                d.child(div().flex_none().child(key.key_type.clone()))
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(mono)
+                    .text_size(px(11.))
+                    .text_color(dim)
+                    .child(key.fingerprint.clone()),
+            );
+        let copied = Copied::Key(key.item.clone());
+        let control = if self.copied.as_ref() == Some(&copied) {
+            copied_badge(cx).into_any_element()
+        } else {
+            let public_key = key.public_key.clone();
+            button(gpui::ElementId::Name(format!("copy-{}", key.item.0).into()))
+                .icon(IconName::Copy)
+                .style(ButtonStyle::Flat)
+                .size(px(26.))
+                .accessibility_label(format!("Copy the public key of {}", key.name))
+                .disabled(public_key.is_empty())
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.copy(copied.clone(), &public_key, cx)),
+                )
+                .into_any_element()
+        };
+        setting_row_with(key.name.clone(), Some(subtitle), control, cx)
     }
 }
 
@@ -451,43 +498,10 @@ fn note_row(text: &'static str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn key_row(
-    key: &SshKeySummary,
-    faint: gpui::Hsla,
-    mono: SharedString,
-    cx: &mut Context<SshPage>,
-) -> AnyElement {
-    let fingerprint = Secret::new(key.fingerprint.clone());
-    let subtitle = div()
-        .flex()
-        .gap(px(6.))
-        .min_w_0()
-        .when(!key.key_type.is_empty(), |d| {
-            d.child(div().flex_none().child(key.key_type.clone()))
-        })
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .font_family(mono)
-                .text_size(px(11.))
-                .text_color(faint)
-                .child(key.fingerprint.clone()),
-        );
-    setting_row_with(
-        key.name.clone(),
-        Some(subtitle),
-        button(gpui::ElementId::Name(format!("copy-{}", key.item.0).into()))
-            .icon(IconName::Copy)
-            .style(ButtonStyle::Flat)
-            .size(px(26.))
-            .accessibility_label(format!("Copy the fingerprint of {}", key.name))
-            .on_click(move |_, window, cx| {
-                clipboard::copy_text(fingerprint.expose(), cx);
-                window::toast("Fingerprint copied", window, cx);
-            }),
-        cx,
-    )
+/// `text` as one word for a POSIX shell: in single quotes, in which nothing
+/// expands, with its own single quotes closed and reopened around them.
+fn shell_word(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// What went wrong, for this page: rbw's own failures to set up the
@@ -582,5 +596,20 @@ impl Render for SshPage {
             .child(intro)
             .children(chooser)
             .children(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_pastes_as_one_word() {
+        assert_eq!(
+            shell_word("/run/user/1000/rbw/agent"),
+            "'/run/user/1000/rbw/agent'"
+        );
+        assert_eq!(shell_word("/tmp/$HOME `x` \"q\""), "'/tmp/$HOME `x` \"q\"'");
+        assert_eq!(shell_word("/tmp/it's"), r"'/tmp/it'\''s'");
     }
 }

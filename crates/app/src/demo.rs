@@ -69,6 +69,13 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
             }
         }
     }
+    // Before unlocking: on macOS, removing the agent locks the vault.
+    if wants("ssh-off")
+        && let Some(id) = &first
+        && fake.uninstall_ssh_agent(id).is_err()
+    {
+        log::error!("the demo's SSH agent wasn't removed");
+    }
     if wants("unlocked")
         && let Some(id) = &first
     {
@@ -98,12 +105,6 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
     }
     if wants("slow") {
         fake.set_latency(Duration::from_secs(2));
-    }
-    if wants("ssh-off")
-        && let Some(id) = &first
-        && fake.uninstall_ssh_agent(id).is_err()
-    {
-        log::error!("the demo's SSH agent wasn't removed");
     }
     if wants("ssh-unsupported") {
         fake.set_ssh_supported(false);
