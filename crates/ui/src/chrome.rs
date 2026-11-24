@@ -66,6 +66,63 @@ pub fn window_options(
     }
 }
 
+/// Options for a small panel of `size`, such as the menu bar panel, its
+/// top-left corner at `origin` on `display` or, without one, centred. On
+/// macOS it is a pop-up over every other window, on the window's blurred
+/// material, without a title bar once
+/// [`Window::set_native_titlebar_visibility`] hides it; elsewhere it is an
+/// ordinary window without a header bar, its drawn frame added around
+/// `size`.
+pub fn panel_options(
+    title: &str,
+    size: Size<Pixels>,
+    origin: Option<(Point<Pixels>, Option<gpui::DisplayId>)>,
+    cx: &App,
+) -> WindowOptions {
+    let macos = cfg!(target_os = "macos");
+    let (size, origin) = if macos {
+        (size, origin)
+    } else {
+        let frame = point(FRAME_INSET, FRAME_INSET);
+        (
+            gpui::size(
+                size.width + FRAME_INSET * 2.,
+                size.height + FRAME_INSET * 2.,
+            ),
+            origin.map(|(origin, display)| (origin - frame, display)),
+        )
+    };
+    let display = origin.and_then(|(_, display)| display);
+    let bounds = match origin {
+        Some((origin, _)) => Bounds::new(origin, size),
+        None => Bounds::centered(display, size, cx),
+    };
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id: display,
+        titlebar: (!macos).then(|| TitlebarOptions {
+            title: Some(title.to_string().into()),
+            ..Default::default()
+        }),
+        kind: if macos {
+            gpui::WindowKind::PopUp
+        } else {
+            gpui::WindowKind::Normal
+        },
+        is_movable: !macos,
+        is_resizable: false,
+        is_minimizable: false,
+        app_id: Some("rbw-desktop".into()),
+        window_background: if macos {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
+        window_decorations: Some(WindowDecorations::Client),
+        ..Default::default()
+    }
+}
+
 /// Frames the whole window's content. Draws the client-side frame where the
 /// app decorates its own window; elsewhere it only fills the window.
 pub fn window_frame(content: impl IntoElement, window: &mut Window, cx: &mut App) -> AnyElement {

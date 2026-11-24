@@ -292,10 +292,13 @@ pub struct ListRow {
     selected: bool,
     icon: Option<Arc<RenderImage>>,
     trailing: Option<AnyElement>,
+    compact: bool,
+    accessibility_label: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
 
 const ROW_HEIGHT: Pixels = px(46.);
+const COMPACT_ROW_HEIGHT: Pixels = px(40.);
 /// Text in rows reads at the mockups' line height. gpui-base's buttons set
 /// it to the font size, which presses a name onto its subtitle.
 pub(crate) const ROW_LINE_HEIGHT: f32 = 1.35;
@@ -313,14 +316,30 @@ pub fn list_row(
         selected,
         icon: None,
         trailing: None,
+        compact: false,
+        accessibility_label: None,
         on_click: None,
     }
 }
 
 impl ListRow {
+    /// A row of a panel or popover, as in the menu bar panel: a smaller
+    /// tile, and a neutral highlight in place of the accent, as a menu's.
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
     /// The website's icon to show in the tile, once it has arrived.
     pub fn icon(mut self, icon: Option<Arc<RenderImage>>) -> Self {
         self.icon = icon;
+        self
+    }
+
+    /// What assistive technologies call the row, when its name alone
+    /// doesn't say what a click does.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -343,25 +362,37 @@ impl RenderOnce for ListRow {
         let progress = selection_progress(&self.id, self.selected, window, cx);
         let theme = cx.theme();
         let colors = &theme.colors;
-        let selection = colors.selection;
         let hover = colors.hover;
-        let name_color = mix(colors.text, colors.on_selection, progress);
-        let subtitle_color = mix(
-            colors.text_secondary,
-            colors.on_selection_secondary,
-            progress,
-        );
+        let (selection, name_color, subtitle_color) = if self.compact {
+            (colors.fill, colors.text, colors.text_secondary)
+        } else {
+            (
+                colors.selection,
+                mix(colors.text, colors.on_selection, progress),
+                mix(
+                    colors.text_secondary,
+                    colors.on_selection_secondary,
+                    progress,
+                ),
+            )
+        };
         let name = self.name;
-        let tile = tile(&name).icon((self.id.clone(), "tile"), self.icon);
+        let tile = tile(&name)
+            .size(if self.compact { px(28.) } else { px(32.) })
+            .icon((self.id.clone(), "tile"), self.icon);
         BaseButton::new(self.id)
             .selected(self.selected)
-            .accessibility_label(name.clone())
+            .accessibility_label(self.accessibility_label.unwrap_or_else(|| name.clone()))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .flex()
             .items_center()
             .gap(px(10.))
-            .h(ROW_HEIGHT)
-            .px(px(9.))
+            .h(if self.compact {
+                COMPACT_ROW_HEIGHT
+            } else {
+                ROW_HEIGHT
+            })
+            .px(if self.compact { px(7.) } else { px(9.) })
             .rounded(theme.metrics.row_radius)
             .bg(selection.opacity(progress))
             .when(!self.selected, |b| b.hover(move |s| s.bg(hover)))
