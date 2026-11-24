@@ -59,7 +59,7 @@ wheel() {
 }
 
 case $theme in
-macos-*) sidebar=186 toolbar=50 ;;
+macos-*) sidebar=180 toolbar=50 ;;
 gnome-*) sidebar=196 toolbar=46 ;;
 *) usage ;;
 esac

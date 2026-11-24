@@ -1,21 +1,27 @@
 //! The item list with its search field.
 
 use gpui::{
-    AnyElement, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement as _, Pixels, Styled as _, Window, div, px, uniform_list,
+    AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
+    StatefulInteractiveElement as _, Styled as _, Window, deferred, div, px, relative,
+    uniform_list,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, motion,
     popover, scrollbar, search_field,
 };
 
-use super::{NewItem, ShowGenerator, VaultView};
+use super::{ListDivider, MAX_LIST_SHARE, NewItem, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::generator;
 use crate::icons;
 
 /// The space under each row of the list.
 pub(super) const ROW_GAP: Pixels = px(1.);
+/// The narrowest the list gets, however small the window or its share.
+pub(super) const MIN_WIDTH: Pixels = px(220.);
+/// How far either side of the list's edge its divider takes the pointer.
+const DIVIDER_REACH: Pixels = px(3.);
 
 impl VaultView {
     pub(super) fn render_list(
@@ -128,12 +134,16 @@ impl VaultView {
                 .child(bar),
         );
 
+        // The list takes its share of the room, between its minimum and its
+        // maximum; a small window shrinks it before the item.
         div()
             .id("list")
             .key_context("VaultList")
             .track_focus(&self.list_focus)
-            .flex_none()
-            .w(metrics.list_width)
+            .relative()
+            .w(relative(self.list_share(cx)))
+            .min_w(MIN_WIDTH)
+            .max_w(relative(MAX_LIST_SHARE))
             .h_full()
             .flex()
             .flex_col()
@@ -142,11 +152,37 @@ impl VaultView {
             .border_color(separator)
             .child(toolbar)
             .child(body)
+            .child(self.render_divider(cx))
             .into_any_element()
     }
 }
 
 impl VaultView {
+    /// The divider between the list and the item: dragged, it moves the
+    /// list's edge; a double-click puts it back. It straddles the edge,
+    /// drawn last, so that neither the item nor the list's scroll bar
+    /// takes the pointer from it.
+    fn render_divider(&self, cx: &mut Context<Self>) -> AnyElement {
+        deferred(
+            div()
+                .id("list-divider")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(-DIVIDER_REACH)
+                .w(DIVIDER_REACH * 2.)
+                .cursor(CursorStyle::ResizeLeftRight)
+                .block_mouse_except_scroll()
+                .on_drag(ListDivider, |_, _, _, cx| cx.new(|_| EmptyView))
+                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                    if event.click_count() == 2 {
+                        this.reset_list_share(cx);
+                    }
+                })),
+        )
+        .into_any_element()
+    }
+
     /// The generator's button, with its popover hanging from it.
     fn render_generator_button(&self, style: ButtonStyle, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();

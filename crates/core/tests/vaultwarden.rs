@@ -340,6 +340,7 @@ fn against_vaultwarden() {
             number: true,
         },
         menu_bar: false,
+        list_share: Some(0.5),
     };
     backend.set_preferences(&preferences).unwrap();
     assert_eq!(backend.preferences().unwrap(), preferences);

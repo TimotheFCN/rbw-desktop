@@ -170,18 +170,21 @@ until_true() {
 type_text() { xdotool type --delay 30 "$1"; }
 keys() { xdotool key --delay 80 "$@"; }
 
-toolbar=50 sidebar=186 inset=7
+toolbar=50 sidebar=180
+# The item list, at its default share of the room right of the sidebar in
+# the window's first size.
+list=252
 # The account button at the bottom of the sidebar.
 account_menu() {
 	x11_geometry
-	x11_click $((inset + 60)) $((win_h / scale - 2 * frame - inset - 26))
+	x11_click 60 $((win_h / scale - 2 * frame - 26))
 	sleep 0.5
 }
 
 # A page of the Settings window, by its row in the sidebar, which then has
 # the keyboard.
 settings_page() {
-	x11_click 60 $((inset + 42 + $1 * 31 + 15))
+	x11_click 60 $((toolbar + $1 * 33 + 16))
 	sleep 0.5
 }
 x11_tray
@@ -211,7 +214,7 @@ check agent-beside-rbw "[[ \$(agent) == '$(dirname "$rbw")/rbw-agent' ]]"
 # Items: open one, copy its username, and paste it into the search.
 keys Down
 step item-open
-x11_click $((sidebar + 236 + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20))
+x11_click $((sidebar + list + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20))
 step copied
 keys ctrl+f ctrl+v
 step pasted-username
@@ -269,7 +272,7 @@ check edited-fields "raw '[(f[\"name\"], f[\"value\"]) for f in j[\"fields\"]] =
 check edit-kept-the-password "[[ -n \$(raw 'j[\"data\"][\"password\"]') ]]"
 # The list keeps the selection; its menu: Copy Username, Copy Password,
 # then Add to Favorites.
-x11_click $((sidebar + 236 + 100)) $((toolbar + 300))
+x11_click $((sidebar + list + 100)) $((toolbar + 300))
 cli '' folder create "E2E folder" >/dev/null
 keys ctrl+f
 type_text "E2E renamed"

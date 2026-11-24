@@ -190,8 +190,8 @@ esac
 
 # Where things are, in points.
 case $theme in
-macos-*) toolbar=50 sidebar=180 inset=0 sidebar_top=50 nav=32 ;;
-gnome-*) toolbar=46 sidebar=196 inset=0 sidebar_top=46 nav=32 ;;
+macos-*) toolbar=50 sidebar=180 sidebar_top=50 nav=32 ;;
+gnome-*) toolbar=46 sidebar=196 sidebar_top=46 nav=32 ;;
 esac
 click() { x11_click "$@"; }
 # Shows the settings page at this index, with the keyboard: Tab from the
@@ -215,8 +215,11 @@ act() {
 	((keyboard)) && x11_rest_pointer
 	# The window's size in points, without the frame.
 	local width=$((win_w / scale - 2 * frame)) height=$((win_h / scale - 2 * frame))
+	# The item list: its default share of the room right of the sidebar.
+	local list=$(((width - sidebar) * 36 / 100))
+	((list < 220)) && list=220
 	# The middle of the account button at the bottom of the sidebar.
-	local footer_x=$((inset + 60)) footer_y=$((height - inset - 7 - 19))
+	local footer_x=60 footer_y=$((height - 7 - 19))
 	case $state in
 	vault | gallery | lock | lock-touch-id | first-run | signed-out | no-rbw | old-rbw | no-icons) ;;
 	outdated-toast) ;;
@@ -253,10 +256,10 @@ act() {
 	settings-about | settings-outdated) settings_page 3 ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.
-	logins) click $((sidebar / 2)) $((inset + sidebar_top + nav * 2 + 30 + nav / 2)) ;;
+	logins) click $((sidebar / 2)) $((sidebar_top + nav * 2 + 30 + nav / 2)) ;;
 	select) xdotool key Down Down ;;
 	# The first field: under the toolbar, the 56-point header and its gap.
-	copied) click $((sidebar + 236 + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20)) ;;
+	copied) click $((sidebar + list + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20)) ;;
 	# The eye of the second field, the password.
 	revealed) click $((width - 62)) $((toolbar + 2 + 56 + 4 + 10 + 51 + 25)) ;;
 	sheet) xdotool key ctrl+n ;;

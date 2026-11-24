@@ -210,6 +210,8 @@ struct PreferencesJson {
     generator: Option<GeneratorJson>,
     #[serde(default)]
     menu_bar: Option<bool>,
+    #[serde(default)]
+    list_share: Option<f32>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -727,6 +729,7 @@ impl Backend for RbwBackend {
                 website_icons: saved.website_icons,
                 generator: saved.generator.map_or(defaults.generator, Into::into),
                 menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
+                list_share: saved.list_share,
             })
             .unwrap_or(defaults))
     }
@@ -737,6 +740,7 @@ impl Backend for RbwBackend {
             website_icons: preferences.website_icons,
             generator: Some(preferences.generator.into()),
             menu_bar: Some(preferences.menu_bar),
+            list_share: preferences.list_share,
         };
         write_json(&self.preferences, &saved)
             .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;

@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::GeneratorOptions;
 
 /// The app's own preferences, the same for every account.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Preferences {
     /// How long a copied secret stays on the clipboard; `None` to leave it.
     pub clipboard_clear: Option<Duration>,
@@ -14,6 +14,9 @@ pub struct Preferences {
     pub generator: GeneratorOptions,
     /// Whether the app has an item in the menu bar or the system tray.
     pub menu_bar: bool,
+    /// The vault's item list, as a share of the room right of the sidebar;
+    /// `None` for the app's default.
+    pub list_share: Option<f32>,
 }
 
 impl Default for Preferences {
@@ -23,6 +26,7 @@ impl Default for Preferences {
             website_icons: true,
             generator: GeneratorOptions::default(),
             menu_bar: true,
+            list_share: None,
         }
     }
 }

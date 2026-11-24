@@ -6,11 +6,11 @@ mod editor;
 mod list;
 mod sidebar;
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext as _, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
     Styled as _, Subscription, Task, UniformListScrollHandle, Window, actions, div, px,
 };
@@ -23,6 +23,7 @@ use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
 use crate::generator::Generator;
 use crate::icons::Icons;
+use crate::preferences::{self, Prefs};
 use crate::recent;
 use crate::secondary;
 use context_menu::ContextMenu;
@@ -59,6 +60,17 @@ actions!(
 );
 
 const CONTEXT: &str = "Vault";
+
+/// The item list's share of the room right of the sidebar, unless it was
+/// moved, and the most it can take.
+const LIST_SHARE: f32 = 0.36;
+const MAX_LIST_SHARE: f32 = 0.6;
+/// How long the divider between the list and the item rests after a drag
+/// before where it was left is saved.
+const SAVE_DIVIDER_AFTER: Duration = Duration::from_millis(400);
+
+/// What the divider between the list and the item drags.
+struct ListDivider;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -148,7 +160,10 @@ pub struct VaultView {
     generator_task: Task<()>,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
-    _icons: Subscription,
+    /// The list's share while its divider is dragged, until it is saved.
+    dragged_share: Option<f32>,
+    save_share_task: Task<()>,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<Request> for VaultView {}
@@ -205,7 +220,12 @@ impl VaultView {
             generator_focus: cx.focus_handle(),
             generator_task: Task::ready(()),
             load_task: Task::ready(()),
-            _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
+            dragged_share: None,
+            save_share_task: Task::ready(()),
+            _subscriptions: [
+                cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Prefs::global(cx), |_, _, cx| cx.notify()),
+            ],
         };
         this.reload(cx);
         window.focus(&this.list_focus, cx);
@@ -581,6 +601,52 @@ impl VaultView {
         cx.notify();
     }
 
+    /// The item list's share of the room right of the sidebar.
+    fn list_share(&self, cx: &App) -> f32 {
+        self.dragged_share
+            .or(Prefs::global(cx).read(cx).get().list_share)
+            .unwrap_or(LIST_SHARE)
+    }
+
+    /// Follows the divider between the list and the item, and saves where it
+    /// is once it rests. The list keeps its minimum width and leaves the
+    /// item its own.
+    fn drag_divider(
+        &mut self,
+        event: &DragMoveEvent<ListDivider>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let room = event.bounds.size.width;
+        if room <= px(0.) {
+            return;
+        }
+        let share = ((event.event.position.x - event.bounds.left()) / room)
+            .clamp(list::MIN_WIDTH / room, MAX_LIST_SHARE);
+        if self.dragged_share == Some(share) {
+            return;
+        }
+        self.dragged_share = Some(share);
+        cx.notify();
+        self.save_share_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVE_DIVIDER_AFTER).await;
+            this.update(cx, |this, cx| this.save_list_share(Some(share), cx))
+                .ok();
+        });
+    }
+
+    /// Puts the divider back where it starts, on a double-click.
+    fn reset_list_share(&mut self, cx: &mut Context<Self>) {
+        self.save_share_task = Task::ready(());
+        self.save_list_share(None, cx);
+    }
+
+    fn save_list_share(&mut self, share: Option<f32>, cx: &mut Context<Self>) {
+        preferences::update(cx, move |preferences| preferences.list_share = share);
+        self.dragged_share = None;
+        cx.notify();
+    }
+
     pub(crate) fn show_error(&mut self, error: &Error, cx: &mut Context<Self>) {
         self.toast.show(
             backend::describe(error),
@@ -667,8 +733,17 @@ impl Render for VaultView {
                     .size_full()
                     .flex()
                     .child(sidebar)
-                    .child(list)
-                    .child(self.detail.clone())
+                    .child(
+                        div()
+                            .id("panes")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .on_drag_move(cx.listener(Self::drag_divider))
+                            .child(list)
+                            .child(self.detail.clone()),
+                    )
                     .children(self.render_context_menu(cx)),
             )
             .children(sheet)

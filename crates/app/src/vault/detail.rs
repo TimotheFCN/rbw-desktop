@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use gpui::{
     AnyElement, AppContext as _, Context, ElementId, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task,
+    IntoElement, ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, Task,
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{
@@ -29,6 +29,11 @@ use crate::reprompt::{Reprompt, Unlocked};
 const SETTLE: Duration = Duration::from_millis(150);
 /// How often a verification code's countdown moves.
 const COUNTDOWN_STEP: Duration = Duration::from_secs(1);
+/// The narrowest the item gets, beside the list.
+const MIN_WIDTH: Pixels = px(240.);
+/// The widest the item's fields get: in a wide window they stay in the
+/// middle rather than stretch across it.
+const MAX_CONTENT_WIDTH: Pixels = px(620.);
 
 pub struct ItemDetail {
     account: AccountId,
@@ -902,19 +907,25 @@ impl Render for ItemDetail {
                             .child(div().text_color(dim).child(kind_label(item.kind()))),
                     );
                 Some(
-                    motion::content_enter(
-                        ElementId::Name(format!("detail-{}", item.id.0).into()),
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .px(px(16.))
-                            .pt(px(2.))
-                            .pb(px(16.))
-                            .child(header)
-                            .children(groups),
-                    )
-                    .into_any_element(),
+                    div()
+                        .flex()
+                        .justify_center()
+                        .child(motion::content_enter(
+                            ElementId::Name(format!("detail-{}", item.id.0).into()),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .max_w(MAX_CONTENT_WIDTH)
+                                .flex()
+                                .flex_col()
+                                .gap(px(10.))
+                                .px(px(16.))
+                                .pt(px(2.))
+                                .pb(px(16.))
+                                .child(header)
+                                .children(groups),
+                        ))
+                        .into_any_element(),
                 )
             }
             Some(Load::Failed(Error::RepromptRequired)) => match (selected, reprompt) {
@@ -938,7 +949,7 @@ impl Render for ItemDetail {
         div()
             .key_context("ItemDetail")
             .flex_1()
-            .min_w_0()
+            .min_w(MIN_WIDTH)
             .h_full()
             .flex()
             .flex_col()
