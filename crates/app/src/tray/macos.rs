@@ -3,9 +3,8 @@
 //! opens the panel under the item.
 
 use futures::channel::mpsc::UnboundedSender;
-use gpui::{App, Bounds, DevicePixels, SvgSize, Task, point, px, size};
-use objc2_app_kit::NSScreen;
-use objc2_foundation::MainThreadMarker;
+use gpui::{App, Bounds, DevicePixels, DisplayId, Pixels, SvgSize, Task, point, px, size};
+use objc2_foundation::{MainThreadMarker, NSNumber, NSRect, ns_string};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -84,32 +83,36 @@ impl Item {
     }
 
     /// Under the item, from where AppKit placed it.
-    pub fn anchor(&self, _: Click, cx: &mut App) -> Anchor {
-        self.bounds(cx)
-            .map_or(Anchor::Centered, |(bounds, display)| {
-                Anchor::Item(bounds, display)
-            })
+    pub fn anchor(&self, _: Click, _: &mut App) -> Anchor {
+        self.place().unwrap_or(Anchor::Centered)
     }
 
-    /// The item's bounds on its display, top-left first as GPUI counts.
-    fn bounds(&self, cx: &App) -> Option<(Bounds<gpui::Pixels>, gpui::DisplayId)> {
+    /// The item and the display it is on, as AppKit counts on the whole
+    /// desktop; `panel::under_item` turns them into the display's own
+    /// coordinates, which GPUI places windows in.
+    fn place(&self) -> Option<Anchor> {
         let mtm = MainThreadMarker::new()?;
-        let frame = self.icon.ns_status_item()?.button(mtm)?.window()?.frame();
-        // AppKit counts up from the bottom of the first screen.
-        let first = NSScreen::screens(mtm).firstObject()?.frame();
-        let top = first.size.height - frame.origin.y - frame.size.height;
-        let at = point(px(frame.origin.x as f32), px(top as f32));
-        let display = cx
-            .displays()
-            .into_iter()
-            .find(|display| display.bounds().contains(&at))?;
-        let origin = display.bounds().origin;
-        let item = Bounds::new(
-            point(at.x - origin.x, at.y - origin.y),
-            size(px(frame.size.width as f32), px(frame.size.height as f32)),
-        );
-        Some((item, display.id()))
+        let window = self.icon.ns_status_item()?.button(mtm)?.window()?;
+        let screen = window.screen()?;
+        // GPUI's displays are CoreGraphics' display ids, which AppKit
+        // gives each screen as its number.
+        let number = screen
+            .deviceDescription()
+            .objectForKey(ns_string!("NSScreenNumber"))?;
+        let display = DisplayId::new(number.downcast_ref::<NSNumber>()?.as_u32().into());
+        Some(Anchor::Item {
+            item: bounds(window.frame()),
+            screen: bounds(screen.frame()),
+            display,
+        })
     }
+}
+
+fn bounds(rect: NSRect) -> Bounds<Pixels> {
+    Bounds::new(
+        point(px(rect.origin.x as f32), px(rect.origin.y as f32)),
+        size(px(rect.size.width as f32), px(rect.size.height as f32)),
+    )
 }
 
 /// The icon as a template image: black, its shape in the alpha.

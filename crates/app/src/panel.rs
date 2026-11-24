@@ -87,10 +87,15 @@ pub fn init(cx: &mut App) {
 /// Where the panel opens from.
 #[derive(Clone, Copy, Debug)]
 pub enum Anchor {
-    /// The menu bar item, in the coordinates of its display: the panel
-    /// hangs under it.
+    /// The menu bar item and the display that shows it, both as AppKit
+    /// counts on the whole desktop (`under_item`): the panel hangs under
+    /// the item.
     #[cfg(target_os = "macos")]
-    Item(Bounds<Pixels>, DisplayId),
+    Item {
+        item: Bounds<Pixels>,
+        screen: Bounds<Pixels>,
+        display: DisplayId,
+    },
     /// Where the pointer was, on the whole screen: the panel opens next to
     /// it, above it in the bottom half.
     #[cfg(not(target_os = "macos"))]
@@ -143,15 +148,16 @@ pub fn open(anchor: Anchor, cx: &mut App) {
 /// Where the panel's top-left corner goes, kept on the display.
 fn origin(anchor: Anchor, cx: &App) -> Option<(Point<Pixels>, Option<DisplayId>)> {
     let margin = px(8.);
-    let keep = |at, display| keep_on(at, display, margin);
     match anchor {
         #[cfg(target_os = "macos")]
-        Anchor::Item(item, display) => {
-            let screen = cx.find_display(display)?.bounds();
-            let at = point(item.center().x - SIZE.width / 2., item.bottom() + px(5.));
-            // the item's coordinates are the display's own
-            let local = Bounds::new(Point::default(), screen.size);
-            Some((keep(at, local), Some(display)))
+        Anchor::Item {
+            item,
+            screen,
+            display,
+        } => {
+            // centred instead on a display unplugged since
+            let display = cx.find_display(display)?.id();
+            Some((under_item(item, screen, margin), Some(display)))
         }
         #[cfg(not(target_os = "macos"))]
         Anchor::Pointer(at) => {
@@ -166,10 +172,32 @@ fn origin(anchor: Anchor, cx: &App) -> Option<(Point<Pixels>, Option<DisplayId>)
             } else {
                 at.y - SIZE.height - margin
             };
-            Some((keep(point(at.x - SIZE.width / 2., y), screen), None))
+            let at = point(at.x - SIZE.width / 2., y);
+            Some((keep_on(at, screen, margin), None))
         }
         Anchor::Centered => None,
     }
+}
+
+/// The panel's corner under the menu bar item, kept on its display.
+///
+/// `item` and `screen`, the display that shows it, are as AppKit counts on
+/// the whole desktop: from the bottom-left corner of the primary display,
+/// up, so a display left of it or below it has negative coordinates. The
+/// corner is as GPUI places a window on `screen` on macOS: from that
+/// display's own top-left corner, down. Everything is in points, whatever
+/// each display's scale.
+#[cfg(any(target_os = "macos", test))]
+fn under_item(item: Bounds<Pixels>, screen: Bounds<Pixels>, margin: Pixels) -> Point<Pixels> {
+    // AppKit's origins are bottom-left corners: the tops are above them.
+    let top = |rect: Bounds<Pixels>| rect.origin.y + rect.size.height;
+    let item_top = top(screen) - top(item);
+    let item_left = item.origin.x - screen.origin.x;
+    let at = point(
+        item_left + item.size.width / 2. - SIZE.width / 2.,
+        item_top + item.size.height + px(5.),
+    );
+    keep_on(at, Bounds::new(Point::default(), screen.size), margin)
 }
 
 /// The panel's corner at `at`, moved as little as needed for the panel to
@@ -1525,6 +1553,54 @@ mod tests {
             Some(("Open Vault", None))
         );
         assert_eq!(hint(None, None), None);
+    }
+
+    /// The menu bar item, 24 points high at the top of `screen`, `x`
+    /// points from its left edge, as AppKit counts.
+    fn item_on(screen: Bounds<Pixels>, x: f32) -> Bounds<Pixels> {
+        Bounds::new(
+            point(
+                screen.origin.x + px(x),
+                screen.origin.y + screen.size.height - px(24.),
+            ),
+            size(px(30.), px(24.)),
+        )
+    }
+
+    #[test]
+    fn the_panel_hangs_under_the_item_on_its_display() {
+        let margin = px(8.);
+        let under = point(px(1000.) + px(15.) - SIZE.width / 2., px(24. + 5.));
+        // The built-in display alone, its bottom-left corner at AppKit's origin.
+        let primary = Bounds::new(point(px(0.), px(0.)), size(px(1512.), px(982.)));
+        let item = item_on(primary, 1000.);
+        assert_eq!(under_item(item, primary, margin), under);
+        // Each other display, wherever it is arranged and whatever its
+        // size, gives the same corner, counted from its own top-left.
+        let displays = [
+            // right of the built-in one, taller
+            Bounds::new(point(px(1512.), px(-200.)), size(px(2560.), px(1440.))),
+            // left of it: negative x
+            Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.))),
+            // above it, which is negative y for GPUI: positive for AppKit
+            Bounds::new(point(px(-300.), px(982.)), size(px(1920.), px(1080.))),
+            // below it, negative for AppKit
+            Bounds::new(point(px(100.), px(-1080.)), size(px(1920.), px(1080.))),
+        ];
+        for screen in displays {
+            assert_eq!(under_item(item_on(screen, 1000.), screen, margin), under);
+        }
+    }
+
+    #[test]
+    fn the_panel_under_an_item_near_an_edge_stays_on_the_display() {
+        let margin = px(8.);
+        let screen = Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.)));
+        let right = under_item(item_on(screen, 1900.), screen, margin);
+        assert_eq!(right.x, px(1920.) - SIZE.width - margin);
+        assert_eq!(right.y, px(29.));
+        let left = under_item(item_on(screen, 0.), screen, margin);
+        assert_eq!(left.x, margin);
     }
 
     #[test]
