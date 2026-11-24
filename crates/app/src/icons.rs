@@ -68,6 +68,9 @@ pub struct Cached(Vec<(Key, Option<Option<Arc<RenderImage>>>)>);
 pub struct Icons {
     enabled: bool,
     icons: HashMap<Key, Slot>,
+    /// How many of them are ready, to know without counting when some
+    /// must go.
+    ready: usize,
     fetching: usize,
     /// Icons to read from rbw's cache once the current update is over,
     /// together.
@@ -83,6 +86,7 @@ pub fn init(cx: &mut App) {
     let icons = cx.new(|_| Icons {
         enabled: false,
         icons: HashMap::new(),
+        ready: 0,
         fetching: 0,
         to_read: vec![],
     });
@@ -114,6 +118,7 @@ impl Icons {
                 }
             }
             // The answers on the way were dropped with their slots.
+            self.ready = 0;
             self.fetching = 0;
             self.to_read.clear();
         }
@@ -208,13 +213,19 @@ impl Icons {
             Some(None) => Slot::Missing(Instant::now()),
             None => Slot::Uncached,
         };
-        self.icons.insert(key, slot);
+        self.put(key, slot);
+    }
+
+    fn put(&mut self, key: Key, slot: Slot) {
+        let ready = matches!(slot, Slot::Ready { .. });
+        let was_ready = matches!(self.icons.insert(key, slot), Some(Slot::Ready { .. }));
+        self.ready = self.ready + usize::from(ready) - usize::from(was_ready);
     }
 
     /// Reads the icon from rbw's cache with the others asked for in this
     /// update.
     fn read(&mut self, key: Key, item: &ItemSummary, letter: bool, cx: &mut Context<Self>) {
-        self.icons.insert(key.clone(), Slot::Reading { letter });
+        self.put(key.clone(), Slot::Reading { letter });
         self.to_read.push((key, item.clone()));
         if self.to_read.len() > 1 {
             return;
@@ -265,12 +276,12 @@ impl Icons {
                         Slot::Failed(Instant::now())
                     }
                 };
-                this.icons.insert(answer_key, slot);
+                this.put(answer_key, slot);
                 this.forget_old(cx);
                 cx.notify();
             },
         );
-        self.icons.insert(
+        self.put(
             key,
             Slot::Fetching {
                 letter,
@@ -281,6 +292,9 @@ impl Icons {
 
     /// Forgets the icons shown longest ago, beyond the ones kept.
     fn forget_old(&mut self, cx: &mut Context<Self>) {
+        if self.ready <= KEPT {
+            return;
+        }
         let mut ready: Vec<(Instant, Key)> = self
             .icons
             .iter()
@@ -289,12 +303,10 @@ impl Icons {
                 _ => None,
             })
             .collect();
-        if ready.len() <= KEPT {
-            return;
-        }
         ready.sort_unstable_by_key(|(shown, _)| *shown);
         for (_, key) in &ready[..ready.len() - KEPT] {
             if let Some(Slot::Ready { image, .. }) = self.icons.remove(key) {
+                self.ready -= 1;
                 cx.drop_image(image, None);
             }
         }
