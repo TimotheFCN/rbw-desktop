@@ -96,6 +96,22 @@ pub fn content_enter<E: IntoElement + Styled + 'static>(
     )
 }
 
+/// New content in the same place and shape as the old, such as a freshly
+/// generated password: it fades up quickly from faint, without moving, so
+/// the change is seen and nothing shifts. A new `id` restarts it. Under
+/// reduced motion the content shows at once.
+pub fn refresh<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+) -> AnimationElement<E> {
+    let easing = ease_out();
+    element.with_animation(
+        id,
+        Animation::new(STANDARD).with_easing(move |t| easing.sample(t)),
+        |element, t| element.opacity(0.25 + 0.75 * t),
+    )
+}
+
 /// A screen or a step replacing another in place, such as the vault after
 /// unlocking or the next step of signing in. It is drawn over what it
 /// replaces and fades in from nothing while settling from `from`, a few

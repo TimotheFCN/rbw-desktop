@@ -168,6 +168,8 @@ pub struct Colors {
     pub scrim: Hsla,
     pub shadow: Hsla,
     pub success: Hsla,
+    /// Something that is only middling, such as a fair password.
+    pub warning: Hsla,
     /// Text and icons that warn, such as an error under a field.
     pub danger: Hsla,
     /// The fill of a button that removes something.
@@ -244,6 +246,7 @@ impl Colors {
             scrim: ca(0x0000002e),
             shadow: ca(0x1e285057),
             success: c(0x34c759),
+            warning: c(0xff9500),
             danger: c(0xff3b30),
             destructive: c(0xff3b30),
             symbol: c(0xe8590c),
@@ -287,6 +290,7 @@ impl Colors {
             scrim: ca(0x0000006b),
             shadow: ca(0x000000a6),
             success: c(0x30d158),
+            warning: c(0xff9f0a),
             danger: c(0xff453a),
             destructive: c(0xff453a),
             symbol: c(0xff9f0a),
@@ -326,6 +330,7 @@ impl Colors {
             scrim: ca(0x00000052),
             shadow: ca(0x00000066),
             success: c(0x26a269),
+            warning: c(0xe5a50a),
             danger: c(0xe01b24),
             destructive: c(0xe01b24),
             symbol: c(0xc64600),
@@ -365,6 +370,7 @@ impl Colors {
             scrim: ca(0x00000080),
             shadow: ca(0x000000a0),
             success: c(0x78e9ab),
+            warning: c(0xf8e45c),
             danger: c(0xff7b63),
             destructive: c(0xc01c28),
             symbol: c(0xffa348),

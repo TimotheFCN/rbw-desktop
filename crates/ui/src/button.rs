@@ -4,9 +4,9 @@
 
 use gpui::base::Button as BaseButton;
 use gpui::{
-    App, BoxShadow, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, point, prelude::FluentBuilder as _, px,
+    App, BoxShadow, ClickEvent, ElementId, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, point, prelude::FluentBuilder as _, px,
 };
 
 use crate::controls::spinner;
@@ -43,6 +43,7 @@ pub struct Button {
     disabled: bool,
     busy: bool,
     wide: bool,
+    focus: Option<FocusHandle>,
     on_click: Option<ClickHandler>,
 }
 
@@ -58,6 +59,7 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         disabled: false,
         busy: false,
         wide: false,
+        focus: None,
         on_click: None,
     }
 }
@@ -113,6 +115,13 @@ impl Button {
     /// Fills the width it is given, like the buttons of an alert.
     pub fn wide(mut self) -> Self {
         self.wide = true;
+        self
+    }
+
+    /// Takes the keyboard with `focus`, for a button that should have it
+    /// first, such as a panel's main action.
+    pub fn track_focus(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
         self
     }
 
@@ -199,6 +208,7 @@ impl RenderOnce for Button {
         let id = self.id.clone();
 
         BaseButton::new(self.id)
+            .when_some(self.focus, |b, focus| b.track_focus(&focus))
             .disabled(disabled || busy)
             .when_some(label, |b, label| b.accessibility_label(label))
             .when_some(self.on_click, |b, handler| b.on_click(handler))

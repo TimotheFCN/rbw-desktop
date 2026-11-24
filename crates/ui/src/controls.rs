@@ -5,9 +5,9 @@ use gpui::base::{
     Switch as BaseSwitch, motion, slider::SliderState,
 };
 use gpui::{
-    App, BoxShadow, ClickEvent, ElementId, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder as _, px, relative, white,
+    App, BoxShadow, ClickEvent, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled,
+    Window, div, prelude::FluentBuilder as _, px, relative, white,
 };
 
 use crate::motion as m;
@@ -194,21 +194,38 @@ impl RenderOnce for Switch {
 pub struct Slider {
     state: Entity<SliderState>,
     label: SharedString,
+    focus: Option<FocusHandle>,
 }
 
 pub fn slider(state: &Entity<SliderState>, label: impl Into<SharedString>) -> Slider {
     Slider {
         state: state.clone(),
         label: label.into(),
+        focus: None,
+    }
+}
+
+impl Slider {
+    /// Lets the keyboard reach the slider with `focus`: the arrow keys then
+    /// move it a step, Home and End to its ends.
+    pub fn track_focus(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
+        self
     }
 }
 
 impl RenderOnce for Slider {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = &cx.theme().colors;
         let value = self.state.read(cx).percentage().end;
+        let ring = colors.focus_ring;
+        let focus_visible = self
+            .focus
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window) && window.last_input_was_keyboard());
         BaseSlider::new(&self.state)
             .accessibility_label(self.label)
+            .when_some(self.focus, |slider, focus| slider.track_focus(&focus))
             .flex_1()
             .child(
                 SliderTrack::new(&self.state)
@@ -243,12 +260,27 @@ impl RenderOnce for Slider {
                                     .size(px(20.))
                                     .rounded_full()
                                     .bg(white())
-                                    .shadow(vec![
-                                        BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.3))
+                                    .shadow(if focus_visible {
+                                        vec![
+                                            BoxShadow::new(px(0.), px(0.), ring)
+                                                .spread_radius(px(3.)),
+                                        ]
+                                    } else {
+                                        vec![
+                                            BoxShadow::new(
+                                                px(0.),
+                                                px(1.),
+                                                gpui::black().opacity(0.3),
+                                            )
                                             .blur_radius(px(4.)),
-                                        BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.08))
+                                            BoxShadow::new(
+                                                px(0.),
+                                                px(0.),
+                                                gpui::black().opacity(0.08),
+                                            )
                                             .spread_radius(px(0.5)),
-                                    ]),
+                                        ]
+                                    }),
                             ),
                     ),
             )

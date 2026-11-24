@@ -5,7 +5,8 @@
 //! [`popover`] inside the element the menu hangs from, and focuses the handle
 //! when it opens. A click outside, Escape, or choosing an item closes it
 //! through [`Popover::on_dismiss`]. Tab and the arrow keys move between the
-//! items without leaving the menu.
+//! items without leaving the menu. A [`Popover::dialog`] holds controls
+//! instead, such as the generator's options.
 
 use std::rc::Rc;
 
@@ -27,10 +28,12 @@ use crate::theme::ActiveTheme;
 actions!(popover, [Dismiss, NextItem, PreviousItem]);
 
 const CONTEXT: &str = "Popover";
+const DIALOG_CONTEXT: &str = "PopoverDialog";
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
+        KeyBinding::new("escape", Dismiss, Some(DIALOG_CONTEXT)),
         KeyBinding::new("down", NextItem, Some(CONTEXT)),
         KeyBinding::new("up", PreviousItem, Some(CONTEXT)),
     ]);
@@ -44,6 +47,9 @@ pub enum Opening {
     /// Under the element and centred on it, for an element in the middle of
     /// the window.
     BelowCentered,
+    /// Under the element, from its trailing edge, for an element at the end
+    /// of a row.
+    BelowEnd,
     /// Over the element, like a menu from the bottom of a sidebar.
     Above,
     /// From a point in the window, such as where a row was right-clicked:
@@ -60,6 +66,7 @@ pub struct Popover {
     opening: Opening,
     focus: FocusHandle,
     label: SharedString,
+    dialog: bool,
     children: SmallVec<[AnyElement; 6]>,
     on_dismiss: Option<DismissHandler>,
 }
@@ -78,6 +85,7 @@ pub fn popover(
         opening: Opening::Below,
         focus: focus.clone(),
         label: label.into(),
+        dialog: false,
         children: SmallVec::new(),
         on_dismiss: None,
     }
@@ -91,6 +99,14 @@ impl Popover {
 
     pub fn on_dismiss(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_dismiss = Some(Rc::new(handler));
+        self
+    }
+
+    /// Holds controls rather than menu items, such as the generator: it is
+    /// a dialog to assistive technologies, its controls keep the arrow keys,
+    /// and it takes the width of its content.
+    pub fn dialog(mut self) -> Self {
+        self.dialog = true;
         self
     }
 }
@@ -123,6 +139,11 @@ impl RenderOnce for Popover {
                 div().absolute().left(relative(0.5)).top(relative(1.)),
                 point(px(0.), gap - shift),
             ),
+            Opening::BelowEnd => (
+                gpui::Anchor::TopRight,
+                div().absolute().right_0().top(relative(1.)),
+                point(px(0.), gap - shift),
+            ),
             Opening::Above => (
                 gpui::Anchor::BottomLeft,
                 div().absolute().left_0().top_0(),
@@ -141,11 +162,16 @@ impl RenderOnce for Popover {
         let (outside, escape) = (dismiss.clone(), dismiss);
         let focus = self.focus.clone();
         let (next_focus, previous_focus) = (focus.clone(), focus.clone());
+        let dialog = self.dialog;
         let menu = div()
             .id(self.id.clone())
-            .role(gpui::Role::Menu)
+            .role(if dialog {
+                gpui::Role::Dialog
+            } else {
+                gpui::Role::Menu
+            })
             .aria_label(self.label)
-            .key_context(CONTEXT)
+            .key_context(if dialog { DIALOG_CONTEXT } else { CONTEXT })
             .track_focus(&self.focus)
             .occlude()
             .opacity(p)
@@ -170,10 +196,17 @@ impl RenderOnce for Popover {
             })
             .child(
                 surface((self.id.clone(), "surface"), Material::Popover)
-                    .min_w(px(200.))
-                    .max_w(px(280.))
-                    .p(px(5.))
-                    .rounded(px(10.))
+                    .map(|surface| {
+                        if dialog {
+                            surface.p(px(12.)).rounded(px(14.))
+                        } else {
+                            surface
+                                .min_w(px(200.))
+                                .max_w(px(280.))
+                                .p(px(5.))
+                                .rounded(px(10.))
+                        }
+                    })
                     .children(self.children),
             )
             .focus_trap((self.id, "trap"), &focus);
