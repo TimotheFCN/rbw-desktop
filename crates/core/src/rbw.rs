@@ -628,7 +628,8 @@ impl Backend for RbwBackend {
         let flags = |flags: &[(bool, &str)]| {
             flags
                 .iter()
-                .filter_map(|(set, flag)| set.then(|| flag.to_string()))
+                .filter(|(set, _)| *set)
+                .map(|(_, flag)| flag.to_string())
                 .collect::<Vec<_>>()
         };
         let (length, flags) = match *options {
