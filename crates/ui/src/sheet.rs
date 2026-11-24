@@ -1,8 +1,10 @@
-//! Modal sheets and the popover surface.
+//! Modal sheets and alerts, and the surface of sheets and popovers.
 //!
-//! A window that presents sheets keeps a [`SheetSlot`] and renders it as its
-//! last child. The slot animates the sheet in and out and drops the sheet's
-//! view once it has left, so nothing typed into it outlives it.
+//! A window that presents sheets keeps a [`SheetSlot`] and renders it as one
+//! of its last children; one that asks for confirmations keeps another,
+//! [`SheetSlot::alert`], rendered after it. The slot animates the sheet in
+//! and out and drops the sheet's view once it has left, so nothing typed into
+//! it outlives it.
 
 use gpui::{
     AnyElement, AnyView, App, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -17,9 +19,19 @@ use crate::theme::{ActiveTheme, Look};
 pub struct SheetSlot {
     view: Option<AnyView>,
     open: bool,
+    alert: bool,
 }
 
 impl SheetSlot {
+    /// A slot for alerts: small dialogs in the middle of the window, on top
+    /// of any sheet.
+    pub fn alert() -> Self {
+        Self {
+            alert: true,
+            ..Self::default()
+        }
+    }
+
     pub fn present(&mut self, view: impl Into<AnyView>) {
         self.view = Some(view.into());
         self.open = true;
@@ -41,7 +53,8 @@ impl SheetSlot {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        let presence = m::presence("sheet", self.open, window, cx);
+        let id = if self.alert { "alert" } else { "sheet" };
+        let presence = m::presence(id, self.open, window, cx);
         if !presence.should_render() {
             self.view = None;
             return None;
@@ -56,25 +69,27 @@ impl SheetSlot {
             Look::Gnome => px(14.),
         };
         // A macOS sheet drops from the top of the window; an Adwaita dialog
-        // rises into the middle.
-        let offset = match look {
-            Look::MacOs => px(-14.) * (1. - p),
-            Look::Gnome => px(12.) * (1. - p),
-        };
+        // and any alert rise into the middle.
+        let from_top = look == Look::MacOs && !self.alert;
+        let offset = if from_top { px(-14.) } else { px(12.) } * (1. - p);
         Some(
             div()
-                .id("sheet-scrim")
+                .id(if self.alert {
+                    "alert-scrim"
+                } else {
+                    "sheet-scrim"
+                })
                 .absolute()
                 .inset_0()
                 .flex()
                 .justify_center()
-                .when(look == Look::MacOs, |d| d.items_start().pt(px(34.)))
-                .when(look == Look::Gnome, |d| d.items_center())
+                .when(from_top, |d| d.items_start().pt(px(34.)))
+                .when(!from_top, |d| d.items_center())
                 .bg(scrim.opacity(p))
                 .occlude()
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
-                    surface("sheet", Material::Sheet)
+                    surface(id, Material::Sheet)
                         .w(width)
                         .rounded(radius)
                         .p(px(16.))

@@ -1,8 +1,8 @@
 //! Choice controls: the segmented control, the switch and the slider.
 
 use gpui::base::{
-    Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, Switch as BaseSwitch, motion,
-    slider::SliderState,
+    Button as BaseButton, Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack,
+    Switch as BaseSwitch, motion, slider::SliderState,
 };
 use gpui::{
     App, BoxShadow, ClickEvent, ElementId, Entity, FontWeight, InteractiveElement, IntoElement,
@@ -58,7 +58,9 @@ impl RenderOnce for SegmentedControl {
         let theme = cx.theme();
         let colors = &theme.colors;
         let macos = theme.look == Look::MacOs;
+        let ring = colors.focus_ring;
         let on_select = self.on_select.map(std::rc::Rc::new);
+        let id = self.id.clone();
 
         div()
             .id(self.id)
@@ -89,21 +91,21 @@ impl RenderOnce for SegmentedControl {
                     .children(self.labels.into_iter().enumerate().map(|(index, label)| {
                         let selected = index == self.selected;
                         let on_select = on_select.clone();
-                        div()
-                            .id(index)
+                        BaseButton::new((id.clone(), index.to_string()))
                             .role(gpui::Role::RadioButton)
-                            .aria_label(label.clone())
-                            .aria_toggled(if selected {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
+                            .accessibility_label(label.clone())
+                            .selected(selected)
                             .relative()
                             .flex_1()
-                            .flex()
-                            .justify_center()
                             .py(px(4.5))
+                            .rounded(if macos { px(7.) } else { px(6.) })
                             .text_size(px(12.5))
+                            .line_height(relative(1.3))
+                            .focus_visible(move |s| {
+                                s.shadow(vec![
+                                    BoxShadow::new(px(0.), px(0.), ring).spread_radius(px(2.)),
+                                ])
+                            })
                             .when(selected, |d| d.font_weight(FontWeight::SEMIBOLD))
                             .when_some(on_select, |d, on_select| {
                                 d.on_click(move |_: &ClickEvent, window, cx| {
@@ -265,31 +267,12 @@ pub fn progress_ring(fraction: f32, cx: &App) -> impl IntoElement {
             let width = px(2.4);
             let radius = bounds.size.width.min(bounds.size.height) / 2. - width / 2.;
             let center = bounds.center();
-            let at = |turn: f32| {
-                let angle = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
-                gpui::point(
-                    center.x + radius * angle.cos(),
-                    center.y + radius * angle.sin(),
-                )
-            };
-            let arc = |from: f32, to: f32| {
-                let mut path = gpui::PathBuilder::stroke(width);
-                path.move_to(at(from));
-                // Arcs of at most half a turn keep the large-arc flag simple.
-                let mut start = from;
-                while start < to {
-                    let end = (start + 0.5).min(to);
-                    path.arc_to(gpui::point(radius, radius), px(0.), false, true, at(end));
-                    start = end;
-                }
-                path.build().ok()
-            };
-            if let Some(path) = arc(0., 0.9999) {
+            if let Some(path) = arc(center, radius, width, 0., 0.9999) {
                 window.paint_path(path, track);
             }
             // What remains runs clockwise from twelve o'clock.
             if fraction > 0.
-                && let Some(path) = arc(0., fraction)
+                && let Some(path) = arc(center, radius, width, 0., fraction)
             {
                 window.paint_path(path, fill);
             }
@@ -297,4 +280,55 @@ pub fn progress_ring(fraction: f32, cx: &App) -> impl IntoElement {
     )
     .size(px(16.))
     .flex_none()
+}
+
+/// An arc going round while something is under way, in `color`.
+pub fn spinner(
+    id: impl Into<ElementId>,
+    size: gpui::Pixels,
+    color: gpui::Hsla,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::Canvas<()> {
+    let turn = m::spin(id, window, cx);
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = px(1.8);
+            let radius = bounds.size.width.min(bounds.size.height) / 2. - width / 2.;
+            if let Some(path) = arc(bounds.center(), radius, width, turn, turn + 0.7) {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(size)
+    .flex_none()
+}
+
+/// A stroked arc around `center`, between two turns measured clockwise from
+/// twelve o'clock.
+fn arc(
+    center: gpui::Point<gpui::Pixels>,
+    radius: gpui::Pixels,
+    width: gpui::Pixels,
+    from: f32,
+    to: f32,
+) -> Option<gpui::Path> {
+    let at = |turn: f32| {
+        let angle = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+        gpui::point(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        )
+    };
+    let mut path = gpui::PathBuilder::stroke(width);
+    path.move_to(at(from));
+    // Arcs of at most half a turn keep the large-arc flag simple.
+    let mut start = from;
+    while start < to {
+        let end = (start + 0.5).min(to);
+        path.arc_to(gpui::point(radius, radius), px(0.), false, true, at(end));
+        start = end;
+    }
+    path.build().ok()
 }

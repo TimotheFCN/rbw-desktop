@@ -168,7 +168,12 @@ pub struct Colors {
     pub scrim: Hsla,
     pub shadow: Hsla,
     pub success: Hsla,
+    /// Text and icons that warn, such as an error under a field.
     pub danger: Hsla,
+    /// The fill of a button that removes something.
+    pub destructive: Hsla,
+    /// Symbols in a shown password; its digits take `accent_text`.
+    pub symbol: Hsla,
     pub focus_ring: Hsla,
     /// An account's avatar behind its initial.
     pub avatar: Background,
@@ -240,6 +245,8 @@ impl Colors {
             shadow: ca(0x1e285057),
             success: c(0x34c759),
             danger: c(0xff3b30),
+            destructive: c(0xff3b30),
+            symbol: c(0xe8590c),
             focus_ring: accent,
             avatar: linear_gradient(
                 160.,
@@ -285,6 +292,8 @@ impl Colors {
             shadow: ca(0x000000a6),
             success: c(0x30d158),
             danger: c(0xff453a),
+            destructive: c(0xff453a),
+            symbol: c(0xff9f0a),
             focus_ring: accent,
             avatar: linear_gradient(
                 160.,
@@ -326,6 +335,8 @@ impl Colors {
             shadow: ca(0x00000066),
             success: c(0x26a269),
             danger: c(0xe01b24),
+            destructive: c(0xe01b24),
+            symbol: c(0xc64600),
             focus_ring: accent,
             avatar: c(0x9141ac).into(),
         }
@@ -363,6 +374,8 @@ impl Colors {
             shadow: ca(0x000000a0),
             success: c(0x78e9ab),
             danger: c(0xff7b63),
+            destructive: c(0xc01c28),
+            symbol: c(0xffa348),
             focus_ring: accent,
             avatar: c(0x9141ac).into(),
         }

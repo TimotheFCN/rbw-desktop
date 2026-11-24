@@ -185,6 +185,42 @@ pub fn avatar(email: &str, cx: &App) -> impl IntoElement {
         .child(initial)
 }
 
+/// The app's own mark, a lock on a blue square, that opens the lock screen
+/// and the sign-in steps.
+pub fn app_icon(cx: &App) -> impl IntoElement {
+    let size = px(62.);
+    let radius = match cx.theme().look {
+        Look::MacOs => 0.28,
+        Look::Gnome => 0.22,
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(size)
+        .rounded(size * radius)
+        .bg(linear_gradient(
+            160.,
+            linear_color_stop(gpui::rgb(0x5aa9ff), 0.),
+            linear_color_stop(gpui::rgb(0x0a63e0), 1.),
+        ))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::white().opacity(0.5),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow::new(px(0.), px(8.), gpui::rgba(0x005adc8c).into())
+                .blur_radius(px(18.))
+                .spread_radius(px(-6.)),
+        ])
+        .text_color(gpui::white())
+        .child(icon(IconName::Lock).size(px(28.)))
+}
+
 /// A row of the item list: tile, name and subtitle.
 #[derive(IntoElement)]
 pub struct ListRow {

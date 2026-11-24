@@ -1,5 +1,6 @@
-//! Push buttons: pill buttons with a label, round icon buttons, and the
-//! accent-filled primary button.
+//! Push buttons: pill buttons with a label, round icon buttons, the
+//! accent-filled primary button, the red destructive one and link-like text
+//! buttons.
 
 use gpui::base::Button as BaseButton;
 use gpui::{
@@ -8,6 +9,7 @@ use gpui::{
     div, point, prelude::FluentBuilder as _, px,
 };
 
+use crate::controls::spinner;
 use crate::icon::{IconName, icon};
 use crate::theme::{ActiveTheme, Look};
 
@@ -17,8 +19,14 @@ pub enum ButtonStyle {
     Normal,
     /// The default action: filled with the accent colour.
     Primary,
-    /// No fill until hovered; GNOME's flat header-bar buttons.
+    /// No fill until hovered, in the colour of the text around it; GNOME's
+    /// flat header-bar buttons.
     Flat,
+    /// An action that removes something, filled red.
+    Destructive,
+    /// Accent-coloured text without a shape, for a secondary way to do
+    /// something, like unlocking with Touch ID.
+    Link,
 }
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -29,9 +37,12 @@ pub struct Button {
     style: ButtonStyle,
     label: Option<SharedString>,
     icon: Option<IconName>,
+    trailing_icon: Option<IconName>,
     accessibility_label: Option<SharedString>,
     size: Option<Pixels>,
     disabled: bool,
+    busy: bool,
+    wide: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -41,9 +52,12 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         style: ButtonStyle::Normal,
         label: None,
         icon: None,
+        trailing_icon: None,
         accessibility_label: None,
         size: None,
         disabled: false,
+        busy: false,
+        wide: false,
         on_click: None,
     }
 }
@@ -58,6 +72,13 @@ impl Button {
     /// [`accessibility_label`](Self::accessibility_label).
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// An icon after the label, such as the chevrons of a button that opens
+    /// a menu.
+    pub fn trailing_icon(mut self, icon: IconName) -> Self {
+        self.trailing_icon = Some(icon);
         self
     }
 
@@ -82,6 +103,19 @@ impl Button {
         self
     }
 
+    /// Shows a spinner in place of the content while the action it started
+    /// is under way, and ignores clicks. The button keeps its size.
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+
+    /// Fills the width it is given, like the buttons of an alert.
+    pub fn wide(mut self) -> Self {
+        self.wide = true;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -92,11 +126,12 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let colors = &theme.colors;
         let metrics = theme.metrics;
         let macos = theme.look == Look::MacOs;
+        let link = self.style == ButtonStyle::Link;
         let height = self.size.unwrap_or(metrics.control_height);
         let round = self.label.is_none();
         let radius = if round && macos {
@@ -104,26 +139,37 @@ impl RenderOnce for Button {
         } else {
             metrics.control_radius.min(height / 2.)
         };
+        let filled = |fill: gpui::Hsla, text: gpui::Hsla| {
+            (
+                Some(fill),
+                Some(text),
+                fill.blend(text.opacity(0.08)),
+                fill.blend(gpui::black().opacity(0.12)),
+            )
+        };
         let (fill, text, hover, pressed) = match self.style {
-            ButtonStyle::Primary => (
-                Some(colors.accent),
-                colors.on_accent,
-                colors.accent.blend(colors.on_accent.opacity(0.08)),
-                colors.accent.blend(gpui::black().opacity(0.12)),
-            ),
+            ButtonStyle::Primary => filled(colors.accent, colors.on_accent),
+            ButtonStyle::Destructive => filled(colors.destructive, colors.on_accent),
             ButtonStyle::Normal => (
                 Some(colors.control),
-                colors.text,
+                Some(colors.text),
                 colors.control.blend(colors.hover),
                 colors.control.blend(colors.fill),
             ),
-            ButtonStyle::Flat => (None, colors.text, colors.hover, colors.fill),
+            ButtonStyle::Flat => (None, None, colors.hover, colors.fill),
+            ButtonStyle::Link => (
+                None,
+                Some(colors.accent_text),
+                gpui::transparent_black(),
+                gpui::transparent_black(),
+            ),
         };
         let shadows = match (macos, self.style) {
-            (false, _) | (true, ButtonStyle::Flat) => vec![],
-            (true, ButtonStyle::Primary) => vec![
+            (false, _) | (true, ButtonStyle::Flat | ButtonStyle::Link) => vec![],
+            (true, ButtonStyle::Primary | ButtonStyle::Destructive) => vec![
                 inset_highlight(gpui::white().opacity(0.3)),
-                BoxShadow::new(px(0.), px(2.), colors.accent.opacity(0.35)).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(2.), fill.unwrap_or(colors.accent).opacity(0.35))
+                    .blur_radius(px(8.)),
             ],
             (true, ButtonStyle::Normal) => vec![
                 inset_highlight(colors.control_highlight),
@@ -131,41 +177,72 @@ impl RenderOnce for Button {
                 BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.05)).spread_radius(px(0.5)),
             ],
         };
-        let disabled = self.disabled;
+        let ring = colors.focus_ring;
+        let spinner_color = text.unwrap_or(colors.text_secondary);
+        let (busy, disabled) = (self.busy, self.disabled);
         let label = self.accessibility_label.or_else(|| self.label.clone());
+        let padding = match self.style {
+            ButtonStyle::Link => px(2.),
+            ButtonStyle::Primary | ButtonStyle::Destructive => px(18.),
+            ButtonStyle::Normal | ButtonStyle::Flat => px(12.),
+        };
+        // The content stays in place, hidden, under the spinner, so the
+        // button keeps its width.
+        let content = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .when(busy, |d| d.invisible())
+            .when_some(self.icon, |d, name| d.child(icon(name)))
+            .when_some(self.label, |d, label| d.child(label))
+            .when_some(self.trailing_icon, |d, name| d.child(icon(name)));
+        let id = self.id.clone();
 
         BaseButton::new(self.id)
-            .disabled(disabled)
+            .disabled(disabled || busy)
             .when_some(label, |b, label| b.accessibility_label(label))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
+            .relative()
             .h(height)
-            .when(round, |b| b.w(height))
-            .when(!round, |b| {
-                b.px(if self.style == ButtonStyle::Primary {
-                    px(18.)
-                } else {
-                    px(12.)
-                })
-            })
+            .when(round && !link, |b| b.w(height))
+            .when(!round, |b| b.px(padding))
+            .when(self.wide, |b| b.w_full())
             .flex()
             .flex_none()
             .items_center()
             .justify_center()
-            .gap(px(6.))
             .rounded(radius)
-            .text_color(text)
+            .when_some(text, |b, text| b.text_color(text))
             .font_weight(FontWeight::MEDIUM)
             .when_some(fill, |b, fill| b.bg(fill))
             .when(macos && self.style == ButtonStyle::Normal, |b| {
                 b.border(px(0.5)).border_color(colors.control_edge)
             })
             .shadow(shadows)
-            .when(!disabled, |b| {
+            .focus_visible(move |s| {
+                s.shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), ring).spread_radius(px(3.)),
+                ])
+            })
+            .when(!disabled && !busy, |b| {
                 b.hover(move |s| s.bg(hover)).active(move |s| s.bg(pressed))
             })
-            .styles(|s| s.disabled(|s| s.opacity(0.45)))
-            .when_some(self.icon, |b, name| b.child(icon(name)))
-            .when_some(self.label, |b, label| b.child(div().child(label)))
+            .when(link && !disabled && !busy, |b| {
+                b.hover(|s| s.opacity(0.75)).active(|s| s.opacity(0.6))
+            })
+            .styles(|s| s.disabled(|s| s.opacity(if busy { 1. } else { 0.45 })))
+            .child(content)
+            .when(busy, |b| {
+                b.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(spinner((id, "busy"), px(14.), spinner_color, window, cx)),
+                )
+            })
     }
 }
 

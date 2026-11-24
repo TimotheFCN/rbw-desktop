@@ -8,9 +8,11 @@ use gpui::{
     Render, Styled as _, Window, div, px, size,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Material, Theme, ToastSlot, button, card, chrome,
-    copied_badge, field_row, form_row, icon, list_row, nav_row, progress_ring, search_field,
-    section_label, segmented_control, slider, surface, switch, text_field, tile, toggle_row,
+    ActiveTheme as _, ButtonStyle, ConfirmDialog, Confirmation, IconName, Material, Theme,
+    ToastSlot, app_icon, avatar, button, card, chrome, copied_badge, field_error, field_row,
+    form_row, icon, list_row, menu_item, menu_separator, nav_row, password_text, progress_ring,
+    search_field, section_label, segmented_control, slider, surface, switch, text_field, tile,
+    toggle_row,
 };
 
 struct Gallery {
@@ -21,6 +23,7 @@ struct Gallery {
     segment: usize,
     switch_on: bool,
     toast: ToastSlot,
+    alert: Entity<ConfirmDialog>,
 }
 
 impl Gallery {
@@ -37,6 +40,17 @@ impl Gallery {
             segment: 0,
             switch_on: true,
             toast: ToastSlot::default(),
+            alert: cx.new(|cx| {
+                ConfirmDialog::new(
+                    Confirmation {
+                        title: "Delete “Netflix”?".into(),
+                        message: "It moves to the trash of your vault.".into(),
+                        confirm: "Delete".into(),
+                        destructive: true,
+                    },
+                    cx,
+                )
+            }),
         };
         this.toast.show(
             "The server can't be reached.",
@@ -83,6 +97,27 @@ impl Render for Gallery {
                     .accessibility_label("Favorite"),
             )
             .child(button("disabled").label("Disabled").disabled(true));
+        let more_buttons = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                button("busy")
+                    .label("Sign In")
+                    .style(ButtonStyle::Primary)
+                    .busy(true),
+            )
+            .child(
+                button("delete")
+                    .label("Delete")
+                    .style(ButtonStyle::Destructive),
+            )
+            .child(
+                button("link")
+                    .label("Unlock with Touch ID")
+                    .icon(IconName::TouchId)
+                    .style(ButtonStyle::Link),
+            );
 
         let choices = div()
             .flex()
@@ -129,13 +164,19 @@ impl Render for Gallery {
             .gap(px(10.))
             .child(div().flex().child(search_field(&self.search)))
             .child(
-                text_field("password", &self.password).trailing(
+                text_field("password", &self.password, "Master password").trailing(
                     button("unlock")
                         .icon(IconName::ArrowRight)
                         .style(ButtonStyle::Primary)
                         .size(px(28.))
                         .accessibility_label("Unlock"),
                 ),
+            )
+            .child(field_error("Incorrect password. Try again.", cx))
+            .child(
+                div()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .child(password_text("vT7#kq2Lw!m9Rz@eB4xN^pd", cx)),
             );
 
         let rows = div()
@@ -213,6 +254,29 @@ impl Render for Gallery {
             )
             .child(copied_badge(cx));
 
+        let menu = surface("menu", Material::Popover)
+            .w(px(240.))
+            .p(px(5.))
+            .rounded(px(10.))
+            .child(
+                menu_item("menu-alex", "alex@example.org")
+                    .leading(avatar("alex@example.org", cx))
+                    .detail("Unlocked")
+                    .checked(true),
+            )
+            .child(
+                menu_item("menu-sam", "sam@example.com")
+                    .leading(avatar("sam@example.com", cx))
+                    .detail("Locked"),
+            )
+            .child(menu_separator(cx))
+            .child(menu_item("menu-add", "Add Account…").icon(IconName::Plus));
+        let alert = surface("alert", Material::Sheet)
+            .w(px(300.))
+            .rounded(px(18.))
+            .p(px(16.))
+            .child(self.alert.clone());
+
         let column = |children: Vec<AnyElement>| {
             div()
                 .flex()
@@ -230,7 +294,16 @@ impl Render for Gallery {
             .p(px(28.))
             .bg(cx.theme().colors.window)
             .child(column(vec![
-                section("Buttons", buttons, cx),
+                section(
+                    "Buttons",
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(buttons)
+                        .child(more_buttons),
+                    cx,
+                ),
                 section("Choices", choices, cx),
                 section("Fields", fields, cx),
                 section("Sidebar and list rows", rows, cx),
@@ -239,6 +312,11 @@ impl Render for Gallery {
                 section("Card with field rows", cards, cx),
                 section("Sheet", sheet, cx),
                 section("Popover", popover, cx),
+            ]))
+            .child(column(vec![
+                section("App icon", app_icon(cx), cx),
+                section("Menu", menu, cx),
+                section("Alert", alert, cx),
             ]))
             .children(toast);
         chrome::window_frame(content, window, cx)
@@ -252,8 +330,8 @@ fn main() {
             rbw_desktop_ui::init(cx);
             let options = chrome::window_options(
                 "Gallery",
-                size(px(840.), px(780.)),
-                size(px(840.), px(600.)),
+                size(px(1240.), px(780.)),
+                size(px(1240.), px(600.)),
                 cx,
             );
             gpui::open_window(options, cx, |window, cx| {

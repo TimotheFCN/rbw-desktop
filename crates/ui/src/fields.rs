@@ -1,10 +1,11 @@
 //! Text entry: the search field and the free-standing text field. Fields in a
 //! form sit in card rows instead; see [`crate::card::form_row`].
 
-use gpui::base::input::{Input, InputState};
+use gpui::base::input::{Input, InputBase, InputState};
 use gpui::{
-    AnyElement, App, BoxShadow, ElementId, Entity, Focusable, Hsla, InteractiveElement,
-    IntoElement, ParentElement, RenderOnce, StatefulInteractiveElement, Styled, Window, div, point,
+    AnyElement, App, BoxShadow, ElementId, Entity, Focusable, HighlightStyle, Hsla,
+    InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, StyledText, Window, div, point,
     prelude::FluentBuilder as _, px,
 };
 
@@ -56,7 +57,7 @@ impl RenderOnce for SearchField {
                             .spread_radius(px(0.5)),
                     ])
             })
-            .when(focused, |d| focus_ring(d, colors.focus_ring))
+            .map(|d| focus_ring(d, focused, macos, colors.focus_ring))
             .child(icon(IconName::Search))
             .child(
                 div()
@@ -69,18 +70,25 @@ impl RenderOnce for SearchField {
 }
 
 /// A free-standing text field, such as the master password on the lock
-/// screen. `trailing` holds an optional button inside its end.
+/// screen. `label` names it for assistive technologies; on screen its
+/// placeholder does. `trailing` holds an optional button inside its end.
 #[derive(IntoElement)]
 pub struct TextField {
     id: ElementId,
     state: Entity<InputState>,
+    label: SharedString,
     trailing: Option<AnyElement>,
 }
 
-pub fn text_field(id: impl Into<ElementId>, state: &Entity<InputState>) -> TextField {
+pub fn text_field(
+    id: impl Into<ElementId>,
+    state: &Entity<InputState>,
+    label: impl Into<SharedString>,
+) -> TextField {
     TextField {
         id: id.into(),
         state: state.clone(),
+        label: label.into(),
         trailing: None,
     }
 }
@@ -100,8 +108,9 @@ impl RenderOnce for TextField {
         let colors = &theme.colors;
         let macos = theme.look == Look::MacOs;
         let height = theme.metrics.control_height + px(8.);
-        div()
-            .id(self.id)
+        InputBase::new(self.id)
+            .accessibility_label(self.label)
+            .focused(focused)
             .flex()
             .items_center()
             .h(height)
@@ -126,10 +135,19 @@ impl RenderOnce for TextField {
                             .spread_radius(px(0.5)),
                     ])
             })
-            .when(focused, |d| focus_ring(d, colors.focus_ring))
+            .map(|d| focus_ring(d, focused, macos, colors.focus_ring))
             .child(div().flex_1().min_w_0().child(Input::new(&self.state)))
             .children(self.trailing)
     }
+}
+
+/// A sentence under a field saying what is wrong with what was entered, or
+/// why the step it belongs to failed.
+pub fn field_error(message: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    div()
+        .text_size(cx.theme().metrics.small_text_size)
+        .text_color(cx.theme().colors.danger)
+        .child(message.into())
 }
 
 fn inset(color: Hsla) -> BoxShadow {
@@ -142,10 +160,42 @@ fn inset(color: Hsla) -> BoxShadow {
     }
 }
 
-/// The keyboard focus ring both looks draw around a focused field: the
-/// accent at half strength, three points wide, outside the edge.
-fn focus_ring<E: Styled>(element: E, color: Hsla) -> E {
-    element.border_color(Hsla { a: 1., ..color }).shadow(vec![
-        BoxShadow::new(px(0.), px(0.), color).spread_radius(px(3.)),
-    ])
+/// The keyboard focus ring around a focused field. macOS draws the accent
+/// at half strength, three points wide, outside the edge. Adwaita draws it
+/// two points wide inside the edge: GPUI paints a shadow under the whole
+/// field, where GNOME's translucent fill would let it show, so GNOME's ring
+/// is a border that is always there, clear until focused, and moves nothing
+/// when it appears.
+fn focus_ring<E: Styled>(element: E, focused: bool, macos: bool, color: Hsla) -> E {
+    match (macos, focused) {
+        (true, true) => element.border_color(Hsla { a: 1., ..color }).shadow(vec![
+            BoxShadow::new(px(0.), px(0.), color).spread_radius(px(3.)),
+        ]),
+        (true, false) => element,
+        (false, focused) => element.border_2().border_color(if focused {
+            color
+        } else {
+            gpui::transparent_black()
+        }),
+    }
+}
+
+/// A password as text, its digits and symbols coloured apart from its
+/// letters so that each character reads unambiguously.
+pub fn password_text(value: &str, cx: &App) -> StyledText {
+    let colors = &cx.theme().colors;
+    let highlights = value
+        .char_indices()
+        .filter_map(|(start, c)| {
+            let color = if c.is_ascii_digit() {
+                colors.accent_text
+            } else if c.is_ascii_punctuation() || (!c.is_alphanumeric() && !c.is_whitespace()) {
+                colors.symbol
+            } else {
+                return None;
+            };
+            Some((start..start + c.len_utf8(), HighlightStyle::color(color)))
+        })
+        .collect::<Vec<_>>();
+    StyledText::new(value.to_string()).with_highlights(highlights)
 }
