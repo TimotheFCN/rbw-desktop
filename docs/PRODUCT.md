@@ -23,8 +23,10 @@ find a password, copy it and save a new one without reading anything.
    process ids or jargon. If an element doesn't help someone find, copy or
    save a secret, it goes.
 3. **Native on each platform.** On macOS it looks and behaves like a current
-   macOS app: glass sidebar and controls, system accent colour, light and
-   dark from the system, standard shortcuts and menus. On Linux it follows
+   macOS app: a sidebar of the system's material, flush with the window's
+   edges under the traffic lights as in Finder, raised controls, the system
+   accent colour, light and dark from the system, standard shortcuts and
+   menus. On Linux it follows
    GNOME conventions. It never looks like a web page or a developer tool.
 4. **Fast.** It opens at once, never blocks the interface on the network or
    on `rbw`, and stays small in memory.

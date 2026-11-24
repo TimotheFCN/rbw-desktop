@@ -5,7 +5,7 @@
 | Crate | Package | What it holds |
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
-| `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, glass, components. Its `gallery` example shows every component. |
+| `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, the sidebar, components. Its `gallery` example shows every component. |
 | `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
@@ -320,8 +320,8 @@ keyboard and takes Return: Cancel when confirming removes something.
 
 **Settings** (`settings/`) is its own window, opened with `secondary-,`, the
 app menu's Settings… on macOS and the sidebar's primary menu on GNOME, and
-laid out per look: a glass sidebar on macOS, a view switcher in the header
-bar on GNOME. Each page is an entity. Rows are `settings_group` and
+laid out per look: a sidebar on macOS, a view switcher in the header bar
+on GNOME. Each page is an entity. Rows are `settings_group` and
 `setting_row` from the design system, choices a `Select` (an entity that
 emits `Selected`). Each account's `AccountSettings` live in one
 `settings::store::Store`, written back at once; a failed save puts the
@@ -496,16 +496,19 @@ The macOS-only code is small and type-checked from Linux by
 `tools/check-macos`; CI builds and runs it on a macOS runner
 (`tools/smoke-macos`), but nobody has used it on a Mac yet:
 
-- `ui/src/glass.rs`: the `NSGlassEffectView` under the sidebar (macOS 26+),
-  placed below GPUI's view and moved with the sidebar's bounds.
+- `ui/src/sidebar.rs`: the sidebar's `NSVisualEffectView` (the sidebar
+  material, blending with what is behind the window, grey while the window
+  is inactive, in the app's light or dark appearance), placed below GPUI's
+  view and moved with the sidebar's bounds. GPUI paints nothing there.
 - `ui/src/platform.rs`: the accent colour from `NSColor.controlAccentColor`.
-- `ui/src/chrome.rs`: transparent title bar, traffic lights at (21, 21) inside
-  the sidebar, the `Blurred` window background.
+- `ui/src/chrome.rs`: transparent title bar, traffic lights at (19, 18) over
+  the sidebar, in the middle of the toolbars' height, the `Blurred` window
+  background.
 - Fonts: `.SystemUIFont` and Menlo.
 - The window's blur adds no colour of its own (GPUI strips the system
   material's tint), so the lock and sign-in screens and the panel tint it
-  with `chrome::material`, and `glass_surround` paints the window's colour
-  around the sidebar, whose glass a background would cover.
+  with `chrome::material`. The sidebar needs no tint: its own view is the
+  system's material, tint and all.
 - The Settings window's title bar and traffic lights over its sidebar, the
   app menu's About and Settings… items, Touch ID's switch on the Accounts
   page, and the SSH page's advice to add `IdentityAgent` to `~/.ssh/config`.
