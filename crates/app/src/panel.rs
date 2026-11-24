@@ -21,8 +21,8 @@ use rbw_desktop_core::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, Material, ToastSlot,
-    backdrop, button, chrome, icon, list_row, motion, scroll_area, scrollbar, search_field,
-    section_label, segmented_control,
+    backdrop, button, chrome, icon, key_hint, list_row, motion, scroll_area, scrollbar,
+    search_field, section_label, segmented_control,
 };
 
 use crate::CloseWindow;
@@ -205,6 +205,9 @@ pub struct QuickPanel {
     highlight_jumps: bool,
     copied: Option<ItemId>,
     copied_timer: Task<()>,
+    /// The selected row's button under the pointer, which the line under
+    /// the list names.
+    pointed: Option<RowAction>,
     unlocking: bool,
     /// Made when its tab is first shown.
     generator: Option<Entity<Generator>>,
@@ -270,6 +273,7 @@ impl QuickPanel {
             highlight_jumps: false,
             copied: None,
             copied_timer: Task::ready(()),
+            pointed: None,
             unlocking: false,
             generator: None,
             focus: cx.focus_handle(),
@@ -402,6 +406,7 @@ impl QuickPanel {
     fn select(&mut self, position: usize, by_pointer: bool, cx: &mut Context<Self>) {
         if self.selected != position {
             self.selected = position;
+            self.pointed = None;
             self.highlight_jumps |= by_pointer;
             self.scroll
                 .scroll_to_item(position, ScrollStrategy::Nearest);
@@ -642,6 +647,7 @@ impl QuickPanel {
             }
             _ => None,
         };
+        let (listed, hint) = (empty.is_none(), self.render_hint(cx));
         div()
             .flex_1()
             .min_h_0()
@@ -698,6 +704,7 @@ impl QuickPanel {
                     .child(scrollbar("panel-rows-bar", &self.scroll, cx))
                     .into_any_element(),
             })
+            .when(listed, |d| d.child(hint))
             .into_any_element()
     }
 
@@ -754,6 +761,46 @@ impl QuickPanel {
         )
     }
 
+    /// Notes the button the pointer is on, or that it left it.
+    fn point_at(
+        &self,
+        action: RowAction,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.pointed = Some(action);
+            } else if this.pointed == Some(action) {
+                this.pointed = None;
+            }
+            cx.notify();
+        })
+    }
+
+    /// The line under the list that names what the button under the
+    /// pointer does, or else what Return does, with its key: the row's
+    /// buttons say it at once, without waiting for their tooltips.
+    fn render_hint(&self, cx: &mut Context<Self>) -> AnyElement {
+        let hint = self.item(self.selected).map(|item| {
+            let action = self
+                .pointed
+                .unwrap_or(RowAction::Copy(Part::main(item.kind)));
+            let (label, keys) = match action {
+                RowAction::Copy(part) => (part.label(), part.keys(item.kind)),
+                RowAction::Open => ("Open in Vault", secondary!("o")),
+            };
+            motion::replace(SharedString::from(label), key_hint(label, keys, cx))
+        });
+        div()
+            .flex_none()
+            .h(px(22.))
+            .flex()
+            .items_end()
+            .justify_center()
+            .children(hint)
+            .into_any_element()
+    }
+
     /// The selected row's buttons: one for each thing of the item there is
     /// to copy, then one that opens it in the vault. The list says whether
     /// a login has a username or a code; it doesn't say whether a password,
@@ -774,6 +821,7 @@ impl QuickPanel {
                     .size(px(26.))
                     .accessibility_label(part.label())
                     .shortcut(part.keys(item.kind))
+                    .on_hover(self.point_at(RowAction::Copy(part), cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.copy(item.clone(), part, cx);
@@ -786,6 +834,7 @@ impl QuickPanel {
                     .size(px(26.))
                     .accessibility_label("Open in Vault")
                     .shortcut(secondary!("o"))
+                    .on_hover(self.point_at(RowAction::Open, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.open_item(id.clone(), cx);
@@ -870,6 +919,13 @@ impl QuickPanel {
             )
             .into_any_element()
     }
+}
+
+/// What a button of the selected row does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowAction {
+    Copy(Part),
+    Open,
 }
 
 /// Something of an item that the panel copies.

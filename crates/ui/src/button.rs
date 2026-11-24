@@ -48,7 +48,10 @@ pub struct Button {
     wide: bool,
     focus: Option<FocusHandle>,
     on_click: Option<ClickHandler>,
+    on_hover: Option<HoverHandler>,
 }
+
+type HoverHandler = Box<dyn Fn(&bool, &mut Window, &mut App)>;
 
 pub fn button(id: impl Into<ElementId>) -> Button {
     Button {
@@ -65,6 +68,7 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         wide: false,
         focus: None,
         on_click: None,
+        on_hover: None,
     }
 }
 
@@ -141,6 +145,13 @@ impl Button {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(handler));
+        self
+    }
+
+    /// Called with `true` when the pointer comes onto the button, `false`
+    /// when it leaves.
+    pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_hover = Some(Box::new(handler));
         self
     }
 }
@@ -230,6 +241,7 @@ impl RenderOnce for Button {
             .when_some(label, |b, label| b.accessibility_label(label))
             .when_some(tip, |b, tip| b.with_tooltip(tip, shortcut, cx))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
+            .when_some(self.on_hover, |b, handler| b.on_hover(handler))
             .relative()
             .h(height)
             .when(round && !link, |b| b.w(height))
