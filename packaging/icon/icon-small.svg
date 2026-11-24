@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- icon.svg for 16 to 32 pixels: no keyhole or shadows, and a lock on
+       the 16-pixel grid (64 points a pixel), with a one-pixel shackle. -->
+  <defs>
+    <linearGradient id="blue" x1="0.33" y1="0" x2="0.67" y2="1">
+      <stop offset="0" stop-color="#5aa9ff"/>
+      <stop offset="1" stop-color="#0a63e0"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#blue)" d="M383.41 100L640.59 100C722.19 100 763 100 799.79 112.14L806.92 113.89C854.88 131.34 892.66 169.12 910.11 217.08L911.86 224.21C924 261 924 301.81 924 383.41L924 640.59C924 722.19 924 763 911.86 799.79L910.11 806.92C892.66 854.88 854.88 892.66 806.92 910.11L799.79 911.86C763 924 722.19 924 640.59 924L383.41 924C301.81 924 261 924 224.21 911.86L217.08 910.11C169.12 892.66 131.34 854.88 113.89 806.92L112.14 799.79C100 763 100 722.19 100 640.59L100 383.41C100 301.81 100 261 112.14 224.21L113.89 217.08C131.34 169.12 169.12 131.34 217.08 113.89L224.21 112.14C261 100 301.81 100 383.41 100Z"/>
+  <path fill="none" stroke="#fff" stroke-width="64" d="M352 448V384a160 160 0 0 1 320 0v64"/>
+  <rect x="256" y="448" width="512" height="384" rx="64" fill="#fff"/>
+</svg>
