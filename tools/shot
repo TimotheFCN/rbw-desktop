@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Screenshots rbw-desktop on a private headless X server (Xvfb, software
+# Vulkan), composited over a wallpaper. See docs/DEVELOPMENT.md.
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+usage: tools/shot [options] <state> <out.png>
+
+states:
+  vault      the vault as it opens
+  search     "bank" typed into the search field
+  logins     Logins chosen in the sidebar
+  select     the third item selected with the keyboard
+  copied     the first field of the item copied
+  sheet      the New Item sheet
+  gallery    the design system gallery
+
+options:
+  --theme T     macos-light (default), macos-dark, gnome-light, gnome-dark
+  --size WxH    window size in points, frame included (default: the app's)
+  --scale N     pixels per point (default 2)
+  --record S    also record S seconds from the state's input as
+                <out>-frames/NNN.png at 30 frames per second
+  --no-build    use the binaries already built
+EOF
+	exit 2
+}
+
+theme=macos-light size="" scale=2 record="" build=1
+while [[ $# -gt 0 && $1 == --* ]]; do
+	case $1 in
+	--theme) theme=$2; shift 2 ;;
+	--size) size=$2; shift 2 ;;
+	--scale) scale=$2; shift 2 ;;
+	--record) record=$2; shift 2 ;;
+	--no-build) build=0; shift ;;
+	*) usage ;;
+	esac
+done
+[[ $# -eq 2 ]] || usage
+state=$1 out=$(realpath -m "$2")
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+if [[ $state == gallery ]]; then
+	binary=$root/target/debug/examples/gallery title=Gallery
+	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop-ui --example gallery
+else
+	binary=$root/target/debug/rbw-desktop title=Vault
+	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
+fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/rbw-desktop-shot.XXXXXX")
+pids=()
+cleanup() {
+	for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+	wait 2>/dev/null || true
+	rm -rf "$work"
+}
+trap cleanup EXIT
+
+# A screen with room for the window and its shadow at any supported size.
+screen_w=$((1400 * scale)) screen_h=$((1000 * scale))
+Xvfb -displayfd 3 -screen 0 "${screen_w}x${screen_h}x24" -nolisten tcp 3>"$work/display" 2>/dev/null &
+pids+=($!)
+for _ in $(seq 50); do [[ -s $work/display ]] && break; sleep 0.1; done
+export DISPLAY=:$(<"$work/display")
+
+case $theme in
+macos-light) colors=(-define gradient:angle=135 "gradient:#bcd5ff-#f4d9ec") ;;
+macos-dark) colors=(-define gradient:angle=135 "gradient:#1b2b63-#4a2350") ;;
+gnome-*) colors=(-define gradient:angle=160 "gradient:#2c5aa0-#77459a") ;;
+*) usage ;;
+esac
+magick -size "${screen_w}x${screen_h}" "${colors[@]}" "$work/wallpaper.png"
+hsetroot -cover "$work/wallpaper.png" >/dev/null
+xcompmgr -n &
+pids+=($!)
+# Let it claim the compositor selection before the app looks for it.
+sleep 0.5
+# GPUI draws its own frame on X11 only where it finds a compositing window
+# manager that supports GTK frame extents, as GNOME's does. There is no window
+# manager here, so advertise one on the root window. (GPUI's check of the
+# compositor selection names it after the root window instead of the screen,
+# so xcompmgr alone is not found.)
+python3 -I - <<'PY'
+import ctypes
+x = ctypes.cdll.LoadLibrary("libX11.so.6")
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+x.XChangeProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                              ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+display = x.XOpenDisplay(None)
+root = x.XDefaultRootWindow(display)
+ATOM, WINDOW = 4, 33
+def set_property(name, kind, value):
+    data = (ctypes.c_ulong * 1)(value)
+    x.XChangeProperty(display, root, x.XInternAtom(display, name, 0), kind, 32, 0, data, 1)
+set_property(b"_NET_SUPPORTING_WM_CHECK", WINDOW, root)
+set_property(b"_NET_SUPPORTED", ATOM, x.XInternAtom(display, b"_GTK_FRAME_EXTENTS", 0))
+x.XCloseDisplay(display)
+PY
+
+# Keep the pointer off where the window will appear.
+xdotool mousemove 0 0
+RBW_DESKTOP_THEME=$theme GPUI_X11_SCALE_FACTOR=$scale RUST_LOG=${RUST_LOG:-error} \
+	"$binary" >"$work/app.log" 2>&1 &
+pids+=($!)
+window=$(timeout 30 xdotool search --sync --onlyvisible --name "^$title\$" | head -1) || {
+	echo "shot: the window never appeared; log:" >&2
+	cat "$work/app.log" >&2
+	exit 1
+}
+if [[ -n $size ]]; then
+	xdotool windowsize "$window" $((${size%x*} * scale)) $((${size#*x} * scale))
+fi
+geometry() {
+	eval "$(xdotool getwindowgeometry --shell "$window")"
+	win_x=$X win_y=$Y win_w=$WIDTH win_h=$HEIGHT
+}
+geometry
+xdotool windowmove "$window" $(((screen_w - win_w) / 2)) $(((screen_h - win_h) / 2))
+sleep 1.5
+
+# Pointer positions in points from the window's top-left corner. The frame
+# Linux draws around the window adds an invisible 12-point border.
+frame=12
+case $theme in
+macos-*) toolbar=50 sidebar=186 inset=7 sidebar_top=42 nav=30 ;;
+gnome-*) toolbar=46 sidebar=196 inset=0 sidebar_top=46 nav=32 ;;
+esac
+click() {
+	xdotool mousemove --window "$window" $((($1 + frame) * scale)) $((($2 + frame) * scale)) click 1
+}
+act() {
+	case $state in
+	vault | gallery) ;;
+	search) xdotool key ctrl+f type --delay 60 bank ;;
+	# The fourth row: All Items, Favorites, the Types heading, Logins.
+	logins) click $((sidebar / 2)) $((inset + sidebar_top + nav * 2 + 30 + nav / 2)) ;;
+	select) xdotool key Down Down ;;
+	# The first field: under the toolbar, the 56-point header and its gap.
+	copied) click $((sidebar + 236 + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20)) ;;
+	sheet) xdotool key ctrl+n ;;
+	*) usage ;;
+	esac
+	# Rest the pointer on the empty bottom of the detail pane: X11 without a
+	# window manager doesn't tell the app when the pointer leaves it, so a
+	# pointer outside the window would leave a hover highlight behind.
+	xdotool mousemove --window "$window" $((win_w - 40 * scale)) $((win_h - 40 * scale))
+}
+
+margin=$((40 * scale))
+geometry
+crop_x=$((win_x - margin)) crop_y=$((win_y - margin))
+crop_w=$((win_w + 2 * margin)) crop_h=$((win_h + 2 * margin))
+
+if [[ -n $record ]]; then
+	frames="${out%.png}-frames"
+	rm -rf "$frames" && mkdir -p "$frames"
+	ffmpeg -loglevel error -f x11grab -framerate 30 -video_size "${crop_w}x${crop_h}" \
+		-i "$DISPLAY+$crop_x,$crop_y" -t "$record" "$frames/%03d.png" &
+	recorder=$!
+	sleep 0.3
+	act
+	wait "$recorder"
+	echo "$frames"
+else
+	act
+fi
+sleep 1
+
+mkdir -p "$(dirname "$out")"
+import -window root -crop "${crop_w}x${crop_h}+${crop_x}+${crop_y}" +repage "$out"
+echo "$out"
