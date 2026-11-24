@@ -474,8 +474,10 @@ target (sheets, popovers, screens, `PRESENT`, `SCREEN`) follow
 arriving where there was none, `enter` for a part settling from a few
 points off, `reveal` for a line opening under others, `grow` for a box
 that springs to its content's height (the generator's value), `slide`
-for a selection along rows (drawn by the rows with `Highlight`, or
-`selection_track` for rows of different places, such as a sidebar's),
+for a selection along rows, which travels to any row and comes in from
+the list's edge when it was off screen (`rows_on_screen` says which rows
+show; drawn by the rows with `Highlight`, or `selection_track` for rows of
+different places, such as a sidebar's),
 `settle` for something let go, `screen_replace` and `screen_leave`,
 `shake`, `spin`. Key an element animation by what it shows, so that
 drawing the same thing again replays nothing: the item pane by its item,

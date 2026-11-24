@@ -151,8 +151,9 @@ pub fn selection_track(
             .and_then(|selected| track.rows.get(selected))
             .map(|(top, height, _)| (*top, *height))
     });
-    let at = target
-        .map(|(top, height)| m::slide((id, "highlight"), top / height, false, window, cx) * height);
+    let at = target.map(|(top, height)| {
+        m::slide((id, "highlight"), top / height, false, None, window, cx) * height
+    });
     track.update(cx, |track, _| track.at = at);
     track
 }

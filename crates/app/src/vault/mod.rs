@@ -227,6 +227,9 @@ pub struct VaultView {
     visible: Vec<usize>,
     /// The rows whose icons were last read ahead.
     prefetched: std::ops::Range<usize>,
+    /// The rows the list drew last, which its selection comes in from the
+    /// edge of.
+    drew: std::ops::Range<usize>,
     selected: Option<ItemId>,
     /// Where the selection's highlight is drawn, in rows, as it slides.
     highlight_at: Option<f32>,
@@ -304,6 +307,7 @@ impl VaultView {
             search,
             visible: vec![],
             prefetched: 0..0,
+            drew: 0..0,
             selected: None,
             highlight_at: None,
             highlight_jumps: false,

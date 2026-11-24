@@ -76,9 +76,10 @@ impl VaultView {
         );
 
         let jump = std::mem::take(&mut self.highlight_jumps);
-        self.highlight_at = self
-            .selected_index()
-            .map(|index| motion::slide("list-selection", index as f32, jump, window, cx));
+        self.highlight_at = self.selected_index().map(|index| {
+            let on_screen = motion::rows_on_screen(&self.drew, index);
+            motion::slide("list-selection", index as f32, jump, on_screen, window, cx)
+        });
         let body = match &self.items {
             Load::Failed(error) => message(backend::describe(error), dim),
             Load::Ready(items) if items.is_empty() => message("No Items", dim),
@@ -88,6 +89,7 @@ impl VaultView {
                 self.visible.len(),
                 cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
                     let account = this.account.id.clone();
+                    this.drew = range.clone();
                     this.prefetch_icons(&range, cx);
                     let list_focused = this.list_focus.is_focused(window);
                     range

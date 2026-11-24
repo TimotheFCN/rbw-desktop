@@ -203,6 +203,9 @@ pub struct QuickPanel {
     /// the arrow keys, and follows the pointer at once, as a menu's does.
     highlight_at: f32,
     highlight_jumps: bool,
+    /// The rows the list drew last, which its selection comes in from the
+    /// edge of.
+    drew: std::ops::Range<usize>,
     copied: Option<ItemId>,
     copied_timer: Task<()>,
     /// The selected row's button under the pointer, which the line under
@@ -271,6 +274,7 @@ impl QuickPanel {
             selected: 0,
             highlight_at: 0.,
             highlight_jumps: false,
+            drew: 0..0,
             copied: None,
             copied_timer: Task::ready(()),
             pointed: None,
@@ -624,8 +628,15 @@ impl QuickPanel {
 
     fn render_items(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let jump = std::mem::take(&mut self.highlight_jumps);
-        self.highlight_at =
-            motion::slide("panel-selection", self.selected as f32, jump, window, cx);
+        let on_screen = motion::rows_on_screen(&self.drew, self.selected);
+        self.highlight_at = motion::slide(
+            "panel-selection",
+            self.selected as f32,
+            jump,
+            on_screen,
+            window,
+            cx,
+        );
         let theme = cx.theme();
         let dim = theme.colors.text_secondary;
         let searching = !self.search.read(cx).value().trim().is_empty();
@@ -693,6 +704,7 @@ impl QuickPanel {
                             "panel-rows",
                             self.shown.len(),
                             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                this.drew = range.clone();
                                 range
                                     .filter_map(|position| this.render_row(position, cx))
                                     .collect()

@@ -9,8 +9,9 @@
 //! * What appears in place fades, briefly ([`ARRIVE`], [`replace`]); what
 //!   leaves goes faster than it came ([`DISMISS`], [`QUICK`]).
 //! * Distances are short: a few points for anything that enters
-//!   ([`enter`], [`presence`]), and a selection slides only to a row near
-//!   it ([`slide`]); further, it is there at once.
+//!   ([`enter`], [`presence`]). A selection travels to any row on the same
+//!   spring, which keeps a long way short in time, and comes in from the
+//!   edge of a list when it was off screen ([`slide`]).
 //! * Nothing replays: element animations are keyed by what they show, so
 //!   drawing the same thing again starts nothing.
 //!
@@ -267,32 +268,83 @@ pub fn settle(
     spring(id.into(), share, SETTLE.with_travel(!held), window, cx)
 }
 
-/// How many rows a selection slides across; further, it is there at once.
-const SLIDE_ROWS: f32 = 4.;
+/// Where a selection's highlight was and is going, kept between frames.
+#[derive(Clone, Copy)]
+struct Slide {
+    /// The row it goes to.
+    target: f32,
+    /// Where it was drawn last.
+    at: f32,
+    /// How far the highlight is from the spring's own position: moved when
+    /// the highlight starts its way from closer than where it was.
+    shift: f32,
+}
 
-/// Where a selection moving along a list is, in rows: it slides on the
-/// [`SELECTION`] spring to a row near it, and is at once at one further
-/// away or after the list changed under it (`jump`), so that it never
-/// crosses rows it has nothing to do with. Draw each row's share of it
-/// from how far it is from that row.
+/// Where a selection moving along a list is, in rows: it travels to its
+/// row on the [`SELECTION`] spring from wherever it is, near or far, and a
+/// new row redirects it on the way, so that arrow keys held down keep it
+/// close behind. From a row off screen it comes in from the edge on that
+/// side: `on_screen` says which rows show once the list has scrolled to
+/// the selection, for a list that shows only some. After the list changed
+/// under it (`jump`) it is on its row at once, since where it was means
+/// nothing any more. Draw each row's share of it from how far it is from
+/// that row.
 pub fn slide(
     id: impl Into<ElementId>,
     row: f32,
     jump: bool,
+    on_screen: Option<std::ops::Range<f32>>,
     window: &mut Window,
     cx: &mut App,
 ) -> f32 {
     let id = id.into();
-    let last = window.use_keyed_state((id.clone(), "slide-target"), cx, |_, _| row);
-    let near = (row - *last.read(cx)).abs() <= SLIDE_ROWS;
-    last.update(cx, |last, _| *last = row);
-    spring(
+    let state = window.use_keyed_state((id.clone(), "slide"), cx, |_, _| Slide {
+        target: row,
+        at: row,
+        shift: 0.,
+    });
+    let mut slide = *state.read(cx);
+    if slide.target != row && !jump {
+        // The spring keeps its speed; only where it starts moves.
+        slide.shift += slide_start(slide.at, on_screen) - slide.at;
+    }
+    slide.target = row;
+    let spring_at = spring(
         (id, "slide"),
-        row,
-        SELECTION.with_travel(near && !jump),
+        row - slide.shift,
+        SELECTION.with_travel(!jump),
         window,
         cx,
-    )
+    );
+    slide.at = spring_at + slide.shift;
+    state.update(cx, |state, _| *state = slide);
+    slide.at
+}
+
+/// Where a highlight at `at` starts its way from: where it is, or just
+/// past the edge of the rows on screen when it is further.
+fn slide_start(at: f32, on_screen: Option<std::ops::Range<f32>>) -> f32 {
+    match on_screen {
+        Some(rows) => at.clamp(rows.start - 1., rows.end),
+        None => at,
+    }
+}
+
+/// The rows a list shows once it has scrolled to `row`, the least it can,
+/// from those it `drew` last: for [`slide`].
+pub fn rows_on_screen(drew: &std::ops::Range<usize>, row: usize) -> Option<std::ops::Range<f32>> {
+    let count = drew.len();
+    if count == 0 {
+        return None;
+    }
+    let start = if row < drew.start {
+        row
+    } else if row >= drew.end {
+        row + 1 - count
+    } else {
+        drew.start
+    };
+    Some(start as f32..(start + count) as f32)
 }
 
 /// Grows or shrinks to fit `child` on the [`RESIZE`] spring when what it
@@ -458,6 +510,25 @@ fn linear() -> Keyframes<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_selection_off_screen_comes_in_from_the_edge() {
+        // On screen, it starts where it is.
+        assert_eq!(slide_start(4., Some(2. ..12.)), 4.);
+        // Above or below the rows on screen, just past the edge.
+        assert_eq!(slide_start(-30., Some(2. ..12.)), 1.);
+        assert_eq!(slide_start(400., Some(2. ..12.)), 12.);
+        // A list with every row on screen.
+        assert_eq!(slide_start(400., None), 400.);
+    }
+
+    #[test]
+    fn a_list_scrolls_the_least_to_show_its_selection() {
+        assert_eq!(rows_on_screen(&(10..20), 12), Some(10. ..20.));
+        assert_eq!(rows_on_screen(&(10..20), 25), Some(16. ..26.));
+        assert_eq!(rows_on_screen(&(10..20), 3), Some(3. ..13.));
+        assert_eq!(rows_on_screen(&(0..0), 3), None);
+    }
 
     #[test]
     fn the_spring_curve_runs_from_start_to_end_without_passing_it() {
