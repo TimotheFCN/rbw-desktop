@@ -314,6 +314,7 @@ pub struct Tile {
     hue: f32,
     size: Pixels,
     icon: Option<(ElementId, TileIcon)>,
+    glyph: Option<IconName>,
 }
 
 /// A tile for `name`, with a hue derived from it so an item keeps its colour.
@@ -331,12 +332,21 @@ pub fn tile(name: &str) -> Tile {
         hue: HUES[hash as usize % HUES.len()],
         size: px(32.),
         icon: None,
+        glyph: None,
     }
 }
 
 impl Tile {
     pub fn size(mut self, size: Pixels) -> Self {
         self.size = size;
+        self
+    }
+
+    /// Shows a glyph in place of the letter, on a tile of `hue`, such as an
+    /// item's kind while it has no name yet.
+    pub fn glyph(mut self, glyph: IconName, hue: f32) -> Self {
+        self.glyph = Some(glyph);
+        self.hue = hue;
         self
     }
 
@@ -399,7 +409,10 @@ impl RenderOnce for Tile {
             .text_color(gpui::white().opacity(lettered))
             .text_size(self.size * 0.44)
             .font_weight(FontWeight::SEMIBOLD)
-            .child(self.letter)
+            .map(|d| match self.glyph {
+                Some(glyph) => d.child(icon(glyph).size(self.size * 0.52)),
+                None => d.child(self.letter),
+            })
             .when_some(image, |d, (image, shown)| {
                 d.child(
                     div()

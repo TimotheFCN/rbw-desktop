@@ -224,7 +224,8 @@ keys ctrl+a BackSpace Escape
 keys ctrl+n
 sleep 0.5
 type_text "E2E login"
-keys Tab
+# Past the kinds, to the username.
+keys Tab Tab
 type_text "e2e-user"
 step new-item
 keys ctrl+Return

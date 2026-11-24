@@ -283,6 +283,12 @@ impl Generator {
         (self.choices.kind != Kind::Pin).then(|| self.choices.options().strength())
     }
 
+    /// The bits of randomness in the current options' values; `None` for a
+    /// PIN, as [`Generator::strength`].
+    pub fn entropy(&self) -> Option<f64> {
+        (self.choices.kind != Kind::Pin).then(|| self.choices.options().entropy())
+    }
+
     /// "password", "passphrase" or "PIN".
     pub fn noun(&self) -> &'static str {
         self.choices.kind.noun()
@@ -546,7 +552,7 @@ pub const POPOVER_WIDTH: Pixels = px(282.);
 
 /// The dot before the word that says how strong a value is.
 pub fn strength_dot(color: Hsla) -> gpui::Div {
-    div().size(px(7.)).rounded_full().bg(color)
+    div().flex_none().size(px(7.)).rounded_full().bg(color)
 }
 
 /// The colour of the dot and the word that say how strong a value is.

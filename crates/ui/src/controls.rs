@@ -11,7 +11,9 @@ use gpui::{
 };
 
 use crate::focus::control_ring;
+use crate::icon::IconName;
 use crate::motion as m;
+use crate::rows::tile;
 use crate::theme::{ActiveTheme, Look};
 
 type SelectHandler = Box<dyn Fn(usize, &mut Window, &mut App)>;
@@ -22,6 +24,8 @@ type SelectHandler = Box<dyn Fn(usize, &mut Window, &mut App)>;
 pub struct SegmentedControl {
     id: ElementId,
     labels: Vec<SharedString>,
+    /// A glyph over each label, on a tile of its hue.
+    glyphs: Vec<(IconName, f32)>,
     selected: usize,
     on_select: Option<SelectHandler>,
 }
@@ -34,12 +38,20 @@ pub fn segmented_control(
     SegmentedControl {
         id: id.into(),
         labels: labels.into_iter().map(Into::into).collect(),
+        glyphs: vec![],
         selected,
         on_select: None,
     }
 }
 
 impl SegmentedControl {
+    /// A coloured glyph over each label, such as the kinds of item to make:
+    /// larger segments that read as a choice of things.
+    pub fn glyphs(mut self, glyphs: impl IntoIterator<Item = (IconName, f32)>) -> Self {
+        self.glyphs = glyphs.into_iter().collect();
+        self
+    }
+
     pub fn on_select(mut self, handler: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
@@ -119,6 +131,7 @@ impl RenderOnce for SegmentedControl {
                     )
                     .children(self.labels.into_iter().enumerate().map(|(index, label)| {
                         let selected = index == self.selected;
+                        let glyph = self.glyphs.get(index).copied();
                         let on_select = on_select.clone();
                         BaseButton::new((id.clone(), index.to_string()))
                             .role(gpui::Role::RadioButton)
@@ -131,6 +144,7 @@ impl RenderOnce for SegmentedControl {
                             .relative()
                             .flex_1()
                             .py(px(2.5))
+                            .when(glyph.is_some(), |d| d.flex_col().gap(px(5.)).py(px(8.)))
                             .rounded(if macos { px(7.) } else { px(6.) })
                             .text_size(px(12.5))
                             .line_height(relative(1.3))
@@ -145,6 +159,9 @@ impl RenderOnce for SegmentedControl {
                                 d.on_click(move |_: &ClickEvent, window, cx| {
                                     on_select(index, window, cx)
                                 })
+                            })
+                            .when_some(glyph, |d, (glyph, hue)| {
+                                d.child(tile("").glyph(glyph, hue).size(px(28.)))
                             })
                             .child(label)
                     })),

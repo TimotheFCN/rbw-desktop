@@ -86,9 +86,20 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   Passwords and other hidden fields reveal on request. Verification codes
   count down live. Websites open in the browser.
 * Create, edit and delete items; mark favourites; move between folders.
-  New logins get a generated password by default. Everything the item view
-  shows can be edited, the less common fields behind "Add Field"; saving
-  changes only what was changed.
+  The item's sheet shows what is being made at its top: the item's tile
+  (its website's icon once the address is one with an icon kept, else
+  its letter, or its kind's glyph until it has a name) beside its name.
+  A new item's kind is chosen from coloured tiles: login, card, identity,
+  note or SSH key (made from its private key). Every field has its glyph,
+  a plain label and an example in it; the name says it is required only
+  when Save finds it empty. New logins get a generated password, which
+  says how strong it is from the randomness its options hold; a typed
+  one gets no score. Everything the item view shows can be edited, the
+  less common fields behind "Add Field", whose menu says what each is
+  for; saving changes only what was changed. Cmd/Ctrl-S or
+  Cmd/Ctrl-Return saves; Escape asks before throwing changes away. The
+  sheet grows and shrinks with its fields, and scrolls inside once it is
+  as tall as the window.
 * The clipboard is cleared after a copied secret has sat there for a while,
   when the account it came from locks or signs out, and when the app quits.
 * Copy shortcuts: the password, the username and the verification code of

@@ -43,6 +43,8 @@ pub enum Key {
 pub struct Texts {
     pub values: BTreeMap<Key, String>,
     pub notes: String,
+    /// An SSH key's private key, from which rbw makes the rest.
+    pub private_key: String,
     pub websites: Vec<WebsiteText>,
     pub fields: Vec<FieldText>,
 }
@@ -75,6 +77,7 @@ pub fn texts(data: &ItemData) -> Texts {
         values.insert(key, value.to_string());
     };
     let mut websites = vec![];
+    let mut private_key = String::new();
     match &data.content {
         ItemContent::Login(login) => {
             put(Key::Username, &login.username);
@@ -120,11 +123,13 @@ pub fn texts(data: &ItemData) -> Texts {
             put(Key::Passport, identity.passport_number.expose());
             put(Key::License, identity.license_number.expose());
         }
-        ItemContent::SecureNote | ItemContent::SshKey(_) => {}
+        ItemContent::SshKey(key) => private_key = key.private_key.expose().to_string(),
+        ItemContent::SecureNote => {}
     }
     Texts {
         values,
         notes: data.notes.expose().to_string(),
+        private_key,
         websites,
         fields: data
             .fields
@@ -149,6 +154,14 @@ pub fn apply(original: &ItemData, initial: &Texts, current: &Texts) -> ItemData 
     }
     if current.notes != initial.notes {
         data.notes = Secret::new(current.notes.clone());
+    }
+    if current.private_key != initial.private_key
+        && let ItemContent::SshKey(key) = &mut data.content
+    {
+        // The public key and fingerprint come from it.
+        key.private_key = Secret::new(current.private_key.trim().to_string());
+        key.public_key.clear();
+        key.fingerprint.clear();
     }
     if current.websites != initial.websites
         && let (ItemContent::Login(before), ItemContent::Login(after)) =
@@ -421,6 +434,28 @@ mod tests {
         };
         assert_eq!(login.password.expose(), " new pass ");
         assert_eq!(saved.notes.expose(), "a\nb\n");
+    }
+
+    #[test]
+    fn a_new_ssh_key_is_made_from_its_private_key() {
+        let new = ItemData::new(ItemKind::SshKey);
+        let made = edited(&new, |texts| {
+            texts.private_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n".into();
+        });
+        let ItemContent::SshKey(key) = &made.content else {
+            panic!("an SSH key");
+        };
+        assert_eq!(
+            key.private_key.expose(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl"
+        );
+        // Another private key: the public key and fingerprint go with the
+        // old one.
+        let replaced = edited(&ssh_key(), |texts| texts.private_key = "other".into());
+        let ItemContent::SshKey(key) = &replaced.content else {
+            panic!("an SSH key");
+        };
+        assert!(key.public_key.is_empty() && key.fingerprint.is_empty());
     }
 
     #[test]

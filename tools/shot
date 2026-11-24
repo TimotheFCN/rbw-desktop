@@ -16,6 +16,7 @@ states, in the vault:
   revealed       the item's password shown
   sheet          the New Item sheet
   sheet-options  its password options
+  add-field      its Add Field menu
   folder-menu    the sheet's folder menu
   new-folder     a folder being created from it
   delete         asking before deleting the selected item
@@ -267,10 +268,14 @@ act() {
 	generator) xdotool key ctrl+shift+g ;;
 	# Name, Username, Password, its Generate and Options buttons, Website,
 	# then Folder.
-	sheet-options) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Return ;;
-	folder-menu) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Return ;;
+	# The sheet's stops of Tab: the name, the kinds, the username, the
+	# password and its three buttons, the website, the notes, Add Field,
+	# the folder.
+	sheet-options) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Return ;;
+	add-field) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Tab Tab Tab Return ;;
+	folder-menu) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Tab Tab Tab Tab Return ;;
 	new-folder)
-		xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Return sleep 0.4 key Up Return
+		xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Tab Tab Tab Tab Return sleep 0.4 key Up Return
 		xdotool sleep 0.4 type --delay 60 Travel
 		;;
 	delete) xdotool key ctrl+BackSpace ;;

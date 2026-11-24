@@ -229,6 +229,7 @@ impl Render for Gallery {
                 card()
                     .on_surface()
                     .row(form_row(
+                        IconName::Identity,
                         "Name",
                         gpui::base::input::Input::new(&self.name),
                         cx,

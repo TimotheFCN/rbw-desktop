@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext as _, Context, Entity, Global, RenderImage, Task};
 use image::imageops::FilterType;
-use rbw_desktop_core::{AccountId, Backend, IconFormat, ItemKind, ItemSummary, WebsiteIcon};
+use rbw_desktop_core::{
+    AccountId, Backend, IconFormat, ItemId, ItemKind, ItemSummary, WebsiteIcon,
+};
 use rbw_desktop_ui::TileIcon;
 
 use crate::backend;
@@ -172,6 +174,29 @@ impl Icons {
         }
     }
 
+    /// The icon rbw keeps for an item, read from its cache, never asked of
+    /// the server: for an item being made, whose address may be half
+    /// typed. `None` until it is known to be there.
+    fn cached_only(
+        &mut self,
+        account: &AccountId,
+        item: &ItemSummary,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
+        let key = key(account, item).filter(|_| self.enabled)?;
+        match self.icons.get_mut(&key) {
+            Some(Slot::Ready { image, shown }) => {
+                *shown = Instant::now();
+                Some(image.clone())
+            }
+            Some(_) => None,
+            None => {
+                self.read(key, item, true, cx);
+                None
+            }
+        }
+    }
+
     /// Reads the icons of rows about to show from rbw's cache, so that
     /// they are there when the rows are drawn. Asks no server.
     pub fn prefetch<'a>(
@@ -316,6 +341,28 @@ impl Icons {
 /// [`Icons::icon`] from anywhere.
 pub fn icon(account: &AccountId, item: &ItemSummary, cx: &mut App) -> TileIcon {
     Icons::global(cx).update(cx, |icons, cx| icons.icon(account, item, cx))
+}
+
+/// The icon rbw keeps for a website, if it keeps one, for the item being
+/// made in the editor: read from rbw's cache, never asked of the server.
+pub fn kept_icon(account: &AccountId, website: &str, cx: &mut App) -> Option<Arc<RenderImage>> {
+    // The icon is the same for every login of a website: one with only
+    // the website is enough to look it up.
+    let login = ItemSummary {
+        id: ItemId(String::new()),
+        kind: ItemKind::Login,
+        name: String::new(),
+        subtitle: None,
+        websites: vec![website.to_string()],
+        folder: None,
+        organization: None,
+        favorite: false,
+        has_code: false,
+        reprompt: false,
+        editable: true,
+        modified: None,
+    };
+    Icons::global(cx).update(cx, |icons, cx| icons.cached_only(account, &login, cx))
 }
 
 /// Reads the icons of `items` that rbw keeps on disk and decodes them, off

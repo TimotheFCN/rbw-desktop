@@ -414,7 +414,14 @@ and when the app quits, unless something else was copied since.
 through `form::texts` and builds what it saves with `form::apply`, which
 writes back only the fields that changed: an item saved unchanged is the
 same item, and the save sends nothing. `form.rs` is tested without a
-display; keep any new field's round trip there.
+display; keep any new field's round trip there. `describe` gives each
+field its label, glyph and example. The sheet's groups are always the
+same, in the same order, empty when they show nothing, each in a
+`motion::grow` inside the scrolling column: the sheet springs to its new
+height when fields come and go, and the column still scrolls once the
+sheet is as tall as the window (a `grow` around the column itself would
+take its whole height). Escape asks before closing when `has_changes`,
+which leaves out a password the sheet generated itself.
 
 **Calling the backend.** Every `Backend` call blocks. Use
 `backend::request(cx, |backend| backend.items(&id), |this, result, cx| …)`:
@@ -446,7 +453,9 @@ calls back into the window view to dismiss (`ItemEditor::close`). Draw the
 slot outside the screen's key context, so that none of the screen's
 shortcuts act behind the sheet, and trap Tab with `focus_trap` on the
 sheet's root. A sheet is no taller than its window: put its fields in a
-`flex_1().min_h_0()` column that scrolls, and the buttons after it.
+`flex_1().min_h_0()` column that scrolls, and the buttons after it; to
+make it grow and shrink with its fields, `grow` each part of the column,
+never the column.
 
 **The sidebar** of the vault and of Settings is `sidebar(id)`, flush with
 the window's edges, with `chrome::traffic_lights` at its top on macOS and

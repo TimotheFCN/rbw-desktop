@@ -968,7 +968,7 @@ impl Render for VaultView {
         let share = motion::settle("list-share", self.list_share(cx), held, window, cx);
         let list = self.render_list(share, window, cx);
         let divider = self.render_divider(share, cx);
-        let sheet = self.sheet.render(px(360.), window, cx);
+        let sheet = self.sheet.render(px(480.), window, cx);
         let toast = self.toast.render(window, cx);
         // The sheet is outside the vault's key context, so that none of the
         // vault's shortcuts act behind it.

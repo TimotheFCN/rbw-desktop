@@ -1,7 +1,9 @@
-//! The sheet that creates an item or edits one: every field the item view
-//! shows, the common ones first and the rest from "Add Field". New logins
-//! get a generated password; the generator's options open from the
-//! password's row. Saving writes back only what changed ([`form`]).
+//! The sheet that creates an item or edits one: a header with the item's
+//! tile and name, the kind of a new item chosen from tiles, then every
+//! field the item view shows, the common ones first and the rest from "Add
+//! Field". New logins get a generated password; the generator's options
+//! open from the password's row. Saving writes back only what changed
+//! ([`form`]); Escape asks before it throws changes away.
 
 mod form;
 mod sections;
@@ -14,9 +16,10 @@ use gpui::{
     ScrollHandle, Subscription, Task, WeakEntity, Window, actions,
 };
 use rbw_desktop_core::{
-    AccountId, CustomField, Error, FieldValue, Folder, FolderId, Item, ItemData, ItemId, ItemKind,
-    Secret,
+    AccountId, CustomField, Error, FieldValue, Folder, FolderId, Item, ItemContent, ItemData,
+    ItemId, ItemKind, Secret,
 };
+use rbw_desktop_ui::{Confirmation, IconName};
 
 use super::VaultView;
 use crate::backend;
@@ -34,17 +37,39 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, Some(CONTEXT)),
         KeyBinding::new(secondary!("enter"), Save, Some(CONTEXT)),
+        KeyBinding::new(secondary!("s"), Save, Some(CONTEXT)),
         KeyBinding::new("escape", CancelNewFolder, Some(NEW_FOLDER_CONTEXT)),
     ]);
 }
 
-/// The kinds the sheet can create, in the order of its segmented control.
-const KINDS: [(ItemKind, &str); 4] = [
-    (ItemKind::Login, "Login"),
-    (ItemKind::Card, "Card"),
-    (ItemKind::Identity, "Identity"),
-    (ItemKind::SecureNote, "Note"),
+/// The kinds the sheet can create, in the order of its choice of kind,
+/// each with its glyph and the hue of its tile.
+const KINDS: [(ItemKind, &str, IconName, f32); 5] = [
+    (ItemKind::Login, "Login", IconName::Key, 215.),
+    (ItemKind::Card, "Card", IconName::Card, 145.),
+    (ItemKind::Identity, "Identity", IconName::Identity, 275.),
+    (ItemKind::SecureNote, "Note", IconName::Note, 40.),
+    (ItemKind::SshKey, "SSH Key", IconName::Terminal, 190.),
 ];
+
+/// The kind's place among [`KINDS`].
+fn kind_index(kind: ItemKind) -> usize {
+    KINDS
+        .iter()
+        .position(|(k, ..)| *k == kind)
+        .unwrap_or_default()
+}
+
+/// What a new item of a kind might be called, as its name's field shows.
+fn name_example(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Login => "Netflix",
+        ItemKind::Card => "Travel card",
+        ItemKind::Identity => "Personal",
+        ItemKind::SecureNote => "Wi-Fi at home",
+        ItemKind::SshKey => "Work laptop",
+    }
+}
 
 /// Fields that hold secrets: hidden while another field has the keyboard.
 const SECRETS: [Key; 7] = [
@@ -94,13 +119,25 @@ impl Extra {
         }
     }
 
-    /// The item in "Add Field".
-    fn label(self) -> &'static str {
+    /// The item in "Add Field": its name, what it is for, and its glyph.
+    fn describe(self) -> (&'static str, &'static str, IconName) {
         match self {
-            Extra::Authenticator => "Authenticator Key",
-            Extra::TitleAndMiddleName => "Title and Middle Name",
-            Extra::Address => "Address",
-            Extra::Identification => "Identity Documents",
+            Extra::Authenticator => (
+                "Verification Code",
+                "The setup key the website gives",
+                IconName::Clock,
+            ),
+            Extra::TitleAndMiddleName => (
+                "Title and Middle Name",
+                "Such as Dr, and a second name",
+                IconName::Identity,
+            ),
+            Extra::Address => ("Address", "Street, city and country", IconName::Pin),
+            Extra::Identification => (
+                "Identity Documents",
+                "Passport and license numbers",
+                IconName::Badge,
+            ),
         }
     }
 }
@@ -174,6 +211,8 @@ pub struct ItemEditor {
     initial: Texts,
     inputs: BTreeMap<Key, Entity<InputState>>,
     notes: Entity<TextareaState>,
+    /// A new SSH key's private key.
+    private_key: Entity<TextareaState>,
     websites: Vec<WebsiteRow>,
     fields: Vec<FieldRow>,
     next_row: usize,
@@ -183,6 +222,8 @@ pub struct ItemEditor {
     add_menu_focus: FocusHandle,
     folders: Vec<Folder>,
     folder: Option<FolderId>,
+    /// The folder the sheet opened with, to tell whether it changed.
+    initial_folder: Option<FolderId>,
     folder_menu_open: bool,
     folder_menu_focus: FocusHandle,
     /// The name of a folder being created from the folder menu.
@@ -194,6 +235,8 @@ pub struct ItemEditor {
     generator_focus: FocusHandle,
     /// Whether the password is still the generated one, which shows.
     generated: bool,
+    /// Counts the values generated, each of which arrives in place.
+    generations: usize,
     /// Whether a value the generator makes goes into the password: not
     /// after the person typed one, until they ask the generator again.
     take_generated: bool,
@@ -201,6 +244,9 @@ pub struct ItemEditor {
     /// keyboard.
     password_shown: bool,
     problem: Option<&'static str>,
+    /// Whether Save found the name empty, which the name says until it is
+    /// typed, and how many times, each of which shakes it.
+    name_missing: usize,
     /// Asks for the master password, when the item asks for it again
     /// before it is saved.
     reprompt: Option<Entity<Reprompt>>,
@@ -226,7 +272,7 @@ impl ItemEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let kind = if KINDS.iter().any(|(k, _)| *k == kind) {
+        let kind = if KINDS.iter().any(|(k, ..)| *k == kind) {
             kind
         } else {
             ItemKind::Login
@@ -279,7 +325,11 @@ impl ItemEditor {
         let mut subscriptions = vec![];
         let mut inputs = BTreeMap::new();
         for key in ALL_KEYS {
-            let input = new_input(placeholder(key), SECRETS.contains(&key), window, cx);
+            let example = match key {
+                Key::Name => name_example(kind),
+                key => describe(key).2,
+            };
+            let input = new_input(example, SECRETS.contains(&key), window, cx);
             input.update(cx, |input, cx| {
                 input.set_value(shown.get(key).to_string(), window, cx)
             });
@@ -295,10 +345,18 @@ impl ItemEditor {
         let notes = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
-                .placeholder("Notes")
+                .placeholder("Anything else to keep with it")
         });
         notes.update(cx, |notes, cx| {
             notes.set_value(shown.notes.clone(), window, cx)
+        });
+        let private_key = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(2, 8)
+                .placeholder("-----BEGIN OPENSSH PRIVATE KEY-----")
+        });
+        private_key.update(cx, |key, cx| {
+            key.set_value(shown.private_key.clone(), window, cx)
         });
         let generator = cx.new(|cx| Generator::new(new_item && kind == ItemKind::Login, cx));
         subscriptions.push(cx.subscribe_in(
@@ -313,6 +371,7 @@ impl ItemEditor {
             initial: Texts::default(),
             inputs,
             notes,
+            private_key,
             websites: vec![],
             fields: vec![],
             next_row: 0,
@@ -321,6 +380,7 @@ impl ItemEditor {
             add_menu_focus: cx.focus_handle(),
             folders,
             folder: data.folder.clone(),
+            initial_folder: data.folder.clone(),
             folder_menu_open: false,
             folder_menu_focus: cx.focus_handle(),
             new_folder: None,
@@ -329,9 +389,11 @@ impl ItemEditor {
             generator_open: false,
             generator_focus: cx.focus_handle(),
             generated: false,
+            generations: 0,
             take_generated: new_item,
             password_shown: false,
             problem: None,
+            name_missing: 0,
             reprompt: None,
             _reprompt_events: None,
             saving: false,
@@ -412,11 +474,11 @@ impl ItemEditor {
                 ));
                 input
             };
-        let name = line("Name", &text.field.name, false, cx);
+        let name = line("Field name", &text.field.name, false, cx);
         let value = match &text.field.value {
             FieldValue::Text(value) => FieldInput::Text(line("Value", value, false, cx)),
             FieldValue::Hidden(value) => {
-                FieldInput::Hidden(line("Value", value.expose(), true, cx))
+                FieldInput::Hidden(line("Hidden value", value.expose(), true, cx))
             }
             FieldValue::Boolean(on) => FieldInput::Boolean(*on),
             FieldValue::Linked(id) => FieldInput::Linked(*id),
@@ -439,6 +501,7 @@ impl ItemEditor {
                 .map(|(key, input)| (*key, input.read(cx).value().to_string()))
                 .collect(),
             notes: self.notes.read(cx).value().to_string(),
+            private_key: self.private_key.read(cx).value().to_string(),
             websites: self
                 .websites
                 .iter()
@@ -467,6 +530,7 @@ impl ItemEditor {
             }
             InputEvent::Change if key == Some(Key::Name) => {
                 self.problem = None;
+                self.name_missing = 0;
                 cx.notify();
             }
             InputEvent::PressEnter { .. } if Some(input) == self.new_folder.as_ref() => {
@@ -521,6 +585,7 @@ impl ItemEditor {
             input.set_masked(false, window, cx);
         });
         self.generated = true;
+        self.generations += 1;
         cx.notify();
     }
 
@@ -547,11 +612,14 @@ impl ItemEditor {
         cx.notify();
     }
 
-    fn set_kind(&mut self, kind: ItemKind, cx: &mut Context<Self>) {
+    fn set_kind(&mut self, kind: ItemKind, window: &mut Window, cx: &mut Context<Self>) {
         if self.kind == kind {
             return;
         }
         self.kind = kind;
+        self.input(Key::Name).clone().update(cx, |name, cx| {
+            name.set_placeholder(name_example(kind), window, cx)
+        });
         // The first switch to Login makes its password.
         if kind == ItemKind::Login
             && self.take_generated
@@ -647,8 +715,53 @@ impl ItemEditor {
         cx.notify();
     }
 
+    /// Escape or Cancel: closes the sheet, after asking if that throws
+    /// changes away.
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        self.close(None, window, cx);
+        if !self.has_changes(cx) {
+            self.close(None, window, cx);
+            return;
+        }
+        let confirmation = Confirmation {
+            title: if self.editing.is_some() {
+                "Discard your changes?"
+            } else {
+                "Discard this new item?"
+            }
+            .into(),
+            message: "What you typed in it is lost.".into(),
+            confirm: "Discard".into(),
+            destructive: true,
+        };
+        let editor = cx.entity().downgrade();
+        crate::alerts::confirm(confirmation, window, cx, move |window, cx| {
+            editor
+                .update(cx, |editor, cx| editor.close(None, window, cx))
+                .ok();
+        });
+    }
+
+    /// Whether saving would change anything: what Escape asks about. A
+    /// password the sheet generated for a new login isn't a change of the
+    /// person's.
+    fn has_changes(&self, cx: &App) -> bool {
+        let data = self.item_data(cx);
+        match &self.editing {
+            Some(item) => item.data != data || item.favorite != self.favorite,
+            None => {
+                let mut blank = ItemData {
+                    folder: self.initial_folder.clone(),
+                    ..ItemData::new(self.kind)
+                };
+                if self.generated
+                    && let (ItemContent::Login(blank), ItemContent::Login(made)) =
+                        (&mut blank.content, &data.content)
+                {
+                    blank.password = made.password.clone();
+                }
+                data != blank || self.favorite
+            }
+        }
     }
 
     fn close(&mut self, saved: Option<ItemId>, window: &mut Window, cx: &mut Context<Self>) {
@@ -674,7 +787,7 @@ impl ItemEditor {
         }
         let data = self.item_data(cx);
         if data.name.trim().is_empty() {
-            self.problem = Some("Give the item a name.");
+            self.name_missing += 1;
             self.focus(window, cx);
             cx.notify();
             return;
@@ -859,13 +972,37 @@ const ALL_KEYS: [Key; 26] = [
     Key::License,
 ];
 
-/// What an empty field shows, where its label alone doesn't say enough.
-fn placeholder(key: Key) -> &'static str {
+/// What a field is called, its glyph, and the example its empty field
+/// shows. A new item's name has an example of its kind's
+/// ([`name_example`]).
+fn describe(key: Key) -> (&'static str, IconName, &'static str) {
     match key {
-        Key::Name => "Required",
-        Key::Expiry => "MM/YYYY",
-        Key::Email => "name@example.com",
-        _ => "",
+        Key::Name => ("Name", IconName::Edit, ""),
+        Key::Username => ("Username", IconName::Identity, "name@example.com"),
+        Key::Password => ("Password", IconName::Key, ""),
+        Key::Authenticator => ("Setup key", IconName::Clock, "JBSW Y3DP EHPK 3PXP"),
+        Key::Cardholder => ("Cardholder", IconName::Identity, "Alex Martin"),
+        Key::Brand => ("Brand", IconName::Card, "Visa"),
+        Key::Number => ("Number", IconName::Card, "1234 5678 9012 3456"),
+        Key::Expiry => ("Expires", IconName::Calendar, "MM/YYYY"),
+        Key::SecurityCode => ("Security code", IconName::Shield, "123"),
+        Key::Title => ("Title", IconName::Identity, "Dr"),
+        Key::FirstName => ("First name", IconName::Identity, "Alex"),
+        Key::MiddleName => ("Middle name", IconName::Identity, "Jordan"),
+        Key::LastName => ("Last name", IconName::Identity, "Martin"),
+        Key::Email => ("Email", IconName::Mail, "name@example.com"),
+        Key::Phone => ("Phone", IconName::Phone, "+1 555 0100"),
+        Key::IdentityUsername => ("Username", IconName::Identity, "alexmartin"),
+        Key::Address1 => ("Address", IconName::Pin, "1 Main Street"),
+        Key::Address2 => ("Address 2", IconName::Pin, "Apartment 4"),
+        Key::Address3 => ("Address 3", IconName::Pin, ""),
+        Key::City => ("City", IconName::Pin, "Springfield"),
+        Key::State => ("State", IconName::Pin, ""),
+        Key::PostalCode => ("Postal code", IconName::Pin, "12345"),
+        Key::Country => ("Country", IconName::Pin, ""),
+        Key::Ssn => ("SSN", IconName::Badge, ""),
+        Key::Passport => ("Passport", IconName::Badge, ""),
+        Key::License => ("License", IconName::Badge, ""),
     }
 }
 
