@@ -24,6 +24,12 @@ use crate::icons::{self, Icons};
 use crate::recent;
 use crate::reprompt::{Reprompt, Unlocked};
 
+/// How long a selection moved with the keys rests before its item is
+/// fetched.
+const SETTLE: Duration = Duration::from_millis(150);
+/// How often a verification code's countdown moves.
+const COUNTDOWN_STEP: Duration = Duration::from_secs(1);
+
 pub struct ItemDetail {
     account: AccountId,
     vault: WeakEntity<VaultView>,
@@ -35,6 +41,9 @@ pub struct ItemDetail {
     revealed: Vec<SharedString>,
     copied: Option<SharedString>,
     code: Option<VerificationCode>,
+    /// The code shown expired: the next one is fetched once the pane is
+    /// drawn again, so that a hidden window asks rbw for nothing.
+    code_expired: bool,
     /// Asks for the master password, for an item that wants it again.
     reprompt: Option<Entity<Reprompt>>,
     /// Whether the password field takes the keyboard when it appears: when
@@ -92,6 +101,7 @@ impl ItemDetail {
             revealed: vec![],
             copied: None,
             code: None,
+            code_expired: false,
             reprompt: None,
             focus_reprompt: false,
             _reprompt_events: None,
@@ -124,6 +134,22 @@ impl ItemDetail {
         self.reload(cx);
     }
 
+    /// Shows another item once the selection rests: one only passed over,
+    /// with the arrow keys or while a search is typed, isn't fetched.
+    pub fn show_when_settled(&mut self, item: Option<ItemSummary>, cx: &mut Context<Self>) {
+        if item.is_none() {
+            self.show(None, false, cx);
+            return;
+        }
+        self.selected = item;
+        self.focus_reprompt = false;
+        self.load_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SETTLE).await;
+            this.update(cx, |this, cx| this.reload(cx)).ok();
+        });
+        cx.notify();
+    }
+
     /// Gives the keyboard to the master password prompt, if one shows.
     pub fn focus_reprompt(&mut self, cx: &mut Context<Self>) {
         self.focus_reprompt = true;
@@ -146,6 +172,7 @@ impl ItemDetail {
         self.revealed.clear();
         self.copied = None;
         self.code = None;
+        self.code_expired = false;
         self.code_task = Task::ready(());
     }
 
@@ -171,20 +198,30 @@ impl ItemDetail {
                 let has_code = matches!(&result, Ok(item) if has_code(item));
                 this.loaded = Some(result.into());
                 if has_code {
-                    this.fetch_code(cx);
+                    this.fetch_code(id, cx);
                 }
                 cx.notify();
             },
         );
     }
 
-    fn fetch_code(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected_id() else { return };
-        let (account, id) = (self.account.clone(), id.clone());
+    /// The item shown, which may not be the one selected while that one
+    /// loads.
+    fn shown_id(&self) -> Option<&ItemId> {
+        self.loaded.as_ref()?.ready().map(|item| &item.id)
+    }
+
+    fn fetch_code(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        let (account, requested) = (self.account.clone(), id.clone());
+        self.code_expired = false;
         self.code_task = backend::request(
             cx,
-            move |backend| backend.verification_code(&account, &id),
-            |this, result, cx| {
+            move |backend| backend.verification_code(&account, &requested),
+            move |this, result, cx| {
+                // Another item took its place meanwhile.
+                if this.shown_id() != Some(&id) {
+                    return;
+                }
                 let code = match result {
                     Ok(code) => code,
                     // The item went unread long enough to lock again.
@@ -198,15 +235,20 @@ impl ItemDetail {
                 };
                 let expires_at = code.expires_at;
                 this.code = Some(code);
-                // Redraw each second for the countdown, then fetch the next code.
+                // Redraw each second for the countdown, which a hidden window
+                // doesn't draw, then ask for the next code when drawn.
                 this.code_task = cx.spawn(async move |this, cx| {
                     while SystemTime::now() < expires_at {
-                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        cx.background_executor().timer(COUNTDOWN_STEP).await;
                         if this.update(cx, |_, cx| cx.notify()).is_err() {
                             return;
                         }
                     }
-                    this.update(cx, |this, cx| this.fetch_code(cx)).ok();
+                    this.update(cx, |this, cx| {
+                        this.code_expired = true;
+                        cx.notify();
+                    })
+                    .ok();
                 });
                 cx.notify();
             },
@@ -709,6 +751,11 @@ fn cards(item: &Item) -> Vec<Vec<Field>> {
 
 impl Render for ItemDetail {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.code_expired
+            && let Some(id) = self.shown_id().cloned()
+        {
+            self.fetch_code(id, cx);
+        }
         let theme = cx.theme();
         let fill = theme.colors.window;
         let dim = theme.colors.text_secondary;

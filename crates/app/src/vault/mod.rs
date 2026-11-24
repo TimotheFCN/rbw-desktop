@@ -197,6 +197,9 @@ impl VaultView {
         accounts: Vec<Account>,
         cx: &mut Context<Self>,
     ) {
+        if account == self.account && accounts == self.accounts {
+            return;
+        }
         let synced = account.last_sync != self.last_sync;
         self.last_sync = account.last_sync;
         self.account = account;
@@ -229,6 +232,8 @@ impl VaultView {
         );
     }
 
+    /// Lists the items the sidebar and the search admit, keeping the
+    /// selection if it is among them, else selecting the first.
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value().to_lowercase();
         let query = query.trim();
@@ -298,8 +303,16 @@ impl VaultView {
         }
         self.selected = item.clone();
         let summary = item.and_then(|id| self.summary(&id).cloned());
-        self.detail
-            .update(cx, |detail, cx| detail.show(summary, by_pointer, cx));
+        // A selection that moves with the keys or the search is shown once
+        // it rests, so that items only passed over aren't fetched with
+        // their secrets.
+        self.detail.update(cx, |detail, cx| {
+            if by_pointer {
+                detail.show(summary, true, cx)
+            } else {
+                detail.show_when_settled(summary, cx)
+            }
+        });
         cx.notify();
     }
 
