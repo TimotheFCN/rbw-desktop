@@ -5,7 +5,7 @@
 //! asks for.
 
 use gpui::{
-    AnyElement, App, Bounds, CursorStyle, Decorations, Div, ElementId, HitboxBehavior,
+    AnyElement, App, Background, Bounds, CursorStyle, Decorations, Div, ElementId, HitboxBehavior,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, ResizeEdge, Size,
     Stateful, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
     WindowBackgroundAppearance, WindowBounds, WindowButton, WindowDecorations, WindowOptions,
@@ -52,9 +52,9 @@ pub fn window_options(
             appears_transparent: true,
             traffic_light_position: Some(TRAFFIC_LIGHTS),
         }),
-        // macOS: the glass sidebar floats on the window's own blurred
-        // material, which shows around it. Linux: the drawn frame's rounded
-        // corners and shadow need a see-through window.
+        // macOS: the window blurs what is behind it, for the sidebar's glass
+        // and for screens that tint it with `material`. Linux: the drawn
+        // frame's rounded corners and shadow need a see-through window.
         window_background: if cfg!(target_os = "macos") {
             WindowBackgroundAppearance::Blurred
         } else {
@@ -363,6 +363,21 @@ pub fn traffic_lights(cx: &App) -> Option<AnyElement> {
     )
 }
 
+/// `fill` as the background of a whole window that shows its material, such
+/// as the lock screen or the menu bar panel. On macOS the window blurs what
+/// is behind it and adds no colour of its own, so the fill goes over the blur
+/// thin enough to let it show and thick enough to keep text readable over a
+/// dark desktop in the light look, and the other way round. Elsewhere
+/// nothing is blurred and the fill stays as it is.
+pub fn material(fill: impl Into<Background>) -> Background {
+    let fill = fill.into();
+    if cfg!(target_os = "macos") {
+        fill.opacity(0.86)
+    } else {
+        fill
+    }
+}
+
 /// A screen of its own in the window, such as the lock screen: the window's
 /// material, a bar to drag the window by with its buttons, and `content` in
 /// the middle.
@@ -405,8 +420,7 @@ pub fn plain_screen(
         .flex()
         .items_center()
         .justify_center()
-        // On macOS the window's own blurred material shows.
-        .when(!cfg!(target_os = "macos"), |d| d.bg(fill))
+        .bg(material(fill))
         .rounded(corner)
         .child(bar)
         .child(content)

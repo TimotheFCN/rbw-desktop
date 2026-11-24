@@ -943,11 +943,8 @@ impl Render for QuickPanel {
             .flex()
             .flex_col()
             .p(px(12.))
-            // On macOS the window's blurred material shows.
-            .when(!cfg!(target_os = "macos"), |d| {
-                d.bg(cx.theme().colors.frost)
-                    .rounded(chrome::corner_radius(window, cx))
-            })
+            .bg(chrome::material(cx.theme().colors.frost))
+            .rounded(chrome::corner_radius(window, cx))
             .child(tabs)
             .child(
                 div()

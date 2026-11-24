@@ -18,8 +18,8 @@ use gpui::{
 };
 use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
-    ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, icon, motion, nav_row,
-    row_focus_ring,
+    ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, glass_surround, icon, motion,
+    nav_row, row_focus_ring,
 };
 
 use crate::CloseWindow;
@@ -246,6 +246,16 @@ impl SettingsWindow {
             .w(px(190.))
             .h_full()
             .p(metrics.sidebar_inset)
+            // As in the vault: the window's colour around the glass, which
+            // lies under this pane on macOS. Elsewhere the window's frame
+            // fills behind it.
+            .when(cfg!(target_os = "macos"), |d| {
+                d.relative().child(glass_surround(
+                    metrics.sidebar_inset,
+                    metrics.sidebar_radius,
+                    fill,
+                ))
+            })
             .child(
                 glass("settings-sidebar", Material::Sidebar)
                     .size_full()

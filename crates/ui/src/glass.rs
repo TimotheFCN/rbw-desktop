@@ -11,8 +11,8 @@
 //! contributors), `src/native/macos.rs`.
 
 use gpui::{
-    AnyElement, App, BoxShadow, Div, ElementId, IntoElement, ParentElement, RenderOnce,
-    StyleRefinement, Styled, Window, div, point, px,
+    AnyElement, App, BoxShadow, Div, ElementId, Hsla, IntoElement, ParentElement, PathBuilder,
+    Pixels, RenderOnce, StyleRefinement, Styled, Window, canvas, div, point, px,
 };
 
 use crate::theme::{ActiveTheme, Look};
@@ -98,6 +98,46 @@ impl RenderOnce for Glass {
         let _ = (self.id, window);
         base.bg(fill)
     }
+}
+
+/// `color` over the whole pane that holds a floating sidebar, except the
+/// sidebar itself: a rectangle with a rounded hole `inset` from its edges.
+///
+/// On macOS the sidebar's glass lies under everything GPUI draws, so the pane
+/// can't simply paint a background behind it, and the window's bare blur
+/// would show around the sidebar. The pane must be `relative`.
+pub fn glass_surround(inset: Pixels, radius: Pixels, color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let hole = bounds.inset(inset);
+            let corner = point(radius, radius);
+            let (left, top) = (hole.origin.x, hole.origin.y);
+            let (right, bottom) = (hole.bottom_right().x, hole.bottom_right().y);
+            // Filled even-odd, so the second outline is a hole in the first.
+            let mut path = PathBuilder::fill();
+            path.move_to(bounds.origin);
+            path.line_to(bounds.top_right());
+            path.line_to(bounds.bottom_right());
+            path.line_to(bounds.bottom_left());
+            path.close();
+            path.move_to(point(left + radius, top));
+            path.line_to(point(right - radius, top));
+            path.arc_to(corner, px(0.), false, true, point(right, top + radius));
+            path.line_to(point(right, bottom - radius));
+            path.arc_to(corner, px(0.), false, true, point(right - radius, bottom));
+            path.line_to(point(left + radius, bottom));
+            path.arc_to(corner, px(0.), false, true, point(left, bottom - radius));
+            path.line_to(point(left, top + radius));
+            path.arc_to(corner, px(0.), false, true, point(left + radius, top));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 #[cfg(target_os = "macos")]

@@ -502,8 +502,10 @@ The macOS-only code is small and type-checked from Linux by
 - `ui/src/chrome.rs`: transparent title bar, traffic lights at (21, 21) inside
   the sidebar, the `Blurred` window background.
 - Fonts: `.SystemUIFont` and Menlo.
-- `app/src/window.rs`: the lock and sign-in screens paint no background
-  there, so the window's blurred material shows through them.
+- The window's blur adds no colour of its own (GPUI strips the system
+  material's tint), so the lock and sign-in screens and the panel tint it
+  with `chrome::material`, and `glass_surround` paints the window's colour
+  around the sidebar, whose glass a background would cover.
 - The Settings window's title bar and traffic lights over its sidebar, the
   app menu's About and Settings… items, Touch ID's switch on the Accounts
   page, and the SSH page's advice to add `IdentityAgent` to `~/.ssh/config`.

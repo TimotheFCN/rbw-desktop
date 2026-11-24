@@ -8,7 +8,8 @@ use gpui::{
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
-    glass, menu_item, menu_separator, nav_row, popover, row_focus_ring, section_label,
+    glass, glass_surround, menu_item, menu_separator, nav_row, popover, row_focus_ring,
+    section_label,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -266,9 +267,20 @@ impl VaultView {
             .h_full()
             .p(metrics.sidebar_inset)
             .rounded_l(corner)
-            // On macOS the window's own material shows around the floating
-            // sidebar; elsewhere the window colour does.
-            .when(!cfg!(target_os = "macos"), |d| d.bg(window_fill))
+            // The window's colour around the floating sidebar. On macOS the
+            // sidebar's glass is under this pane, which a background would
+            // cover.
+            .map(|d| {
+                if cfg!(target_os = "macos") {
+                    d.relative().child(glass_surround(
+                        metrics.sidebar_inset,
+                        glass_radius,
+                        window_fill,
+                    ))
+                } else {
+                    d.bg(window_fill)
+                }
+            })
             .child(
                 glass("sidebar-glass", Material::Sidebar)
                     .size_full()
