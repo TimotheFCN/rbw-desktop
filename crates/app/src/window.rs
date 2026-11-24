@@ -131,8 +131,8 @@ pub struct MainWindow {
     /// The screen being replaced, drawn under the new one while it fades in.
     leaving: Option<AnyView>,
     alerts: Alerts,
-    /// The window's own focus, so that its shortcuts work before a screen
-    /// takes the keyboard.
+    /// The window's own focus, so that its shortcuts work while no screen
+    /// has the keyboard.
     focus: FocusHandle,
     /// Whether the next accounts to arrive replace even the sign-in that
     /// just finished.
@@ -715,7 +715,12 @@ impl Render for MainWindow {
         let alerts = self.alerts.render(window, cx);
         let content = div()
             .key_context(CONTEXT)
-            .track_focus(&self.focus)
+            // Screens hold the keyboard themselves; a click on an empty
+            // part of one mustn't take it from them.
+            .when(
+                matches!(self.screen, Screen::Loading | Screen::Unavailable(_)),
+                |d| d.track_focus(&self.focus),
+            )
             .on_action(cx.listener(Self::add_account_action))
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()

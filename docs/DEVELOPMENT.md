@@ -292,8 +292,11 @@ reduced-motion setting.
 - `motion::content_enter` sets the top margin of what it animates; put the
   margin on a parent.
 - A window's actions need something in it focused: without a focused
-  element, keys reach only global handlers. A window view tracks a focus
-  of its own (`MainWindow`, `SettingsWindow`, `QuickPanel`).
+  element, keys reach only global handlers. But a click anywhere inside an
+  element that tracks a focus handle gives it the keyboard, so a window view
+  tracks a focus of its own only while no screen or field holds the
+  keyboard (`MainWindow` while loading, `QuickPanel` while it has no search
+  field).
 - `Window::set_native_titlebar_visibility` exists only on macOS.
 
 ## macOS

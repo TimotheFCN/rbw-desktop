@@ -906,7 +906,11 @@ impl Render for QuickPanel {
         let content = div()
             .id("quick-panel")
             .key_context(CONTEXT)
-            .track_focus(&self.focus)
+            // While the search field is there it holds the keyboard; a
+            // click on an empty part of the panel mustn't take it.
+            .when(self.loaded.is_none() || self.tab == Tab::Generator, |d| {
+                d.track_focus(&self.focus)
+            })
             .on_action(cx.listener(Self::close_action))
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()
