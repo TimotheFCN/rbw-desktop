@@ -1,0 +1,16 @@
+Third-party software
+
+The Rust crates below are built into this program. Each licence is followed
+by the crates that use it.
+{{#each licenses}}
+
+================================================================================
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=rbw Desktop
+GenericName=Password Manager
+Comment=Find, copy and save the passwords of your Bitwarden or Vaultwarden vault
+Exec=rbw-desktop
+Icon=io.github.timothefcn.RbwDesktop
+Terminal=false
+Categories=Utility;Security;
+Keywords=password;vault;bitwarden;vaultwarden;rbw;login;2fa;totp;ssh;
+StartupNotify=true
+StartupWMClass=io.github.timothefcn.RbwDesktop
+SingleMainWindow=true

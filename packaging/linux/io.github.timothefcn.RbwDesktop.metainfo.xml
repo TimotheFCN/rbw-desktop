@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.timothefcn.RbwDesktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>rbw Desktop</name>
+  <summary>Passwords from your Bitwarden vault</summary>
+  <developer id="io.github.timothefcn">
+    <name>Timothe F</name>
+  </developer>
+  <description>
+    <p>
+      A fast, unofficial app for Bitwarden and Vaultwarden vaults. Find a
+      password, copy it and save a new one in a window that opens at once
+      and stays small in memory.
+    </p>
+    <p>
+      It is built on rbw-ng, a command line Bitwarden client, and comes with
+      its own copy: rbw-ng’s agent keeps your vault unlocked between uses and
+      can serve the SSH keys stored in it.
+    </p>
+    <ul>
+      <li>Several accounts side by side, on bitwarden.com, bitwarden.eu or your own server</li>
+      <li>Logins, cards, identities, notes and SSH keys to search, copy, create and edit</li>
+      <li>Verification codes that count down as you look</li>
+      <li>A generator for passwords, passphrases and PINs</li>
+      <li>The items used last and the generator in the system tray, where the desktop shows one</li>
+      <li>A copied password cleared after a while, and when the vault locks</li>
+      <li>rbw’s SSH agent set up and checked from Settings</li>
+    </ul>
+    <p>
+      The app isn’t made by Bitwarden, Inc. and isn’t affiliated with it.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.timothefcn.RbwDesktop.desktop</launchable>
+  <url type="homepage">https://github.com/TimotheFCN/rbw-desktop</url>
+  <url type="bugtracker">https://github.com/TimotheFCN/rbw-desktop/issues</url>
+  <url type="vcs-browser">https://github.com/TimotheFCN/rbw-desktop</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The vault</caption>
+      <image>https://raw.githubusercontent.com/TimotheFCN/rbw-desktop/main/docs/screenshots/linux-vault.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A login, its password shown, in the dark style</caption>
+      <image>https://raw.githubusercontent.com/TimotheFCN/rbw-desktop/main/docs/screenshots/linux-item-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The password generator</caption>
+      <image>https://raw.githubusercontent.com/TimotheFCN/rbw-desktop/main/docs/screenshots/linux-generator.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Unlocking</caption>
+      <image>https://raw.githubusercontent.com/TimotheFCN/rbw-desktop/main/docs/screenshots/linux-lock.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>rbw-desktop</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <branding>
+    <color type="primary" scheme_preference="light">#a8cfff</color>
+    <color type="primary" scheme_preference="dark">#0b3f8c</color>
+  </branding>
+  <releases>
+    <release version="0.1.0" date="2026-11-24">
+      <description>
+        <p>The first release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
