@@ -21,7 +21,7 @@ and offers to look again (`backend::connect`, `crate::start`).
 
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
-`unlocked`, `signed-out`, `touch-id`, `slow`, `offline`, `no-rbw`,
+`unlocked`, `signed-out`, `touch-id`, `touch-id-cancel`, `slow`, `offline`, `no-rbw`,
 `old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel`, `settings` and the
 `ssh-*` words, comma-separated, reach the other states (`demo.rs` lists
 them); `panel` opens the menu bar panel alone, as a click on the item
@@ -348,6 +348,18 @@ emits `Selected`). Each account's `AccountSettings` live in one
 `settings::store::Store`, written back at once; a failed save puts the
 setting back and says so. Preferences apply at once too: the
 `clipboard::ClearAfter` global and `Icons::set_enabled`.
+
+**Touch ID on the lock screen** (`touch_id::AutoUnlock`, tested without
+a display): the lock screen asks for Touch ID by itself once it shows in
+the active window, since Touch ID can't be read without the system's
+prompt. A lock screen that the person's own Lock brought up
+(`Request::Locked`), or whose prompt was canceled, waits for the window to
+go to the background and come back; the prompt taking the keyboard from
+the window doesn't count. With the field empty, Return asks for Touch ID;
+a password typed while the prompt is up is tried once it ends without
+unlocking. The menu bar panel keeps its button, since the prompt takes
+the keyboard from the panel, which closes it. `touch-id` and
+`touch-id-cancel` in `RBW_DESKTOP_DEMO` play a finger and a cancel.
 
 **Protected items.** When `item`, `verification_code` or `edit_item` fail
 with `Error::RepromptRequired`, show a `reprompt::Reprompt` (the lock

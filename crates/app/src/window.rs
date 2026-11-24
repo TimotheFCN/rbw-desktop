@@ -160,6 +160,10 @@ pub struct MainWindow {
     /// An item to show once its account's vault shows, such as one the
     /// menu bar panel opened while the account was locked.
     reveal: Option<(AccountId, ItemId)>,
+    /// The account the person just locked in this window, whose lock
+    /// screen doesn't ask for Touch ID until the window comes forward
+    /// again.
+    locked_here: Option<AccountId>,
     _screen_events: Option<Subscription>,
     _accounts_events: Option<Subscription>,
     leave_task: Task<()>,
@@ -184,6 +188,7 @@ impl MainWindow {
             show_next: false,
             retrying: false,
             reveal: None,
+            locked_here: None,
             _screen_events: None,
             _accounts_events: None,
             leave_task: Task::ready(()),
@@ -303,7 +308,9 @@ impl MainWindow {
         }
         match &self.screen {
             Screen::Lock(lock) => {
-                lock.update(cx, |lock, cx| lock.set_account(account, accounts, cx));
+                lock.update(cx, |lock, cx| {
+                    lock.set_account(account, accounts, window, cx)
+                });
             }
             Screen::Vault(vault) => {
                 vault.update(cx, |vault, cx| vault.set_account(account, accounts, cx));
@@ -338,7 +345,11 @@ impl MainWindow {
                 Screen::SignIn(view)
             }
             LockState::Locked => {
-                let view = cx.new(|cx| LockScreen::new(account, accounts, window, cx));
+                let locked_here = self
+                    .locked_here
+                    .take_if(|locked| *locked == account.id)
+                    .is_some();
+                let view = cx.new(|cx| LockScreen::new(account, accounts, locked_here, window, cx));
                 self.listen(&view, window, cx);
                 Screen::Lock(view)
             }
@@ -375,6 +386,7 @@ impl MainWindow {
             Request::Show(id) => self.show_account(id, window, cx),
             Request::AddAccount => self.add_account(window, cx),
             Request::CancelAdd => self.show_current(window, cx),
+            Request::Locked(id) => self.locked_here = Some(id),
             Request::SignedIn(id) => {
                 self.choose(Some(id), cx);
                 self.show_next = true;

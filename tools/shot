@@ -34,7 +34,7 @@ locking and signing in:
   lock           the lock screen
   lock-wrong     a wrong password entered
   lock-busy      unlocking, with a slow backend
-  lock-touch-id  Touch ID ready to unlock
+  lock-touch-id  Touch ID ready to unlock, its prompt canceled
   lock-accounts  the account menu from the lock screen
   unlock         the vault, unlocked with the password
   first-run      no accounts yet: the server and email
@@ -146,7 +146,8 @@ ssh-fails) state_demo=unlocked,ssh-off,ssh-fails ;;
 ssh-elsewhere) state_demo=unlocked,ssh-elsewhere ;;
 ssh-unsupported) state_demo=unlocked,ssh-unsupported ;;
 lock-busy) state_demo=slow ;;
-lock-touch-id | settings-touch-id) state_demo=touch-id ;;
+lock-touch-id) state_demo=touch-id-cancel ;;
+settings-touch-id) state_demo=touch-id ;;
 panel | panel-search | panel-copied | panel-generator | panel-passphrase) state_demo=unlocked,panel ;;
 panel-locked) state_demo=panel ;;
 panel-touch-id) state_demo=touch-id,panel ;;

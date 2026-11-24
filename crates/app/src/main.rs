@@ -15,6 +15,7 @@ mod recent;
 mod reprompt;
 mod settings;
 mod sign_in;
+mod touch_id;
 mod tray;
 mod vault;
 mod window;

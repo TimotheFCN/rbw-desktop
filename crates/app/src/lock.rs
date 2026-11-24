@@ -1,5 +1,7 @@
 //! The lock screen: who the account is, its master password, Touch ID where
-//! it can unlock, and the other accounts.
+//! it can unlock, and the other accounts. Where Touch ID can unlock, the
+//! screen asks for it by itself when it shows in the window in use
+//! ([`AutoUnlock`]), and its button is the main one.
 
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
@@ -14,6 +16,14 @@ use rbw_desktop_ui::{
 
 use crate::accounts::{self, AccountMenu, Request};
 use crate::backend;
+use crate::touch_id::AutoUnlock;
+
+/// An unlock under way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unlocking {
+    Password,
+    TouchId,
+}
 
 pub struct LockScreen {
     account: Account,
@@ -22,7 +32,11 @@ pub struct LockScreen {
     problem: Option<&'static str>,
     /// Counts wrong passwords, each of which shakes the field.
     wrong: usize,
-    busy: bool,
+    busy: Option<Unlocking>,
+    /// A password submitted while Touch ID's prompt was up, tried once
+    /// that ends without unlocking.
+    password_waits: bool,
+    auto: AutoUnlock,
     /// Whether the password unlocked the account, and the screen waits for
     /// the vault to replace it.
     unlocked: bool,
@@ -34,9 +48,12 @@ pub struct LockScreen {
 impl EventEmitter<Request> for LockScreen {}
 
 impl LockScreen {
+    /// `locked_here` says the person locked the account in this window,
+    /// after which Touch ID waits for the window to come forward again.
     pub fn new(
         account: Account,
         accounts: Vec<Account>,
+        locked_here: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -49,7 +66,7 @@ impl LockScreen {
             &password,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { .. } => this.unlock(window, cx),
+                InputEvent::PressEnter { .. } => this.submit(window, cx),
                 InputEvent::Change => {
                     if this.problem.take().is_some() {
                         cx.notify();
@@ -60,13 +77,28 @@ impl LockScreen {
         )
         .detach();
         password.update(cx, |password, cx| password.focus(window, cx));
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.auto.activated();
+                this.start_touch_id_if_wanted(window, cx);
+            } else {
+                this.auto.deactivated();
+            }
+        })
+        .detach();
+        // Once the screen is in the window.
+        cx.defer_in(window, |this, window, cx| {
+            this.start_touch_id_if_wanted(window, cx)
+        });
         Self {
             account,
             accounts,
             password,
             problem: None,
             wrong: 0,
-            busy: false,
+            busy: None,
+            password_waits: false,
+            auto: AutoUnlock::new(locked_here),
             unlocked: false,
             menu_open: false,
             menu_focus: cx.focus_handle(),
@@ -82,13 +114,14 @@ impl LockScreen {
         &mut self,
         account: Account,
         accounts: Vec<Account>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // Unlocked, then locked again before the vault showed, as by the
         // lock timeout or an agent that restarted: try again.
         if self.unlocked && account.state == LockState::Locked {
             self.unlocked = false;
-            self.busy = false;
+            self.busy = None;
             cx.notify();
         }
         if account != self.account || accounts != self.accounts {
@@ -96,34 +129,80 @@ impl LockScreen {
             self.accounts = accounts;
             cx.notify();
         }
+        // Touch ID may have become ready.
+        self.start_touch_id_if_wanted(window, cx);
+    }
+
+    /// Return in the field: the password typed, or Touch ID when there is
+    /// none and it can unlock.
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.password.read(cx).value().is_empty() && self.account.touch_id_ready {
+            self.unlock_with_touch_id(window, cx);
+        } else {
+            self.unlock(window, cx);
+        }
     }
 
     fn unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let password = Secret::new(self.password.read(cx).value().to_string());
-        if self.busy || password.is_empty() {
+        if password.is_empty() {
             return;
         }
+        match self.busy {
+            Some(Unlocking::Password) => return,
+            // Kept, and tried if Touch ID doesn't unlock.
+            Some(Unlocking::TouchId) => {
+                self.password_waits = true;
+                cx.notify();
+                return;
+            }
+            None => {}
+        }
         let id = self.account.id.clone();
-        self.run(move |backend| backend.unlock(&id, &password), window, cx);
+        self.run(
+            Unlocking::Password,
+            move |backend| backend.unlock(&id, &password),
+            window,
+            cx,
+        );
     }
 
     fn unlock_with_touch_id(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy.is_some() {
             return;
         }
         let id = self.account.id.clone();
-        self.run(move |backend| backend.unlock_with_touch_id(&id), window, cx);
+        self.run(
+            Unlocking::TouchId,
+            move |backend| backend.unlock_with_touch_id(&id),
+            window,
+            cx,
+        );
+    }
+
+    /// Asks for Touch ID if the screen shows in the window in use and
+    /// nothing holds it back.
+    fn start_touch_id_if_wanted(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.unlocked
+            && self
+                .auto
+                .should_start(self.account.touch_id_ready, window.is_window_active())
+        {
+            self.unlock_with_touch_id(window, cx);
+        }
     }
 
     fn run(
         &mut self,
+        unlocking: Unlocking,
         call: impl FnOnce(&dyn rbw_desktop_core::Backend) -> rbw_desktop_core::Result<()>
         + Send
         + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.busy = true;
+        self.busy = Some(unlocking);
+        self.auto.started(unlocking == Unlocking::TouchId);
         self.problem = None;
         cx.notify();
         self.task = backend::request_in(window, cx, call, |this, result, window, cx| {
@@ -131,13 +210,19 @@ impl LockScreen {
                 // The spinner keeps going until the vault replaces this screen.
                 Ok(()) => {
                     this.unlocked = true;
+                    this.password_waits = false;
                     this.password
                         .update(cx, |password, cx| password.set_value("", window, cx));
                     crate::accounts::refresh(cx);
                 }
                 Err(error) => {
-                    this.busy = false;
-                    this.fail(&error, window, cx);
+                    this.busy = None;
+                    this.auto.ended();
+                    if std::mem::take(&mut this.password_waits) {
+                        this.unlock(window, cx);
+                    } else {
+                        this.fail(&error, window, cx);
+                    }
                 }
             }
             cx.notify();
@@ -220,21 +305,26 @@ impl Render for LockScreen {
             ))
             .into_any_element();
 
+        let password_busy = self.busy == Some(Unlocking::Password) || self.password_waits;
         let field = text_field("password", &self.password, "Master password").trailing(
             button("unlock")
                 .icon(IconName::ArrowRight)
                 .style(ButtonStyle::Primary)
                 .size(px(28.))
-                .busy(self.busy)
+                .busy(password_busy)
                 .accessibility_label("Unlock")
                 .on_click(cx.listener(|this, _, window, cx| this.unlock(window, cx))),
         );
 
+        // The main way in where it can unlock: filled, under the field,
+        // which stays there for the password.
         let touch_id = self.account.touch_id_ready.then(|| {
             button("touch-id")
                 .label("Unlock with Touch ID")
                 .icon(IconName::TouchId)
-                .style(ButtonStyle::Link)
+                .style(ButtonStyle::Primary)
+                .wide()
+                .busy(self.busy == Some(Unlocking::TouchId))
                 .on_click(cx.listener(|this, _, window, cx| this.unlock_with_touch_id(window, cx)))
         });
 

@@ -58,6 +58,11 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 ### Locking
 
 * Unlock with the master password, or Touch ID on a Mac that has it.
+  The lock screen asks for Touch ID by itself when it shows in the window
+  in use, so a finger on the sensor is enough; not over another app, not
+  right after Lock was chosen in the window, and not again after a cancel,
+  until the window comes back to the front. Its button stays, filled, and
+  Return with the password field empty asks for it too.
 * Lock from the sidebar, the menu bar item, the app menu, and automatically
   after the timeout the account is configured with.
 

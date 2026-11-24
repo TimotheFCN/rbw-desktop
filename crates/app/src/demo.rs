@@ -5,7 +5,9 @@
 //! * `first-run`: no accounts, as on a computer where rbw was never set up;
 //! * `unlocked`: the first demo account unlocked, to start in the vault;
 //! * `signed-out`: a third account that is signed out;
-//! * `touch-id`: Touch ID ready to unlock the first account;
+//! * `touch-id`: Touch ID ready to unlock the first account, a finger
+//!   taking a second and a half on the sensor; `touch-id-cancel`: the
+//!   same, but each time the person cancels the prompt instead;
 //! * `slow`: every call takes two seconds, to see what waits;
 //! * `offline`: calls that need the server fail;
 //! * `no-rbw`, `old-rbw`: rbw missing, or too old; `outdated-rbw`: the app
@@ -28,6 +30,9 @@ use rbw_desktop_core::{
     Backend as _, Error, FakeBackend, Operation, OutdatedRbw, Preferences, REQUIRED_RBW, Result,
     Server, SshUses,
 };
+
+/// How long the demo's Touch ID waits, as for a finger on the sensor.
+const TOUCH_ID_WAIT: Duration = Duration::from_millis(1500);
 
 /// The words of `RBW_DESKTOP_DEMO`, or `None` to run on rbw.
 pub fn words() -> Option<String> {
@@ -60,8 +65,13 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
         .ok()
         .and_then(|accounts| accounts.into_iter().next())
         .map(|account| account.id);
-    if wants("touch-id") {
+    if wants("touch-id") || wants("touch-id-cancel") {
         fake.set_touch_id(true);
+        // As long as the system's prompt waits for a finger.
+        fake.set_latency_of(Operation::UnlockWithTouchId, TOUCH_ID_WAIT);
+        if wants("touch-id-cancel") {
+            fake.fail(Operation::UnlockWithTouchId, Error::TouchIdCanceled);
+        }
         // Touch ID unlocks an account once its password has unlocked it.
         if let Some(id) = &first {
             let unlocked = fake.unlock(id, &FakeBackend::PASSWORD.into());

@@ -682,11 +682,15 @@ impl VaultView {
 
     fn lock(&mut self, _: &Lock, _: &mut Window, cx: &mut Context<Self>) {
         let account = self.account_id();
+        let locked = account.clone();
         backend::request(
             cx,
             move |backend| backend.lock(&account),
             |this, result, cx| match result {
-                Ok(()) => crate::accounts::refresh(cx),
+                Ok(()) => {
+                    cx.emit(Request::Locked(locked));
+                    crate::accounts::refresh(cx);
+                }
                 Err(error) => this.show_error(&error, cx),
             },
         )

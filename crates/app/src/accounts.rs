@@ -234,6 +234,8 @@ pub enum Request {
     /// Signing in to this account succeeded: show it once its new state is
     /// known.
     SignedIn(AccountId),
+    /// The person locked this account in the window.
+    Locked(AccountId),
 }
 
 pub fn name(account: &Account) -> String {
