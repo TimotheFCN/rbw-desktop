@@ -567,25 +567,31 @@ impl Render for VaultView {
         let list = self.render_list(window, cx);
         let sheet = self.sheet.render(px(360.), window, cx);
         let toast = self.toast.render(window, cx);
+        // The sheet is outside the vault's key context, so that none of the
+        // vault's shortcuts act behind it.
         div()
-            .key_context(CONTEXT)
-            .on_action(cx.listener(Self::new_item))
-            .on_action(cx.listener(Self::edit_item))
-            .on_action(cx.listener(Self::delete_selected))
-            .on_action(cx.listener(Self::find))
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::select_previous))
-            .on_action(cx.listener(Self::sync))
-            .on_action(cx.listener(Self::lock))
-            .on_action(cx.listener(Self::open_context_menu_from_keyboard))
-            .on_action(cx.listener(Self::show_generator))
             .relative()
             .size_full()
-            .flex()
-            .child(sidebar)
-            .child(list)
-            .child(self.detail.clone())
-            .children(self.render_context_menu(cx))
+            .child(
+                div()
+                    .key_context(CONTEXT)
+                    .on_action(cx.listener(Self::new_item))
+                    .on_action(cx.listener(Self::edit_item))
+                    .on_action(cx.listener(Self::delete_selected))
+                    .on_action(cx.listener(Self::find))
+                    .on_action(cx.listener(Self::select_next))
+                    .on_action(cx.listener(Self::select_previous))
+                    .on_action(cx.listener(Self::sync))
+                    .on_action(cx.listener(Self::lock))
+                    .on_action(cx.listener(Self::open_context_menu_from_keyboard))
+                    .on_action(cx.listener(Self::show_generator))
+                    .size_full()
+                    .flex()
+                    .child(sidebar)
+                    .child(list)
+                    .child(self.detail.clone())
+                    .children(self.render_context_menu(cx)),
+            )
             .children(sheet)
             .children(toast)
     }
