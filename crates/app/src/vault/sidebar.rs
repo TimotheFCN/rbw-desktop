@@ -8,7 +8,8 @@ use gpui::{
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Opening, avatar, button, chrome, menu_item,
-    menu_separator, nav_row, popover, row_focus_ring, scroll_area, section_label, sidebar,
+    menu_separator, nav_row, popover, row_focus_ring, scroll_area, section_label, selection_track,
+    sidebar,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -111,9 +112,11 @@ impl VaultView {
             })
             .collect();
 
+        let track = selection_track("sidebar-selection", window, cx);
         let row = |id: &'static str, icon, label: &str, filter: Filter, cx: &mut Context<Self>| {
             let selected = self.filter == filter;
             nav_row(id, icon, label.to_string(), selected)
+                .track(&track)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_filter(filter.clone(), cx)))
         };
 
@@ -187,6 +190,7 @@ impl VaultView {
                     folder.name,
                     selected,
                 )
+                .track(&track)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_filter(filter.clone(), cx)))
                 .into_any_element(),
             );

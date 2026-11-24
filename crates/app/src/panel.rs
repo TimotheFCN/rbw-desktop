@@ -20,8 +20,9 @@ use rbw_desktop_core::{
     LockState, Secret,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Material, ToastSlot, backdrop, button, chrome, icon,
-    list_row, motion, scroll_area, scrollbar, search_field, section_label, segmented_control,
+    ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, Material, ToastSlot,
+    backdrop, button, chrome, icon, list_row, motion, scroll_area, scrollbar, search_field,
+    section_label, segmented_control,
 };
 
 use crate::CloseWindow;
@@ -198,6 +199,10 @@ pub struct QuickPanel {
     /// Indices into the items of the rows shown, in order.
     shown: Vec<usize>,
     selected: usize,
+    /// Where the selection's highlight is drawn, in rows: it slides with
+    /// the arrow keys, and follows the pointer at once, as a menu's does.
+    highlight_at: f32,
+    highlight_jumps: bool,
     copied: Option<ItemId>,
     copied_timer: Task<()>,
     unlocking: bool,
@@ -261,6 +266,8 @@ impl QuickPanel {
             recent: vec![],
             shown: vec![],
             selected: 0,
+            highlight_at: 0.,
+            highlight_jumps: false,
             copied: None,
             copied_timer: Task::ready(()),
             unlocking: false,
@@ -369,6 +376,7 @@ impl QuickPanel {
                 .collect()
         };
         self.selected = 0;
+        self.highlight_jumps = true;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
@@ -380,19 +388,21 @@ impl QuickPanel {
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected + 1 < self.shown.len() {
-            self.select(self.selected + 1, cx);
+            self.select(self.selected + 1, false, cx);
         }
     }
 
     fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(previous) = self.selected.checked_sub(1) {
-            self.select(previous, cx);
+            self.select(previous, false, cx);
         }
     }
 
-    fn select(&mut self, position: usize, cx: &mut Context<Self>) {
+    /// Selects a row, with the arrow keys or under the pointer.
+    fn select(&mut self, position: usize, by_pointer: bool, cx: &mut Context<Self>) {
         if self.selected != position {
             self.selected = position;
+            self.highlight_jumps |= by_pointer;
             self.scroll
                 .scroll_to_item(position, ScrollStrategy::Nearest);
             cx.notify();
@@ -583,12 +593,12 @@ impl QuickPanel {
         cx.notify();
     }
 
-    fn render_passwords(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_passwords(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let account = self.account.clone();
         let known = !matches!(Accounts::global(cx).read(cx).load(), Load::Loading);
         let body = match account.as_ref().map(|account| account.state) {
             _ if !known => div().into_any_element(),
-            Some(LockState::Unlocked) => self.render_items(cx),
+            Some(LockState::Unlocked) => self.render_items(window, cx),
             Some(LockState::Locked) => self.render_locked(cx),
             Some(LockState::SignedOut) | None => self.render_signed_out(cx),
         };
@@ -607,7 +617,10 @@ impl QuickPanel {
             .into_any_element()
     }
 
-    fn render_items(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_items(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let jump = std::mem::take(&mut self.highlight_jumps);
+        self.highlight_at =
+            motion::slide("panel-selection", self.selected as f32, jump, window, cx);
         let theme = cx.theme();
         let dim = theme.colors.text_secondary;
         let searching = !self.search.read(cx).value().trim().is_empty();
@@ -697,7 +710,13 @@ impl QuickPanel {
         let selected = position == self.selected;
         let icon = icons::icon(&account, &item, cx);
         let copied = self.copied.as_ref() == Some(&item.id);
-        let actions = selected.then(|| self.render_row_actions(&item, cx));
+        // They fade in with the selection, rather than pop.
+        let actions = selected.then(|| {
+            motion::appear(
+                SharedString::from(format!("panel-actions-{}", item.id.0)),
+                div().flex().child(self.render_row_actions(&item, cx)),
+            )
+        });
         let clicked = item.clone();
         let main = Part::main(item.kind);
         Some(
@@ -705,7 +724,7 @@ impl QuickPanel {
                 .id(("panel-row", position))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {
-                        this.select(position, cx);
+                        this.select(position, true, cx);
                     }
                 }))
                 .child(
@@ -720,6 +739,10 @@ impl QuickPanel {
                     // move through the rows.
                     .in_focusable_list(false)
                     .icon(icon)
+                    .highlight(Highlight::at(
+                        self.highlight_at - position as f32,
+                        COMPACT_ROW_HEIGHT,
+                    ))
                     .accessibility_label(format!("{}, {}", item.name, main.label()))
                     .copied(copied)
                     .trailing(div().flex().items_center().children(actions))
@@ -1010,7 +1033,7 @@ impl Focusable for QuickPanel {
 impl Render for QuickPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = match self.tab {
-            Tab::Passwords => self.render_passwords(cx),
+            Tab::Passwords => self.render_passwords(window, cx),
             // Room at the sides for the buttons' shadows, which the
             // scrolling would clip.
             Tab::Generator => scroll_area("panel-generator")
@@ -1068,9 +1091,17 @@ impl Render for QuickPanel {
                     .mt(px(10.))
                     .flex()
                     .flex_col()
-                    .child(motion::content_enter(
+                    // From the side of its tab.
+                    .child(motion::enter(
                         ("panel-tab-content", self.tab as usize),
                         div().flex_1().min_h_0().flex().flex_col().child(tab),
+                        point(
+                            match self.tab {
+                                Tab::Passwords => px(-12.),
+                                Tab::Generator => px(12.),
+                            },
+                            px(0.),
+                        ),
                     )),
             )
             .children(footer)

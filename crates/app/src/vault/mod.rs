@@ -6,6 +6,7 @@ mod editor;
 mod list;
 mod sidebar;
 
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use gpui::base::input::{InputEvent, InputState};
@@ -199,12 +200,18 @@ pub struct VaultView {
     main_menu_open: bool,
     main_menu_focus: FocusHandle,
     items: Load<Vec<ItemSummary>>,
+    /// The items that weren't in the list before it last loaded, such as
+    /// one just created, whose rows fade in.
+    arrived: HashSet<ItemId>,
     folders: Vec<Folder>,
     /// The items used last, as they were when the vault loaded, for
     /// sorting by them; using an item doesn't move it while it shows.
     recent: Vec<ItemId>,
     filter: Filter,
     only: Only,
+    /// What the line under the search field says the list shows only,
+    /// kept while it closes.
+    only_shown: Only,
     /// The order the list was last sorted in, to sort it again when the
     /// preferences, read after it loaded, say otherwise.
     sorted_by: SortOrder,
@@ -217,6 +224,10 @@ pub struct VaultView {
     /// The rows whose icons were last read ahead.
     prefetched: std::ops::Range<usize>,
     selected: Option<ItemId>,
+    /// Where the selection's highlight is drawn, in rows, as it slides.
+    highlight_at: Option<f32>,
+    /// The list changed under the selection, which then doesn't slide.
+    highlight_jumps: bool,
     detail: Entity<ItemDetail>,
     sheet: SheetSlot,
     toast: ToastSlot,
@@ -277,10 +288,12 @@ impl VaultView {
             main_menu_open: false,
             main_menu_focus: cx.focus_handle(),
             items: Load::Loading,
+            arrived: HashSet::new(),
             folders: vec![],
             recent: vec![],
             filter: Filter::All,
             only: Only::default(),
+            only_shown: Only::default(),
             sorted_by: SortOrder::Name,
             sort_menu_open: false,
             sort_menu_focus: cx.focus_handle(),
@@ -288,6 +301,8 @@ impl VaultView {
             visible: vec![],
             prefetched: 0..0,
             selected: None,
+            highlight_at: None,
+            highlight_jumps: false,
             detail,
             sheet: SheetSlot::default(),
             toast: ToastSlot::default(),
@@ -384,6 +399,18 @@ impl VaultView {
                             Icons::global(cx)
                                 .update(cx, |known, cx| known.insert_cached(icons, cx));
                         }
+                        this.arrived = match &this.items {
+                            Load::Ready(before) => {
+                                let before: HashSet<&ItemId> =
+                                    before.iter().map(|item| &item.id).collect();
+                                items
+                                    .iter()
+                                    .filter(|item| !before.contains(&item.id))
+                                    .map(|item| item.id.clone())
+                                    .collect()
+                            }
+                            Load::Loading | Load::Failed(_) => HashSet::new(),
+                        };
                         this.items = Load::Ready(items);
                         this.folders = folders;
                         this.recent = recent;
@@ -408,6 +435,7 @@ impl VaultView {
             Load::Loading | Load::Failed(_) => vec![],
         };
         self.prefetched = 0..0;
+        self.highlight_jumps = true;
         match self.selected_index() {
             Some(index) => {
                 self.list_scroll

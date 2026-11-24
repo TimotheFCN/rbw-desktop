@@ -10,8 +10,8 @@ use gpui::{
 };
 use rbw_desktop_core::SortOrder;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, menu_item,
-    menu_separator, motion, popover, scrollbar, search_field, section_label,
+    ActiveTheme as _, ButtonStyle, Highlight, IconName, Look, Opening, ROW_HEIGHT, button, chrome,
+    list_row, menu_item, menu_separator, motion, popover, scrollbar, search_field, section_label,
 };
 
 use super::{ListDivider, MAX_LIST_SHARE, NewItem, Only, ShowGenerator, VaultView};
@@ -73,6 +73,10 @@ impl VaultView {
             cx,
         );
 
+        let jump = std::mem::take(&mut self.highlight_jumps);
+        self.highlight_at = self
+            .selected_index()
+            .map(|index| motion::slide("list-selection", index as f32, jump, window, cx));
         let body = match &self.items {
             Load::Failed(error) => message(backend::describe(error), dim),
             Load::Ready(items) if items.is_empty() => message("No Items", dim),
@@ -89,10 +93,14 @@ impl VaultView {
                             let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
                             let item = items[this.visible[position]].clone();
                             let selected = this.selected.as_ref() == Some(&item.id);
+                            let highlight = this.highlight_at.and_then(|at| {
+                                Highlight::at(at - position as f32, ROW_HEIGHT + ROW_GAP)
+                            });
                             let copied = this.copied.as_ref() == Some(&item.id);
                             let icon = icons::icon(&account, &item, cx);
                             let (id, menu_id) = (item.id.clone(), item.id.clone());
-                            div()
+                            let arrived = this.arrived.contains(&item.id);
+                            let row = div()
                                 .px(px(7.))
                                 .pb(ROW_GAP)
                                 .on_mouse_down(
@@ -114,6 +122,7 @@ impl VaultView {
                                         selected,
                                     )
                                     .icon(icon)
+                                    .highlight(highlight)
                                     .copied(copied)
                                     .in_focusable_list(list_focused)
                                     .on_click(cx.listener(
@@ -122,7 +131,16 @@ impl VaultView {
                                             this.select_by(Some(id.clone()), true, cx);
                                         },
                                     )),
+                                );
+                            if arrived {
+                                motion::appear(
+                                    ElementId::Name(format!("arrived-{}", item.id.0).into()),
+                                    row,
                                 )
+                                .into_any_element()
+                            } else {
+                                row.into_any_element()
+                            }
                         })
                         .collect()
                 }),
@@ -132,10 +150,17 @@ impl VaultView {
             .into_any_element(),
         };
         let bar = scrollbar("items-bar", &self.list_scroll, cx);
-        // Another choice in the sidebar shows other items: they fade up in
-        // place. Typing a search changes them without it.
-        let body = motion::refresh(
-            ElementId::Name(format!("items-{:?}", self.filter).into()),
+        // Another choice in the sidebar or the menu shows other items, or
+        // the same in another order: they fade up in place. Typing a search
+        // changes them without it.
+        let body = motion::replace(
+            ElementId::Name(
+                format!(
+                    "items-{:?}-{:?}-{:?}",
+                    self.filter, self.only, self.sorted_by
+                )
+                .into(),
+            ),
             div()
                 .flex_1()
                 .min_h_0()
@@ -146,13 +171,17 @@ impl VaultView {
         );
 
         // The list takes its share of the room, between its minimum and its
-        // maximum; a small window shrinks it before the item.
+        // maximum; a small window shrinks it before the item. Put back, it
+        // settles there.
+        let held = self.dragged_share.is_some();
+        let share = motion::settle("list-share", self.list_share(cx), held, window, cx);
+        let only = self.render_only(window, cx);
         div()
             .id("list")
             .key_context("VaultList")
             .track_focus(&self.list_focus)
             .relative()
-            .w(relative(self.list_share(cx)))
+            .w(relative(share))
             .min_w(MIN_WIDTH)
             .max_w(relative(MAX_LIST_SHARE))
             .h_full()
@@ -162,7 +191,7 @@ impl VaultView {
             .border_r(separator_width)
             .border_color(separator)
             .child(toolbar)
-            .children(self.render_only(cx))
+            .children(only)
             .child(body)
             .child(self.render_divider(cx))
             .into_any_element()
@@ -317,12 +346,13 @@ impl VaultView {
     }
 
     /// What the list shows only, under its toolbar while it narrows it,
-    /// each with a button that shows everything again.
-    fn render_only(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let only = self.only;
-        if !only.any() {
-            return None;
+    /// each with a button that shows everything again. The line opens and
+    /// closes, moving the list down and up with it.
+    fn render_only(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.only.any() {
+            self.only_shown = self.only;
         }
+        let only = self.only_shown;
         let colors = &cx.theme().colors;
         let (fill, dim) = (colors.fill, colors.text_secondary);
         let chip = |id: &'static str,
@@ -356,32 +386,30 @@ impl VaultView {
                     ),
                 )
         };
-        Some(
-            div()
-                .flex_none()
-                .flex()
-                .flex_wrap()
-                .gap(px(6.))
-                .px(px(12.))
-                .pb(px(8.))
-                .when(only.code, |d| {
-                    d.child(chip(
-                        "clear-only-code",
-                        "With Verification Code",
-                        |only| only.code = false,
-                        cx,
-                    ))
-                })
-                .when(only.shared, |d| {
-                    d.child(chip(
-                        "clear-only-shared",
-                        "Shared",
-                        |only| only.shared = false,
-                        cx,
-                    ))
-                })
-                .into_any_element(),
-        )
+        let chips = div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .px(px(12.))
+            .pb(px(8.))
+            .when(only.code, |d| {
+                d.child(chip(
+                    "clear-only-code",
+                    "With Verification Code",
+                    |only| only.code = false,
+                    cx,
+                ))
+            })
+            .when(only.shared, |d| {
+                d.child(chip(
+                    "clear-only-shared",
+                    "Shared",
+                    |only| only.shared = false,
+                    cx,
+                ))
+            });
+        motion::reveal("only", self.only.any(), chips, window, cx)
     }
 
     /// The generator's button, with its popover hanging from it.

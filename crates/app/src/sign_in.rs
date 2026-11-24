@@ -567,7 +567,7 @@ impl SignIn {
                 ];
                 if self.server == SELF_HOSTED {
                     fields.push(
-                        motion::screen_enter(
+                        motion::enter(
                             "server-url",
                             div().child(text_field(
                                 "server-url",
@@ -748,8 +748,8 @@ impl Render for SignIn {
                         .on_click(cx.listener(|this, _, window, cx| this.next(window, cx))),
                 ),
             );
-        let slide = if self.went_back { px(-24.) } else { px(24.) };
-        let step = motion::screen_enter(
+        let slide = if self.went_back { px(-14.) } else { px(14.) };
+        let step = motion::enter(
             ("sign-in-step", self.generation),
             div()
                 .w_full()

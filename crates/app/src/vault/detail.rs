@@ -512,6 +512,16 @@ impl ItemDetail {
                 .child(field.value.expose().to_string())
                 .into_any_element(),
         };
+        // Revealed or hidden again, it fades up in place.
+        let value = if hidden {
+            motion::replace(
+                ElementId::Name(format!("{}-{revealed}", field.key).into()),
+                div().min_w_0().child(value),
+            )
+            .into_any_element()
+        } else {
+            value
+        };
         let key = field.key.clone();
         let copied = self.copied.as_ref() == Some(&field.key);
         let value_for_copy = field.value.clone();
@@ -585,7 +595,7 @@ impl ItemDetail {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let dim = cx.theme().colors.text_secondary;
-        motion::content_enter(
+        motion::replace(
             ElementId::Name(format!("reprompt-{}", item.id.0).into()),
             div()
                 .flex_1()
@@ -684,7 +694,7 @@ impl ItemDetail {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let shown = motion::refresh(("code", period as usize), div().child(spaced.clone()))
+        let shown = motion::replace(("code", period as usize), div().child(spaced.clone()))
             .into_any_element();
         Some(
             row(shown, fraction, cx)
@@ -925,8 +935,14 @@ fn cards(item: &Item) -> Vec<Vec<Field>> {
 
 impl ItemDetail {
     /// The item's fields in their cards, the verification code in the
-    /// first.
-    fn render_cards(&self, mut cards: Vec<Vec<Field>>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// first. The cards from `arriving` on came with the item, after what
+    /// the list knew of it: they fade in.
+    fn render_cards(
+        &self,
+        mut cards: Vec<Vec<Field>>,
+        arriving: usize,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let code = self.render_code(cx);
         let mut groups = vec![];
         let mut first: Vec<AnyElement> = if cards.is_empty() {
@@ -945,9 +961,20 @@ impl ItemDetail {
                 .map(|field| self.render_field(field, cx))
                 .collect()
         })) {
-            if !rows.is_empty() {
-                groups.push(card().rows(rows).into_any_element());
+            if rows.is_empty() {
+                continue;
             }
+            let card = card().rows(rows);
+            groups.push(if groups.len() < arriving {
+                card.into_any_element()
+            } else {
+                let id = self.selected_id().map_or("", |id| id.0.as_str());
+                motion::appear(
+                    ElementId::Name(format!("card-{id}-{}", groups.len()).into()),
+                    div().child(card),
+                )
+                .into_any_element()
+            });
         }
         groups
     }
@@ -969,8 +996,13 @@ impl ItemDetail {
             Some(Load::Failed(error)) => Err(Some(backend::describe(error))),
             Some(Load::Loading) | None => Ok(provisional_cards(summary)),
         };
+        // The cards shown while the item was on the way stay as they are.
+        let known = provisional_cards(summary)
+            .iter()
+            .filter(|fields| !fields.is_empty())
+            .count();
         let content: Vec<AnyElement> = match fields {
-            Ok(cards) => self.render_cards(cards, cx),
+            Ok(cards) => self.render_cards(cards, known, cx),
             Err(None) => match self.reprompt(window, cx) {
                 Some(reprompt) => return self.render_reprompt(summary, reprompt, icon, cx),
                 None => vec![],
@@ -1009,7 +1041,7 @@ impl ItemDetail {
         div()
             .flex()
             .justify_center()
-            .child(motion::content_enter(
+            .child(motion::replace(
                 ElementId::Name(format!("detail-{}", summary.id.0).into()),
                 div()
                     .flex_1()

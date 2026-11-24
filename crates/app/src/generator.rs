@@ -204,11 +204,8 @@ pub struct Generator {
     slider_focus: FocusHandle,
     copy_focus: FocusHandle,
     value: Option<Secret>,
-    /// Counts the values that faded in, so that the next one fades again.
-    fades: usize,
-    /// Whether the value on the way fades in: one asked for, rather than
-    /// one following the slider.
-    fade_next: bool,
+    /// Counts the values made, so that each fades up in place of the last.
+    values: usize,
     in_flight: bool,
     /// Whether the options changed while a value was on the way.
     again: bool,
@@ -232,8 +229,7 @@ impl Generator {
             slider_focus: cx.focus_handle(),
             copy_focus: cx.focus_handle(),
             value: None,
-            fades: 0,
-            fade_next: false,
+            values: 0,
             in_flight: false,
             again: false,
             problem: None,
@@ -243,7 +239,7 @@ impl Generator {
             _slider_events: slider_events,
         };
         if generate_now {
-            this.generate(false, cx);
+            this.generate(cx);
         }
         this
     }
@@ -267,7 +263,7 @@ impl Generator {
                 let index = this.choices.kind.index();
                 if this.choices.lengths[index] != length {
                     this.choices.lengths[index] = length;
-                    this.generate(false, cx);
+                    this.generate(cx);
                 }
             }
             SliderEvent::Release(_) => this.remember(cx),
@@ -277,7 +273,7 @@ impl Generator {
 
     /// Makes another value with the same options.
     pub fn regenerate(&mut self, cx: &mut Context<Self>) {
-        self.generate(true, cx);
+        self.generate(cx);
     }
 
     /// How hard the current options' values are to guess; `None` for a
@@ -292,8 +288,7 @@ impl Generator {
         self.choices.kind.noun()
     }
 
-    fn generate(&mut self, fade: bool, cx: &mut Context<Self>) {
-        self.fade_next |= fade;
+    fn generate(&mut self, cx: &mut Context<Self>) {
         if self.in_flight {
             self.again = true;
             return;
@@ -307,9 +302,7 @@ impl Generator {
                 this.in_flight = false;
                 match result {
                     Ok(value) => {
-                        if std::mem::take(&mut this.fade_next) {
-                            this.fades += 1;
-                        }
+                        this.values += 1;
                         this.problem = None;
                         this.copied = false;
                         this.value = Some(value.clone());
@@ -318,7 +311,7 @@ impl Generator {
                     Err(error) => this.problem = Some(backend::describe(&error)),
                 }
                 if std::mem::take(&mut this.again) {
-                    this.generate(false, cx);
+                    this.generate(cx);
                 }
                 cx.notify();
             },
@@ -339,7 +332,7 @@ impl Generator {
             self.slider = slider;
             self._slider_events = events;
         }
-        self.generate(self.choices.kind != kind, cx);
+        self.generate(cx);
         self.remember(cx);
         cx.notify();
     }
@@ -362,7 +355,10 @@ impl Generator {
     }
 
     /// The value, large, over the room the widest value would take, with
-    /// how strong it is under it.
+    /// how strong it is under it. Each new value fades up in place of the
+    /// last; a quick run of them, as the length slides, stays faint until
+    /// it rests. When the room changes, as with the length, it grows or
+    /// shrinks to it rather than jump.
     fn render_value(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let colors = &theme.colors;
@@ -402,7 +398,8 @@ impl Generator {
             .py(px(16.))
             .flex()
             .flex_col()
-            .child(
+            .child(motion::grow(
+                "generated-room",
                 div()
                     .relative()
                     .w_full()
@@ -419,12 +416,12 @@ impl Generator {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(motion::refresh(
-                                ("generated-value", self.fades),
+                            .child(motion::replace(
+                                ("generated-value", self.values),
                                 div().w_full().child(shown),
                             )),
                     ),
-            )
+            ))
             .children(strength)
             .into_any_element()
     }

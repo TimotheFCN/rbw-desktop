@@ -1,14 +1,16 @@
 //! Rows of the sidebar and the item list, and the letter tile that stands for
 //! an item.
 
-use gpui::base::Button as BaseButton;
-use gpui::base::motion;
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use gpui::base::Button as BaseButton;
+use gpui::base::motion;
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement, ObjectFit,
-    ParentElement, Pixels, RenderImage, RenderOnce, SharedString, Styled, StyledImage, Window, div,
-    img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, relative,
+    AnyElement, App, Bounds, ClickEvent, ContentMask, ElementId, Entity, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ObjectFit, ParentElement, Pixels, RenderImage, RenderOnce,
+    SharedString, Styled, StyledImage, Window, canvas, div, img, linear_color_stop,
+    linear_gradient, point, prelude::FluentBuilder as _, px, relative, size,
 };
 
 use crate::card::copied_badge;
@@ -19,16 +21,158 @@ use crate::theme::{ActiveTheme, Look, mix};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
-/// How far a row's selection highlight has come in, 0 to 1. Leaving and
-/// arriving both fade, so moving the selection reads as one motion.
-fn selection_progress(id: &ElementId, selected: bool, window: &mut Window, cx: &mut App) -> f32 {
-    motion::transition(
-        (id.clone(), "selection"),
-        if selected { 1. } else { 0. },
-        m::fade(m::QUICK),
-        window,
-        cx,
+/// A selection highlight that slides between rows, such as a list's or a
+/// sidebar's: what a row draws of it, and how much of the row it covers.
+///
+/// The highlight is drawn by the rows it overlaps, each clipping it to
+/// itself, so that it can move across rows that are drawn on their own,
+/// as a list's are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Highlight {
+    /// Where the highlight's top is, from the row's top.
+    offset: Pixels,
+    /// How far down from its top the row draws it: to the next row, so
+    /// that the gap between two rows shows no seam.
+    reach: Pixels,
+}
+
+impl Highlight {
+    /// The highlight `rows` rows from this row, a fraction while it moves,
+    /// in a list whose rows are `pitch` apart; `None` once it is a row or
+    /// more away. [`motion::slide`](crate::motion::slide) gives where it
+    /// is.
+    pub fn at(rows: f32, pitch: Pixels) -> Option<Self> {
+        (rows.abs() < 1.).then(|| Self {
+            offset: pitch * rows,
+            reach: pitch,
+        })
+    }
+
+    /// On the row, where a selected row has it without a list to slide in.
+    fn here(height: Pixels) -> Self {
+        Self {
+            offset: px(0.),
+            reach: height,
+        }
+    }
+
+    /// How far a row `height` tall reads as selected, 0 to 1: its text
+    /// takes the selection's colours once the highlight covers most of it,
+    /// over a short way rather than through every shade in between, which
+    /// would read poorly on either fill.
+    fn selected(self, height: Pixels) -> f32 {
+        let cover = 1. - (self.offset / height).abs();
+        ((cover - 0.35) / 0.3).clamp(0., 1.)
+    }
+
+    /// The highlight, painted behind the row's content and clipped to the
+    /// row, which must be `relative`: painted rather than laid out, so that
+    /// the row keeps its size wherever the highlight is.
+    fn render(self, radius: Pixels, fill: Hsla) -> impl IntoElement {
+        canvas(
+            |_, _, _| {},
+            move |row: Bounds<Pixels>, _, window, _| {
+                let at = Bounds::new(row.origin + point(px(0.), self.offset), row.size);
+                let clip = Bounds::new(row.origin, size(row.size.width, self.reach));
+                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                    window.paint_quad(gpui::fill(at, fill).corner_radii(radius));
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+}
+
+/// Where the rows of a [`selection_track`] are and which is selected, kept
+/// while they show.
+#[derive(Default)]
+pub struct SelectionTrack {
+    /// Each row's top and height in the window, as drawn in this frame.
+    drawing: HashMap<ElementId, (Pixels, Pixels)>,
+    /// Each row's top from the topmost row's, height and distance to the
+    /// next row when it follows closely, as drawn last: the same however
+    /// the rows scroll.
+    rows: HashMap<ElementId, (Pixels, Pixels, Pixels)>,
+    selected: Option<ElementId>,
+    /// Where the highlight is, from the topmost row's top.
+    at: Option<Pixels>,
+}
+
+impl SelectionTrack {
+    /// The highlight as the row `id` draws it.
+    fn highlight(&self, id: &ElementId) -> Option<Highlight> {
+        let (top, height, reach) = *self.rows.get(id)?;
+        let offset = self.at? - top;
+        (offset.abs() < height).then_some(Highlight { offset, reach })
+    }
+}
+
+/// The sliding selection of rows of different places and gaps, such as a
+/// sidebar's with its headings: the rows say where they were drawn, and the
+/// highlight slides to the selected one, on
+/// [`motion::slide`](crate::motion::slide). Make it before the rows, and
+/// give it to each with [`NavRow::track`].
+pub fn selection_track(
+    id: impl Into<ElementId>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<SelectionTrack> {
+    let id = id.into();
+    let track = window.use_keyed_state(id.clone(), cx, |_, _| SelectionTrack::default());
+    let target = track.update(cx, |track, _| {
+        let drawn = std::mem::take(&mut track.drawing);
+        let first = drawn
+            .values()
+            .map(|(top, _)| *top)
+            .reduce(|first, top| if top < first { top } else { first });
+        if let Some(first) = first {
+            let tops: Vec<Pixels> = drawn.values().map(|(top, _)| *top).collect();
+            track.rows = drawn
+                .into_iter()
+                .map(|(id, (top, height))| {
+                    // A row a few points under it closes the gap.
+                    let next = tops
+                        .iter()
+                        .copied()
+                        .filter(|next| *next > top)
+                        .reduce(|next, other| if other < next { other } else { next });
+                    let reach = next
+                        .map(|next| next - top)
+                        .filter(|reach| *reach <= height + px(4.))
+                        .unwrap_or(height);
+                    (id, (top - first, height, reach))
+                })
+                .collect();
+        }
+        track
+            .selected
+            .as_ref()
+            .and_then(|selected| track.rows.get(selected))
+            .map(|(top, height, _)| (*top, *height))
+    });
+    let at = target
+        .map(|(top, height)| m::slide((id, "highlight"), top / height, false, window, cx) * height);
+    track.update(cx, |track, _| track.at = at);
+    track
+}
+
+/// Records a row's place in its track as it is drawn.
+fn track_row(track: &Entity<SelectionTrack>, id: ElementId, selected: bool) -> impl IntoElement {
+    let track = track.clone();
+    canvas(
+        move |bounds, _, cx| {
+            track.update(cx, |track, _| {
+                if selected {
+                    track.selected = Some(id.clone());
+                }
+                track.drawing.insert(id, (bounds.top(), bounds.size.height));
+            })
+        },
+        |_, _, _, _| {},
     )
+    .absolute()
+    .inset_0()
 }
 
 /// A sidebar destination: an icon, a label, and the selection behind them.
@@ -38,6 +182,7 @@ pub struct NavRow {
     icon: IconName,
     label: SharedString,
     selected: bool,
+    track: Option<Entity<SelectionTrack>>,
     on_click: Option<ClickHandler>,
 }
 
@@ -52,11 +197,19 @@ pub fn nav_row(
         icon,
         label: label.into(),
         selected,
+        track: None,
         on_click: None,
     }
 }
 
 impl NavRow {
+    /// Slides the selection to this row from the one before, along
+    /// `track`, which all the rows it moves between share.
+    pub fn track(mut self, track: &Entity<SelectionTrack>) -> Self {
+        self.track = Some(track.clone());
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -67,8 +220,20 @@ impl NavRow {
 }
 
 impl RenderOnce for NavRow {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let progress = selection_progress(&self.id, self.selected, window, cx);
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Without a track, or before it knows where the rows are, the
+        // highlight is on the selected row.
+        let tracked = self
+            .track
+            .as_ref()
+            .map(|track| track.read(cx))
+            .filter(|track| track.at.is_some());
+        let highlight = match tracked {
+            Some(track) => track.highlight(&self.id),
+            None => self
+                .selected
+                .then(|| Highlight::here(cx.theme().metrics.nav_row_height)),
+        };
         let theme = cx.theme();
         let colors = &theme.colors;
         let metrics = theme.metrics;
@@ -85,23 +250,31 @@ impl RenderOnce for NavRow {
             Look::MacOs => FontWeight::BOLD,
             Look::Gnome => FontWeight::SEMIBOLD,
         };
+        let (height, radius) = (metrics.nav_row_height, metrics.nav_row_radius);
+        let id = self.id.clone();
         BaseButton::new(self.id)
             .selected(self.selected)
             .accessibility_label(self.label.clone())
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .focus_visible(ring)
+            .relative()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(9.))
-            .h(metrics.nav_row_height)
+            .h(height)
             .px(px(8.))
-            .rounded(metrics.nav_row_radius)
-            .bg(fill.opacity(progress))
+            .rounded(radius)
             .when(!self.selected && theme.look == Look::Gnome, |b| {
                 b.hover(move |s| s.bg(hover))
             })
             .when(self.selected, |b| b.font_weight(weight))
+            .when_some(highlight, |b, highlight| {
+                b.child(highlight.render(radius, fill))
+            })
+            .when_some(self.track, |b, track| {
+                b.child(track_row(&track, id, self.selected))
+            })
             .child(icon(self.icon).size(px(16.)).text_color(icon_color))
             .child(div().flex_1().min_w_0().truncate().child(self.label))
     }
@@ -331,13 +504,18 @@ pub struct ListRow {
     tab_stop: bool,
     /// Whether its list has the keyboard, which it shows for it.
     focused: bool,
+    /// The list's selection, where it is drawn on this row.
+    highlight: Option<Highlight>,
+    /// Whether the selection is on this row without a list to slide in.
+    here: bool,
     accessibility_label: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
 
 /// The height of a row of the item list.
 pub const ROW_HEIGHT: Pixels = px(46.);
-const COMPACT_ROW_HEIGHT: Pixels = px(40.);
+/// The height of a row of a panel's list, [`ListRow::compact`].
+pub const COMPACT_ROW_HEIGHT: Pixels = px(40.);
 /// Text in rows reads at the mockups' line height. gpui-base's buttons set
 /// it to the font size, which presses a name onto its subtitle.
 pub(crate) const ROW_LINE_HEIGHT: f32 = 1.35;
@@ -359,6 +537,8 @@ pub fn list_row(
         compact: false,
         tab_stop: true,
         focused: false,
+        highlight: None,
+        here: selected,
         accessibility_label: None,
         on_click: None,
     }
@@ -399,6 +579,14 @@ impl ListRow {
         self
     }
 
+    /// Draws the list's selection where it is, as it slides between rows,
+    /// rather than on this row when it is selected.
+    pub fn highlight(mut self, highlight: Option<Highlight>) -> Self {
+        self.highlight = highlight;
+        self.here = false;
+        self
+    }
+
     /// Something of the row's item was just copied: a short "Copied" takes
     /// the place of the trailing element.
     pub fn copied(mut self, copied: bool) -> Self {
@@ -417,7 +605,15 @@ impl ListRow {
 
 impl RenderOnce for ListRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let progress = selection_progress(&self.id, self.selected, window, cx);
+        let height = if self.compact {
+            COMPACT_ROW_HEIGHT
+        } else {
+            ROW_HEIGHT
+        };
+        let highlight = self
+            .highlight
+            .or(self.here.then(|| Highlight::here(height)));
+        let progress = highlight.map_or(0., |highlight| highlight.selected(height));
         let confirmation = m::presence((self.id.clone(), "copied"), self.copied, window, cx);
         let trailing = if confirmation.should_render() {
             let badge = copied_badge(cx).opacity(confirmation.progress);
@@ -456,6 +652,7 @@ impl RenderOnce for ListRow {
                 ),
             )
         };
+        let radius = theme.metrics.row_radius;
         let name = self.name;
         let tile = tile(&name)
             .size(if self.compact { px(28.) } else { px(32.) })
@@ -469,18 +666,17 @@ impl RenderOnce for ListRow {
             .when(list_focused && self.selected, |b| {
                 b.shadow(inner_ring(ring_color))
             })
+            .relative()
             .flex()
             .items_center()
             .gap(px(10.))
-            .h(if self.compact {
-                COMPACT_ROW_HEIGHT
-            } else {
-                ROW_HEIGHT
-            })
+            .h(height)
             .px(if self.compact { px(7.) } else { px(9.) })
-            .rounded(theme.metrics.row_radius)
-            .bg(selection.opacity(progress))
+            .rounded(radius)
             .when(!self.selected, |b| b.hover(move |s| s.bg(hover)))
+            .when_some(highlight, |b, highlight| {
+                b.child(highlight.render(radius, selection))
+            })
             .child(tile)
             .child(
                 div()

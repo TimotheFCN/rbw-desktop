@@ -19,7 +19,7 @@ use gpui::{
 use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
     ActiveTheme as _, IconName, Look, Theme, chrome, icon, motion, nav_row, row_focus_ring,
-    scroll_area, sidebar,
+    scroll_area, selection_track, sidebar,
 };
 
 use crate::CloseWindow;
@@ -216,7 +216,7 @@ impl SettingsWindow {
                     .px(px(20.))
                     .pt(px(6.))
                     .pb(px(24.))
-                    .child(motion::content_enter(
+                    .child(motion::replace(
                         ("settings-page", self.page as usize),
                         div()
                             .w_full()
@@ -234,8 +234,10 @@ impl SettingsWindow {
         let metrics = theme.metrics;
         let fill = theme.colors.window;
         let corner = chrome::corner_radius(window, cx);
+        let track = selection_track("settings-selection", window, cx);
         let rows = PAGES.map(|(page, icon_name, label)| {
             nav_row(label, icon_name, label, self.page == page)
+                .track(&track)
                 .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
                 .into_any_element()
         });

@@ -511,7 +511,7 @@ impl ItemEditor {
         let main = self.render_main(window, cx);
         // Another kind shows other fields: they fade up in place.
         let mut groups = vec![Group {
-            element: motion::refresh(("item-kind", self.kind as usize), div().child(main.element))
+            element: motion::replace(("item-kind", self.kind as usize), div().child(main.element))
                 .into_any_element(),
             focus: main.focus,
         }];

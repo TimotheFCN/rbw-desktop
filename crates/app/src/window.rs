@@ -441,7 +441,7 @@ impl MainWindow {
         // Nothing of a vault stays behind it once it has gone.
         self.alerts.update(cx, |alerts, cx| alerts.dismiss(cx));
         self.leave_task = cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(motion::STANDARD).await;
+            cx.background_executor().timer(motion::SCREEN).await;
             this.update(cx, |this, cx| {
                 this.leaving = None;
                 cx.notify();
