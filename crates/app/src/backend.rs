@@ -70,6 +70,32 @@ pub fn request_in<V: 'static, T: Send + 'static>(
     })
 }
 
+/// [`request`] on a thread of its own rather than the background executor,
+/// for a call that can wait on the network for a long time, such as a
+/// website's icon, so that it never holds up the calls people wait for.
+/// Dropping the task drops the answer; the call still runs to its end.
+pub fn request_on_thread<V: 'static, T: Send + 'static>(
+    name: &str,
+    cx: &mut Context<V>,
+    call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
+    then: impl FnOnce(&mut V, Result<T>, &mut Context<V>) + 'static,
+) -> Task<()> {
+    let backend = cx.global::<Shared>().0.clone();
+    let (send, answer) = futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || send.send(call(backend.as_ref())));
+    if let Err(error) = &spawned {
+        log::warn!("starting a thread: {error}");
+    }
+    cx.spawn(async move |view, cx| {
+        let result = answer
+            .await
+            .unwrap_or_else(|_| Err(Error::Other("the call's thread ended".into())));
+        view.update(cx, |view, cx| then(view, result, cx)).ok();
+    })
+}
+
 /// Runs `call` off the main thread, for an answer that no view waits for.
 pub fn call<T: Send + 'static>(
     cx: &mut App,
