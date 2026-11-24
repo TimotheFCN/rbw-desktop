@@ -423,9 +423,18 @@ view. Keep the returned `Task` in a field when a newer request should cancel
 an older one (`load_task`), or `.detach()` it. Use `backend::request_in` when
 the answer needs the window, such as setting a text field. Show data as
 `Load<T>`. Never blank a pane or show the previous item's data while new
-data loads: show what is known already (the item pane draws the list's
-summary, and a login's fields from it, until the item arrives, and
-copies what was asked meanwhile once it does). Show a failure as the sentence from
+data loads: show what is known already, and make the first frame the
+final one where it can be. The item pane draws an item from its `Shape`,
+what it showed of it before without its hidden values (kept until the
+account locks, syncs or changes; `ItemDetail::prefetch` makes them ahead
+for the row under the pointer and the next row the keys go to), else
+from the list's summary, and copies what was asked meanwhile once the
+item arrives. Content that is ready doesn't fade: what arrives fades in
+only after a wait that showed (`AT_ONCE`), and an element animation keyed
+by a field rather than by the change replays whenever the field comes
+back, so key it by the change. The list's new rows after another choice
+in the sidebar come with their icons, read ahead for every choice's first
+rows (`VaultView::read_icons_ahead`). Show a failure as the sentence from
 `backend::describe(&error)`: in place where data failed to load, in the
 window's `ToastSlot` when an action failed. Match on `Error` variants, never
 on their text.
@@ -500,9 +509,10 @@ the list's edge when it was off screen (`rows_on_screen` says which rows
 show; drawn by the rows with `Highlight`, or `selection_track` for rows of
 different places, such as a sidebar's),
 `settle` for something let go, `screen_replace` and `screen_leave`,
-`shake`, `spin`. Key an element animation by what it shows, so that
-drawing the same thing again replays nothing: the item pane by its item,
-the list by its filter, sort and choices, a new value by its count. They
+`shake`, `spin`. Key an element animation by the change it shows, so
+that drawing the same thing again replays nothing: a revealed value by
+its toggle, a verification code by its period, a new value by its count;
+content that merely shows another item or another list doesn't fade. They
 follow the system's reduced-motion setting, and none lays out what is
 around it again except `grow` and `reveal`, whose job it is.
 

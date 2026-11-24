@@ -78,8 +78,11 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 * The list takes a share of the window, which dragging its edge changes
   (remembered; a double-click puts it back).
 * Item view: every field copies on click, with a brief "Copied" confirmation.
-  Choosing an item shows its name and what the list knows of it at once,
-  then the rest as it arrives; nothing of the previous item stays.
+  Choosing an item shows it complete at once when it can: as the pane
+  showed it before, or as fetched ahead for the row under the pointer and
+  the next one down the list; otherwise its name and what the list knows
+  of it, then the rest as it arrives. Content that is there doesn't fade;
+  only what comes after a wait does. Nothing of the previous item stays.
   Passwords and other hidden fields reveal on request. Verification codes
   count down live. Websites open in the browser.
 * Create, edit and delete items; mark favourites; move between folders.
@@ -171,8 +174,14 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   useful to any program that drives `rbw`, and goes into rbw-ng as such.
   No rbw-desktop-specific code there unless a specific case is clearly
   cleaner that way, and then it is called out.
-* The app never sees the vault key. Secrets are fetched when they are shown
-  or copied and are not kept.
+* The app never sees the vault key. Hidden values (passwords, card
+  numbers and codes, hidden fields, private keys, identity numbers) are
+  fetched when the item is shown or copied and kept only while it is. To
+  draw an item again at once, the vault remembers what the item pane
+  shows of the items it showed, with stand-ins for their hidden values,
+  and a verification code until it expires; it forgets them when the
+  account locks, syncs or is switched. An item that asks for the master
+  password again is never remembered or fetched ahead.
 
 ## Engineering
 

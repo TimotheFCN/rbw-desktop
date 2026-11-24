@@ -105,8 +105,14 @@ impl VaultView {
                             let (id, menu_id) = (item.id.clone(), item.id.clone());
                             let arrived = this.arrived.contains(&item.id);
                             let row = div()
+                                .id(ElementId::Name(format!("row-{}", item.id.0).into()))
                                 .px(px(7.))
                                 .pb(ROW_GAP)
+                                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                    if *hovered {
+                                        this.prefetch_rows([position], cx);
+                                    }
+                                }))
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -154,25 +160,16 @@ impl VaultView {
             .into_any_element(),
         };
         let bar = scrollbar("items-bar", &self.list_scroll, cx);
-        // Another choice in the sidebar or the menu shows other items, or
-        // the same in another order: they fade up in place. Typing a search
-        // changes them without it.
-        let body = motion::replace(
-            ElementId::Name(
-                format!(
-                    "items-{:?}-{:?}-{:?}",
-                    self.filter, self.only, self.sorted_by
-                )
-                .into(),
-            ),
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .child(body)
-                .child(bar),
-        );
+        // Another choice in the sidebar or the menu shows other items at
+        // once, their icons with them: a fade over the whole list would
+        // read as a flicker.
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(body)
+            .child(bar);
 
         let only = self.render_only(window, cx);
         list_width(share, div().id("list"))

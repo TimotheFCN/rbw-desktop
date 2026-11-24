@@ -75,6 +75,9 @@ const SAVE_DIVIDER_AFTER: Duration = Duration::from_millis(400);
 /// How many of the list's first rows have their websites' icons read with
 /// it, so that they show with it: a tall window's worth.
 const FIRST_ROWS: usize = 40;
+/// How many rows, in all, have their icons read ahead for the sidebar's
+/// other choices: well within the icons kept.
+const OTHER_CHOICES_ROWS: usize = 200;
 
 /// What the divider between the list and the item drags.
 struct ListDivider;
@@ -368,7 +371,10 @@ impl VaultView {
         self.accounts = accounts;
         if synced {
             self.reload(cx);
-            self.detail.update(cx, |detail, cx| detail.reload(cx));
+            self.detail.update(cx, |detail, cx| {
+                detail.forget_shapes();
+                detail.reload(cx);
+            });
         }
         cx.notify();
     }
@@ -426,6 +432,7 @@ impl VaultView {
                     Err(error) => this.items = Load::Failed(error),
                 }
                 this.refilter(cx);
+                this.read_icons_ahead(cx);
             },
         );
     }
@@ -464,6 +471,41 @@ impl VaultView {
         cx.notify();
     }
 
+    /// Reads the icons of the first rows of the sidebar's other choices
+    /// from rbw's cache, so that choosing one shows its list complete, its
+    /// icons with it.
+    fn read_icons_ahead(&self, cx: &mut Context<Self>) {
+        let Some(items) = self.items.ready() else {
+            return;
+        };
+        let (query, order) = (self.query(cx), Prefs::global(cx).read(cx).get().sort);
+        // Only logins have websites' icons.
+        let choices = [
+            Filter::All,
+            Filter::Favorites,
+            Filter::Kind(ItemKind::Login),
+            Filter::NoFolder,
+        ]
+        .into_iter()
+        .chain(
+            self.folders
+                .iter()
+                .map(|folder| Filter::Folder(folder.id.clone())),
+        )
+        .filter(|filter| *filter != self.filter);
+        let rows: Vec<&ItemSummary> = choices
+            .flat_map(|filter| {
+                visible(items, &filter, self.only, &query, order, &self.recent)
+                    .into_iter()
+                    .take(FIRST_ROWS)
+            })
+            .take(OTHER_CHOICES_ROWS)
+            .map(|index| &items[index])
+            .collect();
+        let account = self.account.id.clone();
+        Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&account, rows, cx));
+    }
+
     pub(crate) fn focus_list(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.list_focus, cx);
     }
@@ -491,6 +533,7 @@ impl VaultView {
             self.only = only;
             self.refilter(cx);
             self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+            self.read_icons_ahead(cx);
         }
     }
 
@@ -498,6 +541,7 @@ impl VaultView {
         preferences::update(cx, move |preferences| preferences.sort = order);
         self.refilter(cx);
         self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.read_icons_ahead(cx);
     }
 
     fn select(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
@@ -519,9 +563,8 @@ impl VaultView {
         }
         self.selected = item.clone();
         let summary = item.and_then(|id| self.summary(&id).cloned());
-        // A selection that moves with the keys or the search is shown once
-        // it rests, so that items only passed over aren't fetched with
-        // their secrets.
+        // A selection that moves with the keys or the search is fetched
+        // once it rests; meanwhile it shows from its shape, or the list.
         self.detail.update(cx, |detail, cx| {
             if by_pointer {
                 detail.show(summary, true, cx)
@@ -549,12 +592,26 @@ impl VaultView {
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
         let next = self.selected_index().map_or(0, |index| index + 1);
         self.select_index(next, cx);
+        self.prefetch_rows([next + 1], cx);
     }
 
     fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.selected_index().and_then(|index| index.checked_sub(1)) {
             self.select_index(index, cx);
+            self.prefetch_rows(index.checked_sub(1), cx);
         }
+    }
+
+    /// Fetches the items of these rows ahead, so that they show complete
+    /// at once when chosen: the next one the arrow keys go to, the one the
+    /// pointer is on.
+    fn prefetch_rows(&mut self, rows: impl IntoIterator<Item = usize>, cx: &mut Context<Self>) {
+        let items: Vec<ItemSummary> = rows
+            .into_iter()
+            .filter_map(|row| self.visible_items().nth(row).cloned())
+            .collect();
+        self.detail
+            .update(cx, |detail, cx| detail.prefetch(items, cx));
     }
 
     fn find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
