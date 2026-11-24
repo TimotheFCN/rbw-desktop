@@ -399,6 +399,18 @@ mod tests {
     }
 
     #[test]
+    fn a_field_shown_altered_is_kept_unless_changed() {
+        // A one-line field drops the tab of this password when it shows it.
+        let mut data = login();
+        if let ItemContent::Login(login) = &mut data.content {
+            login.password = Secret::new("tab\there");
+        }
+        let mut shown = texts(&data);
+        shown.values.insert(Key::Password, "tabhere".into());
+        assert_eq!(apply(&data, &shown, &shown), data);
+    }
+
+    #[test]
     fn secrets_and_notes_keep_their_spaces() {
         let saved = edited(&login(), |texts| {
             texts.values.insert(Key::Password, " new pass ".into());

@@ -170,7 +170,7 @@ pub struct ItemEditor {
     /// The item being edited; `None` while creating one.
     editing: Option<Item>,
     kind: ItemKind,
-    /// What the fields showed first, so that only what changed is saved.
+    /// What the fields held first, so that only what changed is saved.
     initial: Texts,
     inputs: BTreeMap<Key, Entity<InputState>>,
     notes: Entity<TextareaState>,
@@ -274,14 +274,14 @@ impl ItemEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let kind = data.content.kind();
-        let initial = form::texts(&data);
+        let shown = form::texts(&data);
         let new_item = editing.is_none();
         let mut subscriptions = vec![];
         let mut inputs = BTreeMap::new();
         for key in ALL_KEYS {
             let input = new_input(placeholder(key), SECRETS.contains(&key), window, cx);
             input.update(cx, |input, cx| {
-                input.set_value(initial.get(key).to_string(), window, cx)
+                input.set_value(shown.get(key).to_string(), window, cx)
             });
             subscriptions.push(cx.subscribe_in(
                 &input,
@@ -298,7 +298,7 @@ impl ItemEditor {
                 .placeholder("Notes")
         });
         notes.update(cx, |notes, cx| {
-            notes.set_value(initial.notes.clone(), window, cx)
+            notes.set_value(shown.notes.clone(), window, cx)
         });
         let generator = cx.new(|cx| Generator::new(new_item && kind == ItemKind::Login, cx));
         subscriptions.push(cx.subscribe_in(
@@ -310,7 +310,7 @@ impl ItemEditor {
             account,
             editing,
             kind,
-            initial: initial.clone(),
+            initial: Texts::default(),
             inputs,
             notes,
             websites: vec![],
@@ -342,15 +342,18 @@ impl ItemEditor {
             task: Task::ready(()),
             _subscriptions: subscriptions,
         };
-        for website in &initial.websites {
+        for website in &shown.websites {
             this.add_website(website.origin, &website.uri, window, cx);
         }
         if this.websites.is_empty() {
             this.add_website(None, "", window, cx);
         }
-        for field in &initial.fields {
+        for field in &shown.fields {
             this.add_field_row(field, window, cx);
         }
+        // What the fields hold, which may differ from the item: a one-line
+        // field drops tabs and line breaks.
+        this.initial = this.texts(cx);
         this
     }
 
