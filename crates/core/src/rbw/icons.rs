@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use crate::{IconFormat, WebsiteIcon};
+use crate::WebsiteIcon;
 
 // As long as Vaultwarden keeps the icons it fetched, and the sites it found
 // none for.
@@ -30,10 +30,7 @@ impl IconCache {
         let icon = self.dir.join(format!("{host}.icon"));
         if fresh(&icon, ICON_LIFE) {
             let bytes = std::fs::read(&icon).ok()?;
-            return Some(Some(WebsiteIcon {
-                format: IconFormat::of(&bytes)?,
-                bytes: bytes.into(),
-            }));
+            return Some(Some(WebsiteIcon::from_server(&bytes)?));
         }
         fresh(&self.dir.join(format!("{host}.miss")), MISS_LIFE).then_some(None)
     }
@@ -113,6 +110,7 @@ fn fresh(path: &Path, life: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IconFormat;
 
     #[test]
     fn keeps_icons_and_misses_until_told_to_forget() {
@@ -121,7 +119,9 @@ mod tests {
         assert_eq!(cache.get("github.com"), None);
         let icon = WebsiteIcon {
             format: IconFormat::Png,
-            bytes: b"\x89PNG\r\n\x1a\nrest".as_slice().into(),
+            bytes: b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10"
+                .as_slice()
+                .into(),
         };
         cache.put("github.com", Some(&icon));
         assert_eq!(cache.get("github.com"), Some(Some(icon.clone())));

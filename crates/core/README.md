@@ -67,7 +67,10 @@ icons) are the app's, in `preferences.json` in its configuration folder.
 It picks the website as the official clients do (the first one, when it is a
 web address, never a `.onion` or `.i2p` site) and asks the icon service of
 the account's server through `rbw icon`, which sends the host name and
-nothing about the account. Icons are kept in the app's cache folder for 30
+nothing about the account. The server may pass on what the website serves,
+so only bitmaps (PNG, JPEG, GIF, WebP, BMP, ICO) of at most 1024 pixels a
+side, by what their headers say, count as icons; anything else, SVG included,
+counts as none. Icons are kept in the app's cache folder for 30
 days, sites without one for 3 days, and the oldest go past 20 MB, so after
 the first time an icon comes from the disk. With the website icons
 preference off it returns `None` without asking anything, and turning the

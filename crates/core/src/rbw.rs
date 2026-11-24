@@ -16,9 +16,9 @@ use process::{Rbw, Wait};
 
 use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, IconFormat, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode,
-    WebsiteIcon, icon,
+    GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode, Preferences,
+    Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode, WebsiteIcon,
+    icon,
 };
 
 /// The rbw-ng release with everything this backend uses.
@@ -417,11 +417,8 @@ impl Backend for RbwBackend {
             .rbw
             .run(Some(account), &["icon", "--", &host], None, Wait::Network)
         {
-            // a web page instead of an image counts as no icon
-            Ok(bytes) => IconFormat::of(&bytes).map(|format| WebsiteIcon {
-                format,
-                bytes: bytes.as_slice().into(),
-            }),
+            // a web page, an SVG or an oversized image counts as no icon
+            Ok(bytes) => WebsiteIcon::from_server(&bytes),
             Err(failure) if failure.error == Error::NotFound => None,
             Err(failure) => return Err(failure.error),
         };
