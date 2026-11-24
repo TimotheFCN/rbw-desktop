@@ -52,7 +52,8 @@ pub trait Backend: Send + Sync {
     /// code it can fail with [`Error::TwoStepRequired`] or
     /// [`Error::NewDeviceCodeRequired`]; call it again with the code. It
     /// fails with [`Error::RegistrationRequired`] when the server wants
-    /// [`Backend::register_device`] first.
+    /// [`Backend::register_device`] first, and with [`Error::WrongServer`]
+    /// when the account's server address leads to no Bitwarden server.
     fn sign_in(
         &self,
         account: &AccountId,

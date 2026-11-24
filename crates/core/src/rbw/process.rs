@@ -364,6 +364,7 @@ fn error_from(error: JsonError) -> Error {
         "forbidden" => Error::ReadOnly,
         "invalid_input" => Error::InvalidItem(error.message),
         "network" => Error::Offline,
+        "wrong_server" => Error::WrongServer,
         "server" => Error::Server(error.message),
         _ => Error::Other(error.message),
     }
@@ -410,6 +411,10 @@ mod tests {
         assert_eq!(
             error_from(r#"{"code":"reprompt_required","message":"m"}"#),
             Error::RepromptRequired
+        );
+        assert_eq!(
+            error_from(r#"{"code":"wrong_server","message":"m"}"#),
+            Error::WrongServer
         );
         assert_eq!(
             error_from(r#"{"code":"something_new","message":"m"}"#),

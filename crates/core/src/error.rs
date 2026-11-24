@@ -55,6 +55,10 @@ pub enum Error {
     SshAgentUnsupported,
     #[error("the server can't be reached")]
     Offline,
+    /// The server's address leads to something that isn't a Bitwarden
+    /// server, such as a web site or a wrong path.
+    #[error("the address doesn't lead to a Bitwarden server")]
+    WrongServer,
     #[error("the server refused the request: {0}")]
     Server(String),
     #[error("rbw took too long to answer")]
