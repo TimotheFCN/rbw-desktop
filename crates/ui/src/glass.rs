@@ -190,8 +190,10 @@ mod native {
                         }
                     },
                 )
+                // Every edge pinned: left to its static position, an
+                // absolute child starts after the surface's padding.
                 .absolute()
-                .size_full(),
+                .inset_0(),
             )
         }
 
