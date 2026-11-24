@@ -397,9 +397,15 @@ impl ItemDetail {
         Some(reprompt)
     }
 
+    /// Makes the item a favourite or not; the star changes at once, and
+    /// back if the change fails.
     fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
-        let Some(item) = &self.selected else { return };
-        let (account, id, favorite) = (self.account.clone(), item.id.clone(), !item.favorite);
+        let Some(item) = &mut self.selected else {
+            return;
+        };
+        item.favorite = !item.favorite;
+        cx.notify();
+        let (account, id, favorite) = (self.account.clone(), item.id.clone(), item.favorite);
         let vault = self.vault.clone();
         backend::request(
             cx,
@@ -410,6 +416,10 @@ impl ItemDetail {
                     vault.update(cx, |vault, cx| vault.reload(cx)).ok();
                 }
                 Err(error) => {
+                    if let Some(item) = &mut this.selected {
+                        item.favorite = !favorite;
+                    }
+                    cx.notify();
                     vault
                         .update(cx, |vault, cx| vault.show_error(&error, cx))
                         .ok();
@@ -431,7 +441,6 @@ impl ItemDetail {
         // Favourites belong to the account: any item can be one, even
         // before it is unlocked.
         let favorite = self.selected.as_ref().map(|item| item.favorite);
-        let accent = theme.colors.accent_text;
         let height = theme.metrics.toolbar_height;
         chrome::drag_region(
             "detail-toolbar",
@@ -445,17 +454,16 @@ impl ItemDetail {
                 .px(px(12.))
                 .when_some(favorite, |bar, favorite| {
                     bar.child(
-                        div().when(favorite, |d| d.text_color(accent)).child(
-                            button("favorite")
-                                .icon(IconName::Star)
-                                .style(style)
-                                .accessibility_label(if favorite {
-                                    "Remove from Favorites"
-                                } else {
-                                    "Add to Favorites"
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx))),
-                        ),
+                        button("favorite")
+                            .icon(IconName::Star)
+                            .style(style)
+                            .toggled(favorite)
+                            .accessibility_label(if favorite {
+                                "Remove from Favorites"
+                            } else {
+                                "Add to Favorites"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx))),
                     )
                 })
                 .when(editable, |bar| {

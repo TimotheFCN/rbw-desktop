@@ -218,14 +218,28 @@ impl VaultView {
     /// drawn last, so that neither the item nor the list's scroll bar
     /// takes the pointer from it.
     fn render_divider(&self, cx: &mut Context<Self>) -> AnyElement {
+        // A line that shows it can be moved, under the pointer and while
+        // it is dragged.
+        let line = cx.theme().colors.text_tertiary.opacity(0.45);
+        let dragged = self.dragged_share.is_some();
         deferred(
             div()
                 .id("list-divider")
+                .group("list-divider")
                 .absolute()
                 .top_0()
                 .bottom_0()
                 .right(-DIVIDER_REACH)
                 .w(DIVIDER_REACH * 2.)
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .w(px(2.))
+                        .h_full()
+                        .when(dragged, |d| d.bg(line))
+                        .group_hover("list-divider", move |s| s.bg(line)),
+                )
                 .cursor(CursorStyle::ResizeLeftRight)
                 .block_mouse_except_scroll()
                 .on_drag(ListDivider, |_, _, _, cx| cx.new(|_| EmptyView))
@@ -324,6 +338,8 @@ impl VaultView {
                 button("sort-menu-button")
                     .icon(IconName::Filter)
                     .style(style)
+                    // The list shows only some items.
+                    .toggled(only.any())
                     .accessibility_label("Sort and Filter")
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.sort_menu_open {

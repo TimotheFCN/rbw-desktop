@@ -47,6 +47,9 @@ pub const DISMISS: Duration = Duration::from_millis(160);
 /// unlocking: the old one fades out in its first part, the new one comes
 /// in after it.
 pub const SCREEN: Duration = Duration::from_millis(340);
+/// A scroll the app makes, such as a page from a click in a scroll bar's
+/// track, on [`spring_curve`].
+pub const SCROLL: Duration = Duration::from_millis(300);
 /// How long a "Copied" confirmation stays before fading.
 pub const CONFIRMATION_HOLD: Duration = Duration::from_millis(1400);
 

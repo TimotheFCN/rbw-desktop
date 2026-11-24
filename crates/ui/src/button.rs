@@ -46,6 +46,7 @@ pub struct Button {
     disabled: bool,
     busy: bool,
     wide: bool,
+    toggled: bool,
     focus: Option<FocusHandle>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
@@ -66,6 +67,7 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         disabled: false,
         busy: false,
         wide: false,
+        toggled: false,
         focus: None,
         on_click: None,
         on_hover: None,
@@ -124,6 +126,14 @@ impl Button {
     /// is under way, and ignores clicks. The button keeps its size.
     pub fn busy(mut self, busy: bool) -> Self {
         self.busy = busy;
+        self
+    }
+
+    /// Shows that what the button turns on is on, such as a filter or a
+    /// favourite: its icon takes the accent colour, and on GNOME the
+    /// button is filled, as a toggled header-bar button is.
+    pub fn toggled(mut self, on: bool) -> Self {
+        self.toggled = on;
         self
     }
 
@@ -207,6 +217,15 @@ impl RenderOnce for Button {
                 BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.11)).blur_radius(px(5.)),
                 BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.05)).spread_radius(px(0.5)),
             ],
+        };
+        let (fill, text) = if self.toggled {
+            let fill = match (macos, fill) {
+                (false, None) => Some(colors.fill),
+                (_, fill) => fill,
+            };
+            (fill, Some(colors.accent_text))
+        } else {
+            (fill, text)
         };
         let ring = control_ring(cx);
         let spinner_color = text.unwrap_or(colors.text_secondary);

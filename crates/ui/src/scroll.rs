@@ -11,8 +11,10 @@
 //! from [`style`], which the theme projects onto gpui-base.
 
 use gpui::base::{Scrollbar, ScrollbarHandle, ScrollbarMode, ScrollbarStyles, ScrollbarTheme};
+use std::time::Instant;
+
 use gpui::{
-    AnyElement, App, Bounds, Div, ElementId, Hitbox, HitboxBehavior, InteractiveElement as _,
+    AnyElement, App, Bounds, Div, ElementId, Entity, HitboxBehavior, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, RenderOnce, ScrollHandle,
     StatefulInteractiveElement as _, StyleRefinement, Styled, Window, canvas, div, point, px,
 };
@@ -90,7 +92,8 @@ pub fn scrollbar<H: ScrollbarHandle + Clone>(
     cx: &App,
 ) -> AnyElement {
     let id = id.into();
-    let paging = (cx.theme().look == Look::MacOs).then(|| page_on_click(handle.clone()));
+    let paging = (cx.theme().look == Look::MacOs)
+        .then(|| page_on_click((id.clone(), "paging").into(), handle.clone()));
     div()
         .absolute()
         .inset_0()
@@ -99,18 +102,32 @@ pub fn scrollbar<H: ScrollbarHandle + Clone>(
         .into_any_element()
 }
 
+/// A page scroll under way, from a click in the track.
+#[derive(Clone, Copy)]
+struct Paging {
+    from: Pixels,
+    to: Pixels,
+    started: Instant,
+    /// The offset it set last: another means the content was scrolled
+    /// meanwhile, which stops it.
+    last: Pixels,
+}
+
 /// A click in the track, off the thumb, scrolls a page towards it, as
-/// AppKit's scrollers do. It takes the click before the bar's own handler,
-/// which would move the thumb there.
-fn page_on_click<H: ScrollbarHandle + Clone>(handle: H) -> impl IntoElement {
+/// AppKit's scrollers do, gliding there rather than jumping. It takes the
+/// click before the bar's own handler, which would move the thumb there.
+fn page_on_click<H: ScrollbarHandle + Clone>(id: ElementId, handle: H) -> impl IntoElement {
     let prepaint_handle = handle.clone();
     canvas(
-        move |_, window, _| -> Option<(Hitbox, Bounds<Pixels>)> {
+        move |_, window, cx| {
+            let paging = window.use_keyed_state(id, cx, |_, _| None::<Paging>);
+            glide(&paging, &prepaint_handle, window, cx);
             let track = track(&prepaint_handle)?;
-            Some((window.insert_hitbox(track, HitboxBehavior::Normal), track))
+            let hitbox = window.insert_hitbox(track, HitboxBehavior::Normal);
+            Some((hitbox, track, paging))
         },
         move |_, hit, window, _| {
-            let Some((hitbox, track)) = hit else {
+            let Some((hitbox, track, paging)) = hit else {
                 return;
             };
             let handle = handle.clone();
@@ -121,10 +138,19 @@ fn page_on_click<H: ScrollbarHandle + Clone>(handle: H) -> impl IntoElement {
                 {
                     return;
                 }
-                let Some(offset) = page(&handle, track, event.position.y) else {
+                let Some(to) = page(&handle, track, event.position.y) else {
                     return;
                 };
-                handle.set_offset(point(handle.offset().x, offset));
+                let from = handle.offset().y;
+                let started = cx.background_executor().now();
+                paging.update(cx, |paging, _| {
+                    *paging = Some(Paging {
+                        from,
+                        to,
+                        started,
+                        last: from,
+                    })
+                });
                 cx.stop_propagation();
                 window.refresh();
             });
@@ -132,6 +158,38 @@ fn page_on_click<H: ScrollbarHandle + Clone>(handle: H) -> impl IntoElement {
     )
     .absolute()
     .inset_0()
+}
+
+/// Moves a page scroll on to where it is due in this frame.
+fn glide(
+    paging: &Entity<Option<Paging>>,
+    handle: &impl ScrollbarHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(run) = *paging.read(cx) else {
+        return;
+    };
+    let offset = handle.offset();
+    if offset.y != run.last {
+        paging.update(cx, |paging, _| *paging = None);
+        return;
+    }
+    let elapsed = cx
+        .background_executor()
+        .now()
+        .saturating_duration_since(run.started);
+    let t = if cx.reduce_motion() {
+        1.
+    } else {
+        (elapsed.as_secs_f32() / motion::SCROLL.as_secs_f32()).min(1.)
+    };
+    let y = run.from + (run.to - run.from) * motion::spring_curve().sample(t);
+    handle.set_offset(point(offset.x, y));
+    paging.update(cx, |paging, _| {
+        *paging = (t < 1.).then_some(Paging { last: y, ..run })
+    });
+    window.request_animation_frame();
 }
 
 /// The track of a handle's viewport, when its content is taller than it.
