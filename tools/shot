@@ -124,7 +124,7 @@ if [[ $state == gallery ]]; then
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop-ui --example gallery
 else
 	binary=$root/target/debug/rbw-desktop title=Vault
-	[[ $state == panel* ]] && title=rbw-desktop
+	[[ $state == panel* ]] && title='rbw Desktop'
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
 fi
 

@@ -11,11 +11,15 @@ use gpui::{App, AppContext as _, DevicePixels, SvgSize, Task, point, px, size};
 use ksni::TrayMethods as _;
 use ksni::menu::{MenuItem, StandardItem};
 
+use rbw_desktop_core::{APP_ID, APP_NAME};
+
 use super::Event;
 use crate::panel::Anchor;
 
-const ID: &str = "rbw-desktop";
-const ICON_NAME: &str = "rbw-desktop-symbolic";
+/// The icon's name in the folder the app writes for the host.
+fn icon_name() -> String {
+    format!("{APP_ID}-symbolic")
+}
 
 /// Where a click on the item was, in X11's pixels, as the host says.
 pub struct Click {
@@ -119,15 +123,15 @@ impl Tray {
 
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
-        ID.into()
+        APP_ID.into()
     }
 
     fn title(&self) -> String {
-        ID.into()
+        APP_NAME.into()
     }
 
     fn icon_name(&self) -> String {
-        ICON_NAME.into()
+        icon_name()
     }
 
     fn icon_theme_path(&self) -> String {
@@ -140,7 +144,7 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: ID.into(),
+            title: APP_NAME.into(),
             ..Default::default()
         }
     }
@@ -193,7 +197,7 @@ impl ksni::Tray for Tray {
 fn write_icon(svg: &[u8]) -> Option<String> {
     let dir = rbw_desktop_core::session_dir().ok()?.join("icons");
     let written = std::fs::create_dir_all(&dir)
-        .and_then(|()| std::fs::write(dir.join(format!("{ICON_NAME}.svg")), svg));
+        .and_then(|()| std::fs::write(dir.join(format!("{}.svg", icon_name())), svg));
     if let Err(error) = written {
         log::warn!("writing the menu bar icon: {error}");
         return None;

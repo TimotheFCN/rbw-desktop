@@ -19,6 +19,15 @@ mod secret;
 mod settings;
 mod ssh;
 
+/// The app's id, wherever a system names it: the macOS bundle identifier
+/// and folders, the Linux desktop file, window class and icon, and the
+/// menu bar item.
+pub const APP_ID: &str = "io.github.timothefcn.RbwDesktop";
+
+/// The app's name, as people see it: in the Dock and the menu bar, GNOME's
+/// overview, its menus and its windows.
+pub const APP_NAME: &str = "rbw Desktop";
+
 pub use account::{
     Account, AccountId, AccountSettings, LockState, LoginCode, Server, TwoStepMethod,
 };

@@ -93,7 +93,7 @@ wait "$app_pid" 2>/dev/null || true
 # The menu bar panel, opened alone.
 export RBW_DESKTOP_DEMO=unlocked,big,panel$demo
 x11_launch "$binary"
-x11_window '^rbw-desktop$'
+x11_window '^rbw Desktop$'
 sleep 3
 
 start=$(mark)

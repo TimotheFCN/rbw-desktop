@@ -32,17 +32,28 @@ impl Wait {
     }
 }
 
+/// Where the packages put the `rbw` and `rbw-agent` that come with the app,
+/// from the folder above the one of its executable: the bundle's
+/// `Contents/Helpers` on macOS, `libexec/rbw-desktop` beside `bin`
+/// elsewhere. Neither is on `PATH`, so they never take the place of the
+/// `rbw` a terminal runs.
+const BUNDLED: &str = if cfg!(target_os = "macos") {
+    "Helpers"
+} else {
+    "libexec/rbw-desktop"
+};
+
 pub struct Rbw {
     path: PathBuf,
-    // the rbw-agent next to rbw, when rbw-desktop bundles both
+    // the rbw-agent next to rbw, as the app's packages bundle both
     agent: Option<PathBuf>,
 }
 
 impl Rbw {
     /// Finds an `rbw` that is recent enough: the one in `RBW_DESKTOP_RBW`,
     /// else the one on `PATH`, which the command line runs too, else the
-    /// one next to this program. With the last, it also returns the older
-    /// one on `PATH`, which would restart the account's agent.
+    /// one bundled with this program. With the last, it also returns the
+    /// older one on `PATH`, which would restart the account's agent.
     pub fn find() -> Result<(Self, Option<OutdatedRbw>)> {
         if let Some(path) = std::env::var_os(RBW_ENV).filter(|path| !path.is_empty()) {
             return Ok((Self::checked(PathBuf::from(path))?, None));
@@ -52,9 +63,12 @@ impl Rbw {
                 .map(|dir| dir.join("rbw"))
                 .find(|path| path.is_file())
         });
+        // resolved: a link to the executable, such as one in a folder on
+        // PATH, leads to where the app was unpacked
         let bundled = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
             .ok()
-            .map(|exe| exe.with_file_name("rbw"))
+            .and_then(|exe| Some(exe.parent()?.parent()?.join(BUNDLED).join("rbw")))
             .filter(|path| path.is_file());
         choose(
             installed.map(Self::at),
@@ -444,9 +458,9 @@ mod tests {
     #[test]
     fn prefers_the_rbw_on_path_and_says_when_it_is_too_old() {
         let installed = || Some(Rbw::at(PathBuf::from("/usr/bin/rbw")));
-        let bundled = || Some(Rbw::at(PathBuf::from("/opt/rbw-desktop/rbw")));
+        let bundled = || Some(Rbw::at(PathBuf::from("/usr/libexec/rbw-desktop/rbw")));
         let versions = |on_path: &'static str, next_to_app: &'static str| {
-            move |rbw: &Rbw| match rbw.path.starts_with("/usr") {
+            move |rbw: &Rbw| match rbw.path.starts_with("/usr/bin") {
                 true if on_path.is_empty() => Err(Error::Other("broken".into())),
                 true => Ok(Version::of(on_path)),
                 false => Ok(Version::of(next_to_app)),
@@ -457,7 +471,7 @@ mod tests {
                 .map(|(rbw, outdated)| (rbw.path, outdated.map(|rbw| rbw.version)))
         };
         let usr = PathBuf::from("/usr/bin/rbw");
-        let opt = PathBuf::from("/opt/rbw-desktop/rbw");
+        let libexec = PathBuf::from("/usr/libexec/rbw-desktop/rbw");
 
         assert_eq!(
             chosen(installed(), bundled(), "rbw-ng 1.19.0", "rbw-ng 1.20.0"),
@@ -465,19 +479,19 @@ mod tests {
         );
         assert_eq!(
             chosen(installed(), bundled(), "rbw-ng 1.18.1", "rbw-ng 1.19.0"),
-            Ok((opt.clone(), Some("1.18.1".to_string())))
+            Ok((libexec.clone(), Some("1.18.1".to_string())))
         );
         assert_eq!(
             chosen(installed(), bundled(), "rbw 1.13.2", "rbw-ng 1.19.0"),
-            Ok((opt.clone(), Some("rbw 1.13.2".to_string())))
+            Ok((libexec.clone(), Some("rbw 1.13.2".to_string())))
         );
         assert_eq!(
             chosen(installed(), bundled(), "", "rbw-ng 1.19.0"),
-            Ok((opt.clone(), None))
+            Ok((libexec.clone(), None))
         );
         assert_eq!(
             chosen(None, bundled(), "", "rbw-ng 1.19.0"),
-            Ok((opt, None))
+            Ok((libexec, None))
         );
         assert_eq!(
             chosen(installed(), None, "rbw-ng 1.18.1", ""),

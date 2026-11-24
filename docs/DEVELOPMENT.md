@@ -15,8 +15,8 @@ reduced motion). Nothing from the styled `gpui-component` layer is used. The
 workspace names the dependency `gpui`, because GPUI's macros expand to
 `gpui::…` paths.
 
-The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, next to the
-app, or on `PATH`. When it is missing or too old the main window says so
+The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, on `PATH`, or
+bundled with the app (`crates/core/README.md` says where). When it is missing or too old the main window says so
 and offers to look again (`backend::connect`, `crate::start`).
 
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead

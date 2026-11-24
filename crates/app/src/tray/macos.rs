@@ -9,6 +9,8 @@ use objc2_foundation::MainThreadMarker;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use rbw_desktop_core::APP_NAME;
+
 use super::Event;
 use crate::panel::Anchor;
 
@@ -37,7 +39,7 @@ impl Item {
         let image = template(svg, cx).ok_or("the icon can't be drawn")?;
         let open = MenuItem::with_id("open-vault", "Open Vault", true, None);
         let lock = MenuItem::with_id("lock", "Lock", false, None);
-        let quit = MenuItem::with_id("quit", "Quit rbw-desktop", true, None);
+        let quit = MenuItem::with_id("quit", format!("Quit {APP_NAME}"), true, None);
         let menu = Menu::new();
         menu.append_items(&[&open, &lock, &PredefinedMenuItem::separator(), &quit])
             .map_err(|error| error.to_string())?;
@@ -67,7 +69,7 @@ impl Item {
             .with_icon_templated(image)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip("rbw-desktop")
+            .with_tooltip(APP_NAME)
             .build()
             .map_err(|error| error.to_string())?;
         Ok(Self { icon, lock })

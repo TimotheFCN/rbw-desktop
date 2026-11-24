@@ -12,10 +12,12 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding,
     ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
-    Window, actions, div, point, prelude::FluentBuilder as _, px, size, uniform_list,
+    Window, WindowOptions, actions, div, point, prelude::FluentBuilder as _, px, size,
+    uniform_list,
 };
 use rbw_desktop_core::{
-    Account, AccountId, Error, ItemContent, ItemId, ItemKind, ItemSummary, LockState, Secret,
+    APP_ID, APP_NAME, Account, AccountId, Error, ItemContent, ItemId, ItemKind, ItemSummary,
+    LockState, Secret,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, ToastSlot, button, chrome, icon, list_row, motion,
@@ -114,7 +116,10 @@ pub fn open(anchor: Anchor, cx: &mut App) {
     if !backend::ready(cx) || cx.global::<PanelWindow>().window.is_some() {
         return;
     }
-    let options = chrome::panel_options("rbw-desktop", SIZE, origin(anchor, cx), cx);
+    let options = WindowOptions {
+        app_id: Some(APP_ID.into()),
+        ..chrome::panel_options(APP_NAME, SIZE, origin(anchor, cx), cx)
+    };
     match gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| QuickPanel::new(window, cx))
     }) {

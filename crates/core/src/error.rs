@@ -65,7 +65,7 @@ pub enum Error {
     Timeout,
     #[error("rbw is not installed")]
     RbwNotFound,
-    #[error("rbw {found} is too old; rbw-desktop needs {required} or later")]
+    #[error("rbw {found} is too old; the app needs rbw-ng {required} or later")]
     RbwTooOld { found: String, required: String },
     #[error("{0}")]
     Other(String),

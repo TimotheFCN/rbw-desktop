@@ -2,7 +2,7 @@
 //! lives, and whether the rbw command line needs updating.
 
 use gpui::{Context, IntoElement, ParentElement as _, Render, Styled as _, Window, div, px};
-use rbw_desktop_core::OutdatedRbw;
+use rbw_desktop_core::{APP_NAME, OutdatedRbw};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, app_icon, button, screen_title, setting_row, settings_group,
 };
@@ -44,7 +44,7 @@ impl AboutPage {
 /// What to do about an older rbw command line, in plain words.
 fn outdated_note(outdated: &OutdatedRbw) -> String {
     format!(
-        "The rbw command line at {} is too old ({}), so rbw-desktop uses its own. \
+        "The rbw command line at {} is too old ({}), so {APP_NAME} uses its own. \
          Update it: while the two differ, each locks your vault whenever the other is used.",
         outdated.path.display(),
         outdated.version.trim(),
@@ -67,7 +67,7 @@ impl Render for AboutPage {
                     .flex_col()
                     .items_center()
                     .child(app_icon(cx))
-                    .child(screen_title("rbw-desktop").mt(px(12.)))
+                    .child(screen_title(APP_NAME).mt(px(12.)))
                     .child(
                         div()
                             .mt(px(2.))

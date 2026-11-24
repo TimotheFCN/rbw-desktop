@@ -160,12 +160,16 @@ fn write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()>
     std::fs::rename(&partial, path)
 }
 
-// The app's folders. On Linux, rbw's profiles take the folders named rbw-
-// and a name, so "rbw-desktop" would belong to a profile called desktop,
-// whose rbw purge --all would remove them. The space makes it rbwdesktop;
-// macOS names them after the whole id.
+// The app's folders, named after APP_ID's parts: macOS names them after the
+// whole id, Linux after the last part in lower case, rbwdesktop. (rbw's
+// profiles take the folders named rbw- and a name, so "rbw-desktop" would
+// belong to a profile called desktop, whose rbw purge --all would remove
+// them.)
+const APP_ID_PARTS: [&str; 3] = ["io.github", "timothefcn", "RbwDesktop"];
+
 fn app_dirs() -> Result<directories::ProjectDirs> {
-    directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw desktop")
+    let [qualifier, organization, application] = APP_ID_PARTS;
+    directories::ProjectDirs::from(qualifier, organization, application)
         .ok_or_else(|| Error::Other("this system has no home folder".into()))
 }
 
@@ -511,7 +515,7 @@ impl Backend for RbwBackend {
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item> {
         self.item_json(account, item)?
             .item()
-            .ok_or_else(|| Error::Other("the item is of a kind rbw-desktop doesn't know".into()))
+            .ok_or_else(|| Error::Other("the item is of a kind this version doesn't know".into()))
     }
 
     fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
@@ -834,6 +838,15 @@ impl Backend for RbwBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folders_are_named_after_the_app_id() {
+        assert_eq!(APP_ID_PARTS.join("."), crate::APP_ID);
+        // directories' name on Linux
+        let linux = APP_ID_PARTS[2].to_lowercase();
+        assert_eq!(linux, "rbwdesktop");
+        assert!(!linux.starts_with("rbw-"));
+    }
 
     #[test]
     fn preferences_from_before_the_generator_take_its_defaults() {

@@ -22,7 +22,7 @@ mod window;
 use std::sync::Arc;
 
 use gpui::{App, KeyBinding, Menu, MenuItem, QuitMode, actions};
-use rbw_desktop_core::Backend;
+use rbw_desktop_core::{APP_NAME, Backend};
 
 /// A key binding with the platform's command modifier: Command on macOS,
 /// Control elsewhere.
@@ -120,12 +120,12 @@ pub fn start(backend: Arc<dyn Backend>, cx: &mut App) {
 
 fn menus() -> Vec<Menu> {
     vec![
-        Menu::new("rbw-desktop").items([
-            MenuItem::action("About rbw-desktop", settings::About),
+        Menu::new(APP_NAME).items([
+            MenuItem::action(format!("About {APP_NAME}"), settings::About),
             MenuItem::separator(),
             MenuItem::action("Settings…", settings::OpenSettings),
             MenuItem::separator(),
-            MenuItem::action("Quit rbw-desktop", Quit),
+            MenuItem::action(format!("Quit {APP_NAME}"), Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("New Item", vault::NewItem),

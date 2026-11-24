@@ -47,7 +47,6 @@ pub fn window_options(
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
         window_min_size: Some(min),
-        app_id: Some("rbw-desktop".into()),
         titlebar: Some(TitlebarOptions {
             title: Some(title.to_string().into()),
             appears_transparent: true,
@@ -112,7 +111,6 @@ pub fn panel_options(
         is_movable: !macos,
         is_resizable: false,
         is_minimizable: false,
-        app_id: Some("rbw-desktop".into()),
         window_background: if macos {
             WindowBackgroundAppearance::Blurred
         } else {

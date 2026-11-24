@@ -5,7 +5,7 @@ use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
-use rbw_desktop_core::ItemKind;
+use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
     glass, menu_item, menu_separator, nav_row, popover, row_focus_ring, section_label,
@@ -49,7 +49,7 @@ impl VaultView {
                 .on_click(Self::main_menu_choice(Box::new(OpenSettings), cx)),
         )
         .child(
-            menu_item("about", "About rbw-desktop")
+            menu_item("about", format!("About {APP_NAME}"))
                 .on_click(Self::main_menu_choice(Box::new(About), cx)),
         );
         div()

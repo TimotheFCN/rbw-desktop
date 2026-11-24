@@ -79,7 +79,8 @@ profile; changing them doesn't lock. Preferences (clipboard clearing, website
 icons, the generator's last options, the menu bar item) are the app's, in
 `preferences.json` in its configuration folder:
 `~/.config/rbwdesktop` on Linux and
-`~/Library/Application Support/io.github.TimotheFCN.rbw-desktop` on macOS.
+`~/Library/Application Support/io.github.timothefcn.RbwDesktop` on macOS
+(`APP_ID`).
 On Linux, `rbw-desktop` would be the folder of an rbw profile called
 `desktop`, which `rbw purge --all` removes. `session_dir` gives the app a
 folder for what lasts as long as the login session, such as a socket.
@@ -171,9 +172,12 @@ pass for an option.
 `rbw --version` says; another program called `rbw`, such as the original
 rbw, doesn't count. It uses the `rbw` in `RBW_DESKTOP_RBW` when that is set.
 Otherwise it prefers the one on `PATH`, which the command line runs too, and
-falls back to the one bundled next to the app's executable only when there is
-none on `PATH` or it is too old. It uses the `rbw-agent` next to the `rbw` it
-picked, when there is one.
+falls back to the one bundled with the app only when there is none on `PATH`
+or it is too old. The packages bundle `rbw` and `rbw-agent` off `PATH`, from
+the folder above the app's executable: in `libexec/rbw-desktop` on Linux
+(`/usr/libexec/rbw-desktop` beside `/usr/bin/rbw-desktop`) and in the
+bundle's `Contents/Helpers` on macOS. It uses the `rbw-agent` next to the
+`rbw` it picked, when there is one.
 
 The reason is the agent: each profile has one `rbw-agent`, and `rbw` restarts
 an agent of another version, which locks the vault. An app and a command line

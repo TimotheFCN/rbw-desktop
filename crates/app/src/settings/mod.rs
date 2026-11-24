@@ -13,9 +13,10 @@ use gpui::base::Button as BaseButton;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, actions, div,
+    StatefulInteractiveElement as _, Styled as _, Window, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, size,
 };
+use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
     ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, icon, motion, nav_row,
     row_focus_ring,
@@ -108,7 +109,10 @@ pub fn open(page: Option<Page>, cx: &mut App) {
         Look::MacOs => size(px(700.), px(500.)),
         Look::Gnome => size(px(640.), px(560.)),
     };
-    let options = chrome::window_options(title(cx), window_size, size(px(560.), px(400.)), cx);
+    let options = WindowOptions {
+        app_id: Some(APP_ID.into()),
+        ..chrome::window_options(title(cx), window_size, size(px(560.), px(400.)), cx)
+    };
     let opened = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| SettingsWindow::new(page.unwrap_or(Page::General), window, cx))
     });

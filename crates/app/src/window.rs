@@ -7,9 +7,12 @@
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle,
     Global, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px, size,
+    Subscription, Task, Window, WindowOptions, actions, div, point, prelude::FluentBuilder as _,
+    px, size,
 };
-use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
+use rbw_desktop_core::{
+    APP_ID, APP_NAME, Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW,
+};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion, screen_title,
 };
@@ -39,12 +42,15 @@ const RBW_NG: &str = "https://github.com/TimotheFCN/rbw-ng";
 /// rbw not being installed; the window then says so and offers to look
 /// again.
 pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, Entity<MainWindow>)> {
-    let options = chrome::window_options(
-        "Vault",
-        size(px(880.), px(580.)),
-        size(px(680.), px(440.)),
-        cx,
-    );
+    let options = WindowOptions {
+        app_id: Some(APP_ID.into()),
+        ..chrome::window_options(
+            "Vault",
+            size(px(880.), px(580.)),
+            size(px(680.), px(440.)),
+            cx,
+        )
+    };
     // gpui-base's Root around the view gives the window Tab and Shift-Tab.
     let window = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| MainWindow::new(missing, window, cx))
@@ -486,14 +492,15 @@ impl MainWindow {
         let (title, message) = match error {
             Error::RbwNotFound => (
                 "rbw isn’t installed".to_string(),
-                "rbw-desktop keeps your vault with rbw-ng, the Bitwarden client it is built \
-                 on. Install it, then try again."
-                    .to_string(),
+                format!(
+                    "{APP_NAME} keeps your vault with rbw-ng, the Bitwarden client it is \
+                     built on. Install it, then try again."
+                ),
             ),
             Error::RbwTooOld { found, required } => (
                 "rbw needs updating".to_string(),
                 format!(
-                    "The rbw on this computer is version {found}. rbw-desktop needs rbw-ng \
+                    "The rbw on this computer is version {found}. {APP_NAME} needs rbw-ng \
                      {required} or later."
                 ),
             ),
