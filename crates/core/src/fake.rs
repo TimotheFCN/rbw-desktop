@@ -14,10 +14,10 @@ use rand::Rng as _;
 use rand::seq::IndexedRandom as _;
 
 use crate::{
-    Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
-    LoginCode, OutdatedRbw, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary,
-    SshService, SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
+    Account, AccountId, AccountSettings, Backend, Error, Folder, FolderId, GeneratorOptions,
+    IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState, LoginCode,
+    OutdatedRbw, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
+    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
 
 /// A call to the backend, to make that one fail or wait.
@@ -549,34 +549,35 @@ fn demo_icon(host: &str) -> Option<WebsiteIcon> {
     })
 }
 
+// As rbw does: a password that must hold each class is drawn again until
+// it does.
 fn generate(options: &GeneratorOptions) -> Result<Secret> {
-    const SYMBOLS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-    const DIGITS: &str = "0123456789";
-    const LETTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const UNAMBIGUOUS: &str = "34678abcdefhjkmnpqrtuwxy";
+    if !options.makes_anything() {
+        return Err(Error::Other("these options make nothing".into()));
+    }
     let mut rng = rand::rng();
     let value = match *options {
         GeneratorOptions::Password { length, characters } => {
-            let alphabet: Vec<char> = match characters {
-                Characters::All => [SYMBOLS, DIGITS, LETTERS].concat(),
-                Characters::NoSymbols => [DIGITS, LETTERS].concat(),
-                Characters::DigitsOnly => DIGITS.to_string(),
-                Characters::Unambiguous => UNAMBIGUOUS.to_string(),
+            let classes = characters.classes();
+            let alphabet: Vec<char> = classes.concat().chars().collect();
+            loop {
+                let value: String = (0..length)
+                    .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                    .collect();
+                if !characters.each_class()
+                    || classes
+                        .iter()
+                        .all(|class| value.chars().any(|c| class.contains(c)))
+                {
+                    break value;
+                }
             }
-            .chars()
-            .collect();
-            (0..length)
-                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
-                .collect()
         }
         GeneratorOptions::Passphrase { words } => (0..words)
             .filter_map(|_| demo::WORDS.choose(&mut rng).copied())
             .collect::<Vec<_>>()
             .join(" "),
     };
-    if value.is_empty() {
-        return Err(Error::Other("nothing to generate".into()));
-    }
     Ok(Secret::new(value))
 }
 
@@ -1026,7 +1027,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FieldValue, ItemKind, Login};
+    use crate::{CharacterClasses, Characters, FieldValue, ItemKind, Login};
 
     fn personal() -> AccountId {
         AccountId::new(demo::PERSONAL)
@@ -1306,6 +1307,41 @@ mod tests {
             .generate(&GeneratorOptions::Passphrase { words: 5 })
             .unwrap();
         assert_eq!(phrase.expose().split(' ').count(), 5);
+    }
+
+    #[test]
+    fn generated_passwords_follow_their_classes() {
+        let fake = FakeBackend::new();
+        let classes = |digits, symbols, each_class| {
+            Characters::Classes(CharacterClasses {
+                uppercase: true,
+                lowercase: true,
+                digits,
+                symbols,
+                each_class,
+            })
+        };
+        let generate =
+            |length, characters| fake.generate(&GeneratorOptions::Password { length, characters });
+        for _ in 0..50 {
+            let letters = generate(30, classes(false, false, false)).unwrap();
+            assert!(letters.expose().chars().all(|c| c.is_ascii_alphabetic()));
+            let no_digits = generate(30, classes(false, true, false)).unwrap();
+            assert!(!no_digits.expose().chars().any(|c| c.is_ascii_digit()));
+            let each = generate(4, classes(true, true, true)).unwrap();
+            let each = each.expose();
+            for holds in [
+                char::is_ascii_uppercase,
+                char::is_ascii_lowercase,
+                char::is_ascii_digit,
+                char::is_ascii_punctuation,
+            ] {
+                assert!(each.chars().any(|c| holds(&c)), "{each}");
+            }
+        }
+        // as rbw refuses them
+        assert!(generate(3, classes(true, true, true)).is_err());
+        assert!(generate(0, Characters::All).is_err());
     }
 
     #[test]

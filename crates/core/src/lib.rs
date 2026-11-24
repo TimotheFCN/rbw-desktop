@@ -24,7 +24,7 @@ pub use account::{
 };
 pub use error::{Error, Result};
 pub use fake::{FakeBackend, Operation};
-pub use generator::{Characters, GeneratorOptions, Strength};
+pub use generator::{CharacterClasses, Characters, GeneratorOptions, Strength};
 pub use icon::{IconFormat, WebsiteIcon};
 pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
@@ -165,7 +165,8 @@ pub trait Backend: Send + Sync {
     fn item_used(&self, account: &AccountId, item: &ItemId) -> Result<()>;
 
     /// A new password or passphrase. It needs no account, and works while
-    /// every account is locked.
+    /// every account is locked. Options that make nothing fail
+    /// ([`GeneratorOptions::makes_anything`]).
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret>;
 
     fn account_settings(&self, account: &AccountId) -> Result<AccountSettings>;

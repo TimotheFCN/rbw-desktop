@@ -92,6 +92,11 @@ in `recent.json` next to the preferences. Removing the account forgets them.
 guess, from the options alone: rbw draws each character or word at random,
 so the bits of randomness are known exactly (`entropy`), whatever the
 result looks like. Under 45 bits is weak, 60 and over strong.
+`Characters::Classes` chooses the classes of characters one by one, as
+Bitwarden's generator does, and with `each_class` the password holds one of
+each: rbw draws it uniformly from all the passwords that do, and `entropy`
+counts exactly those. Options that make nothing, such as no class or fewer
+characters than classes to hold, fail (`makes_anything` says so before).
 
 `website_icon` gives a login's website icon, to show instead of its letter.
 It picks the website as the official clients do (the first one, when it is a
@@ -150,7 +155,7 @@ pass for an option.
 | `folders`, `create_folder` | `rbw folder list`, `rbw folder create NAME` |
 | `verification_code` | `rbw item code ID` |
 | `website_icon` | `rbw icon HOST`, then the cache |
-| `generate` | `rbw generate LENGTH [--no-symbols\|--only-numbers\|--nonconfusables\|--diceware]` |
+| `generate` | `rbw generate LENGTH`, with `--no-uppercase`, `--no-lowercase`, `--no-numbers`, `--no-symbols` and `--each-class`, or `--only-numbers`, `--nonconfusables` or `--diceware` |
 | `recent_items`, `item_used` | none: `recent.json` |
 | `account_settings`, `set_account_settings` | `rbw config show`, `rbw config set` |
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |

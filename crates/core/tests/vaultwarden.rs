@@ -5,9 +5,9 @@
 use std::time::{Duration, SystemTime};
 
 use rbw_desktop_core::{
-    Backend, Card, Characters, CustomField, Error, FieldValue, FolderId, GeneratorOptions,
-    Identity, ItemContent, ItemData, ItemKind, LockState, Login, LoginCode, Preferences,
-    RbwBackend, Secret, Server, SshKey, TwoStepMethod, UriMatch, Website,
+    Backend, Card, CharacterClasses, Characters, CustomField, Error, FieldValue, FolderId,
+    GeneratorOptions, Identity, ItemContent, ItemData, ItemKind, LockState, Login, LoginCode,
+    Preferences, RbwBackend, Secret, Server, SshKey, TwoStepMethod, UriMatch, Website,
 };
 
 // an unencrypted ed25519 key, made for this test
@@ -242,6 +242,43 @@ fn against_vaultwarden() {
         .generate(&GeneratorOptions::Passphrase { words: 4 })
         .unwrap();
     assert_eq!(phrase.expose().split(' ').count(), 4);
+    let letters_and_symbols = |each_class| {
+        Characters::Classes(CharacterClasses {
+            uppercase: true,
+            lowercase: true,
+            digits: false,
+            symbols: true,
+            each_class,
+        })
+    };
+    for _ in 0..10 {
+        let generated = backend
+            .generate(&GeneratorOptions::Password {
+                length: 3,
+                characters: letters_and_symbols(true),
+            })
+            .unwrap();
+        let generated = generated.expose();
+        assert!(
+            !generated.chars().any(|c| c.is_ascii_digit()),
+            "{generated}"
+        );
+        for holds in [
+            char::is_ascii_uppercase,
+            char::is_ascii_lowercase,
+            char::is_ascii_punctuation,
+        ] {
+            assert!(generated.chars().any(|c| holds(&c)), "{generated}");
+        }
+    }
+    assert!(
+        backend
+            .generate(&GeneratorOptions::Password {
+                length: 2,
+                characters: letters_and_symbols(true),
+            })
+            .is_err()
+    );
 
     // settings, which don't lock
     let mut settings = backend.account_settings(&id).unwrap();

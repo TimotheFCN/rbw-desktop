@@ -17,10 +17,10 @@ pub use process::RBW_ENV;
 use process::{Rbw, Wait};
 
 use crate::{
-    Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode, Preferences,
-    Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode, WebsiteIcon,
-    icon,
+    Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, Error, Folder,
+    FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
+    Preferences, Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode,
+    WebsiteIcon, icon,
 };
 
 /// How many recently used items each account keeps.
@@ -227,6 +227,13 @@ enum CharactersJson {
     NoSymbols,
     DigitsOnly,
     Unambiguous,
+    Classes {
+        uppercase: bool,
+        lowercase: bool,
+        digits: bool,
+        symbols: bool,
+        each_class: bool,
+    },
 }
 
 impl From<GeneratorOptions> for GeneratorJson {
@@ -239,6 +246,13 @@ impl From<GeneratorOptions> for GeneratorJson {
                     Characters::NoSymbols => CharactersJson::NoSymbols,
                     Characters::DigitsOnly => CharactersJson::DigitsOnly,
                     Characters::Unambiguous => CharactersJson::Unambiguous,
+                    Characters::Classes(classes) => CharactersJson::Classes {
+                        uppercase: classes.uppercase,
+                        lowercase: classes.lowercase,
+                        digits: classes.digits,
+                        symbols: classes.symbols,
+                        each_class: classes.each_class,
+                    },
                 },
             },
             GeneratorOptions::Passphrase { words } => GeneratorJson::Passphrase { words },
@@ -256,6 +270,19 @@ impl From<GeneratorJson> for GeneratorOptions {
                     CharactersJson::NoSymbols => Characters::NoSymbols,
                     CharactersJson::DigitsOnly => Characters::DigitsOnly,
                     CharactersJson::Unambiguous => Characters::Unambiguous,
+                    CharactersJson::Classes {
+                        uppercase,
+                        lowercase,
+                        digits,
+                        symbols,
+                        each_class,
+                    } => Characters::Classes(CharacterClasses {
+                        uppercase,
+                        lowercase,
+                        digits,
+                        symbols,
+                        each_class,
+                    }),
                 },
             },
             GeneratorJson::Passphrase { words } => GeneratorOptions::Passphrase { words },
@@ -564,21 +591,34 @@ impl Backend for RbwBackend {
     }
 
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
-        let (length, flag) = match *options {
+        if !options.makes_anything() {
+            return Err(Error::Other("these options make nothing".into()));
+        }
+        let (length, flags) = match *options {
             GeneratorOptions::Password { length, characters } => (
                 length,
                 match characters {
-                    Characters::All => None,
-                    Characters::NoSymbols => Some("--no-symbols"),
-                    Characters::DigitsOnly => Some("--only-numbers"),
-                    Characters::Unambiguous => Some("--nonconfusables"),
+                    Characters::All => vec![],
+                    Characters::NoSymbols => vec!["--no-symbols"],
+                    Characters::DigitsOnly => vec!["--only-numbers"],
+                    Characters::Unambiguous => vec!["--nonconfusables"],
+                    Characters::Classes(classes) => [
+                        (!classes.uppercase, "--no-uppercase"),
+                        (!classes.lowercase, "--no-lowercase"),
+                        (!classes.digits, "--no-numbers"),
+                        (!classes.symbols, "--no-symbols"),
+                        (classes.each_class, "--each-class"),
+                    ]
+                    .into_iter()
+                    .filter_map(|(set, flag)| set.then_some(flag))
+                    .collect(),
                 },
             ),
-            GeneratorOptions::Passphrase { words } => (words, Some("--diceware")),
+            GeneratorOptions::Passphrase { words } => (words, vec!["--diceware"]),
         };
         let length = length.to_string();
         let mut args = vec!["generate", &length];
-        args.extend(flag);
+        args.extend(flags);
         let output = self.rbw.run(None, &args, None, Wait::Local)?;
         let text = std::str::from_utf8(&output)
             .map_err(|_| Error::Other("rbw generated something that isn't text".into()))?;
@@ -748,13 +788,24 @@ mod tests {
         let saved: PreferencesJson =
             serde_json::from_str(r#"{"clipboard_clear": 30, "website_icons": false}"#).unwrap();
         assert!(saved.generator.is_none() && saved.menu_bar.is_none());
-        let options = GeneratorOptions::Password {
-            length: 12,
-            characters: Characters::Unambiguous,
-        };
-        let json = serde_json::to_string(&GeneratorJson::from(options)).unwrap();
-        let back: GeneratorJson = serde_json::from_str(&json).unwrap();
-        assert_eq!(GeneratorOptions::from(back), options);
+        for characters in [
+            Characters::Unambiguous,
+            Characters::Classes(CharacterClasses {
+                uppercase: true,
+                lowercase: false,
+                digits: false,
+                symbols: true,
+                each_class: true,
+            }),
+        ] {
+            let options = GeneratorOptions::Password {
+                length: 12,
+                characters,
+            };
+            let json = serde_json::to_string(&GeneratorJson::from(options)).unwrap();
+            let back: GeneratorJson = serde_json::from_str(&json).unwrap();
+            assert_eq!(GeneratorOptions::from(back), options);
+        }
     }
 
     #[test]
