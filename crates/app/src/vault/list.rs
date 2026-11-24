@@ -5,8 +5,8 @@ use std::ops::Range;
 use gpui::{
     AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
-    StatefulInteractiveElement as _, Styled as _, Window, deferred, div,
-    prelude::FluentBuilder as _, px, relative, uniform_list,
+    StatefulInteractiveElement as _, Styled, Window, div, prelude::FluentBuilder as _, px,
+    relative, uniform_list,
 };
 use rbw_desktop_core::SortOrder;
 use rbw_desktop_ui::{
@@ -32,8 +32,10 @@ const PREFETCH_SCREENS: usize = 2;
 const DIVIDER_REACH: Pixels = px(3.);
 
 impl VaultView {
+    /// The list, taking `share` of the room right of the sidebar.
     pub(super) fn render_list(
         &mut self,
+        share: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -170,20 +172,11 @@ impl VaultView {
                 .child(bar),
         );
 
-        // The list takes its share of the room, between its minimum and its
-        // maximum; a small window shrinks it before the item. Put back, it
-        // settles there.
-        let held = self.dragged_share.is_some();
-        let share = motion::settle("list-share", self.list_share(cx), held, window, cx);
         let only = self.render_only(window, cx);
-        div()
-            .id("list")
+        list_width(share, div().id("list"))
             .key_context("VaultList")
             .track_focus(&self.list_focus)
             .relative()
-            .w(relative(share))
-            .min_w(MIN_WIDTH)
-            .max_w(relative(MAX_LIST_SHARE))
             .h_full()
             .flex()
             .flex_col()
@@ -193,7 +186,6 @@ impl VaultView {
             .child(toolbar)
             .children(only)
             .child(body)
-            .child(self.render_divider(cx))
             .into_any_element()
     }
 }
@@ -214,42 +206,48 @@ impl VaultView {
     }
 
     /// The divider between the list and the item: dragged, it moves the
-    /// list's edge; a double-click puts it back. It straddles the edge,
-    /// drawn last, so that neither the item nor the list's scroll bar
-    /// takes the pointer from it.
-    fn render_divider(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// list's edge; a double-click puts it back. It is drawn over both
+    /// panes, after them, so that neither the item nor the list's scroll
+    /// bar takes the pointer from it, and under anything that opens over
+    /// the window, such as a sheet or a menu.
+    pub(super) fn render_divider(&self, share: f32, cx: &mut Context<Self>) -> AnyElement {
         // A line that shows it can be moved, under the pointer and while
         // it is dragged.
         let line = cx.theme().colors.text_tertiary.opacity(0.45);
         let dragged = self.dragged_share.is_some();
-        deferred(
-            div()
-                .id("list-divider")
-                .group("list-divider")
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right(-DIVIDER_REACH)
-                .w(DIVIDER_REACH * 2.)
-                .flex()
-                .justify_center()
-                .child(
-                    div()
-                        .w(px(2.))
-                        .h_full()
-                        .when(dragged, |d| d.bg(line))
-                        .group_hover("list-divider", move |s| s.bg(line)),
-                )
-                .cursor(CursorStyle::ResizeLeftRight)
-                .block_mouse_except_scroll()
-                .on_drag(ListDivider, |_, _, _, cx| cx.new(|_| EmptyView))
-                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                    if event.click_count() == 2 {
-                        this.reset_list_share(cx);
-                    }
-                })),
-        )
-        .into_any_element()
+        let strip = div()
+            .id("list-divider")
+            .group("list-divider")
+            .flex_none()
+            .ml(-DIVIDER_REACH)
+            .w(DIVIDER_REACH * 2.)
+            .h_full()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(2.))
+                    .h_full()
+                    .when(dragged, |d| d.bg(line))
+                    .group_hover("list-divider", move |s| s.bg(line)),
+            )
+            .cursor(CursorStyle::ResizeLeftRight)
+            .block_mouse_except_scroll()
+            .on_drag(ListDivider, |_, _, _, cx| cx.new(|_| EmptyView))
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if event.click_count() == 2 {
+                    this.reset_list_share(cx);
+                }
+            }));
+        // Room as wide as the list, which takes no pointer, then the strip
+        // across its edge.
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .child(list_width(share, div().flex_none()))
+            .child(strip)
+            .into_any_element()
     }
 
     /// The menu next to the search field: how the list is sorted, and what
@@ -463,6 +461,15 @@ impl VaultView {
             .child(popover)
             .into_any_element()
     }
+}
+
+/// The list's width: its share of the panes' row, between its minimum
+/// and its maximum, so that a small window shrinks it before the item.
+fn list_width<E: Styled>(share: f32, element: E) -> E {
+    element
+        .w(relative(share))
+        .min_w(MIN_WIDTH)
+        .max_w(relative(MAX_LIST_SHARE))
 }
 
 fn message(text: &'static str, color: gpui::Hsla) -> AnyElement {

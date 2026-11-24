@@ -429,9 +429,10 @@ after it in its parent. Their looks and timing come from `scroll::style`,
 which the theme projects onto gpui-base's scrollbar; popovers scroll on
 their own once taller than the window.
 
-**The list's divider** (`vault/list.rs`) is a deferred strip that
-straddles the list's edge, above the item and the list's scroll bar, and
-drags with GPUI's drag API: the panes' row follows `DragMoveEvent`s and
+**The list's divider** (`vault/list.rs`) is a strip that straddles the
+list's edge, drawn over both panes after them, so that it is above the item
+and the list's scroll bar and under any sheet or menu, and drags with
+GPUI's drag API: the panes' row follows `DragMoveEvent`s and
 the list's share is saved to the preferences once the divider rests. The
 list is a fraction of the row between a minimum and a maximum, so the
 layout follows the window without a frame's lag.
@@ -515,6 +516,9 @@ Escape in the vault empties the search, then leaves its field.
   doesn't wrap; give a sentence `flex_1().min_w_0()` in a full-width row.
 - A deferred popover's `on_mouse_down_out` runs before the elements under
   it; it stops propagation so a click outside a menu only closes it.
+- `deferred` draws above everything that isn't, sheets included, and takes
+  the pointer there too. Keep it for popovers; to draw a part of the layout
+  over its neighbours, make it a later sibling instead.
 - `svg()` paints only with its own text colour. `ui::Icon` falls back to the
   inherited one.
 - `Hsla::opacity(x)` multiplies the alpha; don't pass `color.a * x`.

@@ -889,7 +889,11 @@ impl Focusable for VaultView {
 impl Render for VaultView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.render_sidebar(window, cx);
-        let list = self.render_list(window, cx);
+        // Put back, the list's edge settles where it starts.
+        let held = self.dragged_share.is_some();
+        let share = motion::settle("list-share", self.list_share(cx), held, window, cx);
+        let list = self.render_list(share, window, cx);
+        let divider = self.render_divider(share, cx);
         let sheet = self.sheet.render(px(360.), window, cx);
         let toast = self.toast.render(window, cx);
         // The sheet is outside the vault's key context, so that none of the
@@ -920,13 +924,15 @@ impl Render for VaultView {
                     .child(
                         div()
                             .id("panes")
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .h_full()
                             .flex()
                             .on_drag_move(cx.listener(Self::drag_divider))
                             .child(list)
-                            .child(self.detail.clone()),
+                            .child(self.detail.clone())
+                            .child(divider),
                     )
                     .children(self.render_context_menu(cx)),
             )
