@@ -526,6 +526,8 @@ pub struct ListRow {
     highlight: Option<Highlight>,
     /// Whether the selection is on this row without a list to slide in.
     here: bool,
+    /// Whether the pointer is on the row, as its list tells.
+    hovered: bool,
     accessibility_label: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
@@ -557,6 +559,7 @@ pub fn list_row(
         focused: false,
         highlight: None,
         here: selected,
+        hovered: false,
         accessibility_label: None,
         on_click: None,
     }
@@ -605,6 +608,15 @@ impl ListRow {
     pub fn highlight(mut self, highlight: Option<Highlight>) -> Self {
         self.highlight = highlight;
         self.here = false;
+        self
+    }
+
+    /// The pointer is on the row: it shows a hover unless it is selected.
+    /// The list tells, from [`follow_pointer`](crate::follow_pointer),
+    /// rather than the row from GPUI's hover, which lags behind a list
+    /// that scrolls.
+    pub fn hovered(mut self, hovered: bool) -> Self {
+        self.hovered = hovered;
         self
     }
 
@@ -695,8 +707,8 @@ impl RenderOnce for ListRow {
             .h(height)
             .px(if self.compact { px(7.) } else { px(9.) })
             .rounded(radius)
-            .when(!self.selected && !self.compact, |b| {
-                b.hover(move |s| s.bg(hover))
+            .when(self.hovered && !self.selected && !self.compact, |b| {
+                b.bg(hover)
             })
             .when_some(highlight, |b, highlight| {
                 b.child(highlight.render(radius, selection))

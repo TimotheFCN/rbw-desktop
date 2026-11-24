@@ -18,7 +18,7 @@ use gpui::{
 use rbw_desktop_core::{
     Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary, SortOrder,
 };
-use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot, motion};
+use rbw_desktop_ui::{Confirmation, ListPointer, SheetSlot, ToastSlot, motion};
 
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
@@ -243,6 +243,11 @@ pub struct VaultView {
     toast: ToastSlot,
     list_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    list_pointer: ListPointer,
+    /// The row the pointer is on, as the list last told.
+    pointer_row: Option<usize>,
+    /// The row drawn with the pointer's hover.
+    hover_drawn: Option<usize>,
     context_menu: Option<ContextMenu>,
     /// The item something was copied of from its context menu, whose row
     /// says so for a moment.
@@ -321,6 +326,9 @@ impl VaultView {
             toast: ToastSlot::default(),
             list_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
+            list_pointer: ListPointer::default(),
+            pointer_row: None,
+            hover_drawn: None,
             context_menu: None,
             copied: None,
             copied_timer: Task::ready(()),

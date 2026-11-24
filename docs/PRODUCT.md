@@ -145,7 +145,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   Two tabs: the items used last, with a search through the whole vault,
   and the generator. One row is selected, as in Spotlight: the arrow keys
   move it, and so does the pointer when it moves onto a row (not when the
-  panel opens under it or the list scrolls under it). A click or Return
+  panel opens under it or the list scrolls under it; moved during a scroll,
+  once the scroll stops). A click or Return
   copies what the selected item is for: a login's password, a card's
   number, a note's text, an identity's name, an SSH key's public key. The
   selected row has a button for each thing it can copy (a login's

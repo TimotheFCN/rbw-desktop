@@ -295,10 +295,22 @@ main window chose last (`choose`), else the first unlocked, else the
 first. The panel and the menu bar item follow it.
 
 **The panel's selection** (`panel::Selection`) is one row for the keys
-and the pointer: a row's `on_mouse_move` selects it only when the pointer
-is somewhere else than it was last seen, so that a panel opening under a
-resting pointer, or a list scrolling under it, leaves the selection where
-the keys put it. Its rows and their buttons don't take the keyboard
+and the pointer: the row under the pointer is selected only when the
+pointer is somewhere else than it was last seen, so that a panel opening
+under a resting pointer, or a list scrolling under it, leaves the selection
+where the keys put it.
+
+**The pointer's row in a list.** The item list's hover and the panel's
+selection don't come from GPUI's hover of each row, which GPUI reads from
+where the frame before drew the rows: a list scrolling while the pointer
+moves has moved them since, and the row flips between neighbours.
+`follow_pointer` (`crates/ui/src/pointer.rs`) tells the list the row under
+the pointer from where the pointer is and where the list has scrolled to.
+While the list scrolls it holds still, as native lists do: the item list
+hides its hover and the panel's selection stays on its row; once the wheel
+has rested for 100 ms it tells the row it left under the pointer, once. A
+wheel event that only scrolls doesn't update the view, which would draw
+every row of the list again for it. Its rows and their buttons don't take the keyboard
 (`ListRow::compact`, `button(…).focusable(false)`), which stays in the
 search field, so that Return always acts on the selection. `hint` says what
 the line under the list names; both are tested without a display.

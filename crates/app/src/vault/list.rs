@@ -11,8 +11,9 @@ use gpui::{
 };
 use rbw_desktop_core::SortOrder;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, Highlight, IconName, Look, Opening, ROW_HEIGHT, button, chrome,
-    list_row, menu_item, menu_separator, motion, popover, scrollbar, search_field, section_label,
+    ActiveTheme as _, ButtonStyle, Highlight, IconName, ListRows, Look, Opening, ROW_HEIGHT,
+    button, chrome, follow_pointer, list_row, menu_item, menu_separator, motion, popover,
+    scrollbar, search_field, section_label,
 };
 
 use super::{ListDivider, MAX_LIST_SHARE, NewItem, Only, ShowGenerator, VaultView};
@@ -78,6 +79,10 @@ impl VaultView {
             cx,
         );
 
+        // Keys hide the pointer's hover until it moves, as GPUI's.
+        self.hover_drawn = self
+            .pointer_row
+            .filter(|_| !window.last_input_was_keyboard());
         let jump = std::mem::take(&mut self.highlight_jumps);
         self.highlight_at = self.selected_index().map(|index| {
             let on_screen = motion::rows_on_screen(&self.drew, index);
@@ -100,6 +105,7 @@ impl VaultView {
                             let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
                             let item = items[this.visible[position]].clone();
                             let selected = this.selected.as_ref() == Some(&item.id);
+                            let hovered = this.hover_drawn == Some(position);
                             let highlight = this.highlight_at.and_then(|at| {
                                 Highlight::at(at - position as f32, ROW_HEIGHT + ROW_GAP)
                             });
@@ -111,11 +117,6 @@ impl VaultView {
                                 .id(ElementId::Name(format!("row-{}", item.id.0).into()))
                                 .px(px(7.))
                                 .pb(ROW_GAP)
-                                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                                    if *hovered {
-                                        this.pointer_rests(position, cx);
-                                    }
-                                }))
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -135,6 +136,7 @@ impl VaultView {
                                         selected,
                                     )
                                     .icon(icon)
+                                    .hovered(hovered)
                                     .highlight(highlight)
                                     .copied(copied)
                                     .in_focusable_list(list_focused)
@@ -162,6 +164,20 @@ impl VaultView {
             .flex_1()
             .into_any_element(),
         };
+        let rows = ListRows {
+            count: self.visible.len(),
+            height: ROW_HEIGHT,
+            pitch: ROW_HEIGHT + ROW_GAP,
+        };
+        let body = follow_pointer(
+            div().id("list-rows").flex_1().min_h_0().flex().flex_col(),
+            &self.list_pointer,
+            &self.list_scroll,
+            rows,
+            Self::pointer_on_row,
+            cx,
+        )
+        .child(body);
         let bar = scrollbar("items-bar", &self.list_scroll, cx);
         // Another choice in the sidebar or the menu shows other items at
         // once, their icons with them: a fade over the whole list would
@@ -205,6 +221,18 @@ impl VaultView {
         let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
         let rows = self.visible[around].iter().map(|&index| &items[index]);
         Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&self.account.id, rows, cx));
+    }
+
+    /// The pointer is on `row` of the list, or on none: the row shows it.
+    fn pointer_on_row(&mut self, row: Option<usize>, _: &mut Window, cx: &mut Context<Self>) {
+        if row != self.hover_drawn {
+            cx.notify();
+        }
+        if row != std::mem::replace(&mut self.pointer_row, row)
+            && let Some(row) = row
+        {
+            self.pointer_rests(row, cx);
+        }
     }
 
     /// The pointer came onto a row: once it rests there, the row's item is

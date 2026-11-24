@@ -18,6 +18,7 @@ mod material;
 mod menu;
 pub mod motion;
 mod platform;
+mod pointer;
 mod rows;
 mod scroll;
 mod select;
@@ -40,6 +41,7 @@ pub use form::{setting_row, setting_row_with, settings_group};
 pub use icon::{Assets, Icon, IconName, icon};
 pub use material::{Material, backdrop};
 pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
+pub use pointer::{ListPointer, ListRows, follow_pointer};
 pub use rows::{
     COMPACT_ROW_HEIGHT, Highlight, ListRow, NavRow, ROW_HEIGHT, SelectionTrack, Tile, TileIcon,
     app_icon, avatar, list_row, nav_row, section_label, selection_track, tile,

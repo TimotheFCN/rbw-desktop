@@ -10,18 +10,18 @@ use gpui::base::input::{InputEvent, InputState};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
     FocusHandle, Focusable, FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding,
-    MouseMoveEvent, ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
-    Styled as _, Subscription, Task, UniformListScrollHandle, Window, WindowOptions, actions, div,
-    point, prelude::FluentBuilder as _, px, size, uniform_list,
+    ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString, Styled as _,
+    Subscription, Task, UniformListScrollHandle, Window, WindowOptions, actions, div, point,
+    prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use rbw_desktop_core::{
     APP_ID, APP_NAME, Account, AccountId, Error, Item, ItemContent, ItemId, ItemKind, ItemSummary,
     LockState, Secret,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, Material, TileIcon,
-    ToastSlot, backdrop, button, chrome, icon, key_hint, list_row, motion, scroll_area, scrollbar,
-    search_field, section_label, segmented_control, tile,
+    ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, ListPointer, ListRows,
+    Material, TileIcon, ToastSlot, backdrop, button, chrome, follow_pointer, icon, key_hint,
+    list_row, motion, scroll_area, scrollbar, search_field, section_label, segmented_control, tile,
 };
 
 use crate::CloseWindow;
@@ -253,6 +253,7 @@ pub struct QuickPanel {
     generator: Option<Entity<Generator>>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
+    pointer: ListPointer,
     toast: ToastSlot,
     load_task: Task<()>,
     /// Whether the panel has had the keyboard, after which losing it
@@ -320,6 +321,7 @@ impl QuickPanel {
             generator: None,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
+            pointer: ListPointer::default(),
             toast: ToastSlot::default(),
             load_task: Task::ready(()),
             was_active: false,
@@ -443,9 +445,11 @@ impl QuickPanel {
         }
     }
 
-    /// The pointer moved over a row, which it selects.
-    fn pointer_moved(&mut self, position: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
-        if self.selection.pointer_at(position, at) {
+    /// The pointer is on `row`, which it selects if it moved there.
+    fn pointer_on_row(&mut self, row: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = row
+            && self.selection.pointer_at(row, window.mouse_position())
+        {
             self.selection_moved(true, cx);
         }
     }
@@ -802,18 +806,37 @@ impl QuickPanel {
                     .flex()
                     .flex_col()
                     .child(
-                        uniform_list(
-                            "panel-rows",
-                            self.shown.len(),
-                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                this.drew = range.clone();
-                                range
-                                    .filter_map(|position| this.render_row(position, cx))
-                                    .collect()
-                            }),
+                        follow_pointer(
+                            div()
+                                .id("panel-rows-pointer")
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .flex_col(),
+                            &self.pointer,
+                            &self.scroll,
+                            ListRows {
+                                count: self.shown.len(),
+                                height: COMPACT_ROW_HEIGHT,
+                                pitch: COMPACT_ROW_HEIGHT,
+                            },
+                            Self::pointer_on_row,
+                            cx,
                         )
-                        .track_scroll(&self.scroll)
-                        .flex_1(),
+                        .child(
+                            uniform_list(
+                                "panel-rows",
+                                self.shown.len(),
+                                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                    this.drew = range.clone();
+                                    range
+                                        .filter_map(|position| this.render_row(position, cx))
+                                        .collect()
+                                }),
+                            )
+                            .track_scroll(&self.scroll)
+                            .flex_1(),
+                        ),
                     )
                     .child(scrollbar("panel-rows-bar", &self.scroll, cx))
                     .into_any_element(),
@@ -825,7 +848,7 @@ impl QuickPanel {
     /// A row: a click copies what the item is for, such as a login's
     /// password, as Return does; the selected row also has a button for
     /// each thing it can copy, and one that opens the item in the vault.
-    /// The pointer moving onto a row selects it.
+    /// The pointer moving onto a row selects it (`follow_pointer`).
     fn render_row(&self, position: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let item = self.item(position)?.clone();
         let account = self.account.as_ref()?.id.clone();
@@ -841,12 +864,9 @@ impl QuickPanel {
         });
         let clicked = item.clone();
         let main = Part::main(item.kind);
+        // A block the list's width, which the row fills.
         Some(
             div()
-                .id(("panel-row", position))
-                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                    this.pointer_moved(position, event.position, cx);
-                }))
                 .child(
                     list_row(
                         SharedString::from(format!("panel-item-{}", item.id.0)),
