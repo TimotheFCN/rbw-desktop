@@ -61,8 +61,9 @@ impl VaultView {
             Load::Loading | Load::Ready(_) => uniform_list(
                 "items",
                 self.visible.len(),
-                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
                     let account = this.account.id.clone();
+                    let list_focused = this.list_focus.is_focused(window);
                     range
                         .map(|position| {
                             let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
@@ -94,6 +95,7 @@ impl VaultView {
                                     )
                                     .icon(icon)
                                     .copied(copied)
+                                    .in_focusable_list(list_focused)
                                     .on_click(cx.listener(
                                         move |this, _, window, cx| {
                                             window.focus(&this.list_focus, cx);

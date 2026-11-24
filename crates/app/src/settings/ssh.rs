@@ -292,7 +292,7 @@ impl SshPage {
     fn render_status(&self, status: &SshAgentStatus, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let colors = &theme.colors;
-        let (on, off, warn) = (colors.success, colors.text_tertiary, colors.danger);
+        let (on, off, warn) = (colors.success, colors.text_secondary, colors.danger);
         let dot = |color| div().size(px(8.)).rounded_full().bg(color);
         let value = |color, text: SharedString| {
             div()

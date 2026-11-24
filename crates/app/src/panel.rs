@@ -672,6 +672,9 @@ impl QuickPanel {
                         selected,
                     )
                     .compact()
+                    // The search field keeps the keyboard; the arrow keys
+                    // move through the rows.
+                    .in_focusable_list(false)
                     .icon(icon)
                     .accessibility_label(format!(
                         "{}, {}",

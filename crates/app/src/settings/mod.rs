@@ -18,6 +18,7 @@ use gpui::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, icon, motion, nav_row,
+    row_focus_ring,
 };
 
 use crate::CloseWindow;
@@ -312,6 +313,7 @@ impl SettingsWindow {
                     .font_weight(FontWeight::BOLD)
                     .when(current, |b| b.bg(selected))
                     .when(!current, |b| b.hover(move |s| s.bg(hover)))
+                    .focus_visible(row_focus_ring(cx))
                     .child(icon(icon_name).size(px(16.)))
                     .child(SharedString::from(label))
             }));

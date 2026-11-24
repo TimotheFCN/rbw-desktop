@@ -459,12 +459,18 @@ impl ItemDetail {
         let key = field.key.clone();
         let copied = self.copied.as_ref() == Some(&field.key);
         let value_for_copy = field.value.clone();
+        let spoken = match field.shown {
+            Shown::Hidden | Shown::Password if !revealed => None,
+            Shown::Link => Some(website_host(field.value.expose())),
+            _ => Some(field.value.expose().to_string()),
+        };
         let mut row = field_row(
             ElementId::Name(field.key.clone()),
             field.label.clone(),
             value,
         )
         .copied(copied)
+        .when_some(spoken, |row, spoken| row.spoken_value(spoken))
         .on_click(
             cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value_for_copy, hidden, cx)),
         );
@@ -592,10 +598,11 @@ impl ItemDetail {
                     .gap(px(7.))
                     .text_size(px(15.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(spaced)
+                    .child(spaced.clone())
                     .child(progress_ring(fraction, cx)),
             )
             .copied(copied)
+            .spoken_value(spaced)
             .action(icon(IconName::Copy).text_color(theme.colors.text_tertiary))
             .on_click(cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value, true, cx)))
             .into_any_element(),

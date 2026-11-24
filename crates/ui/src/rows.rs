@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use crate::card::copied_badge;
+use crate::focus::{inner_ring, row_ring};
 use crate::icon::{IconName, icon};
 use crate::motion as m;
 use crate::theme::{ActiveTheme, Look, mix};
@@ -77,10 +78,12 @@ impl RenderOnce for NavRow {
         };
         let fill = colors.fill;
         let hover = colors.hover;
+        let ring = row_ring(colors.focus_ring);
         BaseButton::new(self.id)
             .selected(self.selected)
             .accessibility_label(self.label.clone())
             .when_some(self.on_click, |b, handler| b.on_click(handler))
+            .focus_visible(ring)
             .flex()
             .flex_none()
             .items_center()
@@ -295,6 +298,11 @@ pub struct ListRow {
     trailing: Option<AnyElement>,
     copied: bool,
     compact: bool,
+    /// Whether the row is a stop of Tab, rather than reached with the
+    /// arrow keys through its list.
+    tab_stop: bool,
+    /// Whether its list has the keyboard, which it shows for it.
+    focused: bool,
     accessibility_label: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
@@ -320,6 +328,8 @@ pub fn list_row(
         trailing: None,
         copied: false,
         compact: false,
+        tab_stop: true,
+        focused: false,
         accessibility_label: None,
         on_click: None,
     }
@@ -348,6 +358,15 @@ impl ListRow {
 
     pub fn trailing(mut self, element: impl IntoElement) -> Self {
         self.trailing = Some(element.into_any_element());
+        self
+    }
+
+    /// A row of a list that takes the keyboard as a whole and moves its
+    /// selection with the arrow keys: Tab passes it by. `focused` says the
+    /// list has the keyboard, which the selected row shows with the ring.
+    pub fn in_focusable_list(mut self, focused: bool) -> Self {
+        self.tab_stop = false;
+        self.focused = focused;
         self
     }
 
@@ -387,6 +406,14 @@ impl RenderOnce for ListRow {
         let theme = cx.theme();
         let colors = &theme.colors;
         let hover = colors.hover;
+        // On the accent of a selected row, the ring takes the row's text
+        // colour.
+        let ring_color = if self.selected && !self.compact && theme.look == Look::MacOs {
+            colors.on_selection.opacity(0.7)
+        } else {
+            colors.focus_ring
+        };
+        let list_focused = self.focused && window.last_input_was_keyboard();
         let (selection, name_color, subtitle_color) = if self.compact {
             (colors.fill, colors.text, colors.text_secondary)
         } else {
@@ -408,6 +435,11 @@ impl RenderOnce for ListRow {
             .selected(self.selected)
             .accessibility_label(self.accessibility_label.unwrap_or_else(|| name.clone()))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
+            .tab_stop(self.tab_stop)
+            .focus_visible(row_ring(ring_color))
+            .when(list_focused && self.selected, |b| {
+                b.shadow(inner_ring(ring_color))
+            })
             .flex()
             .items_center()
             .gap(px(10.))

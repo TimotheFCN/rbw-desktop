@@ -11,6 +11,7 @@ pub mod chrome;
 mod controls;
 mod dialog;
 mod fields;
+mod focus;
 mod form;
 mod glass;
 mod icon;
@@ -32,6 +33,7 @@ pub use controls::{
 };
 pub use dialog::{ConfirmDialog, ConfirmEvent, Confirmation};
 pub use fields::{SearchField, TextField, field_error, password_text, search_field, text_field};
+pub use focus::row_focus_ring;
 pub use form::{setting_row, setting_row_with, settings_group};
 pub use glass::{Glass, Material, glass};
 pub use icon::{Assets, Icon, IconName, icon};

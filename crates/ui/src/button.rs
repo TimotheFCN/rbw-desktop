@@ -10,6 +10,7 @@ use gpui::{
 };
 
 use crate::controls::spinner;
+use crate::focus::control_ring;
 use crate::icon::{IconName, icon};
 use crate::theme::{ActiveTheme, Look};
 use crate::tooltip::tooltip;
@@ -187,7 +188,7 @@ impl RenderOnce for Button {
                 BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.05)).spread_radius(px(0.5)),
             ],
         };
-        let ring = colors.focus_ring;
+        let ring = control_ring(cx);
         let spinner_color = text.unwrap_or(colors.text_secondary);
         let (busy, disabled) = (self.busy, self.disabled);
         let label = self.accessibility_label.or_else(|| self.label.clone());
@@ -234,11 +235,7 @@ impl RenderOnce for Button {
                 b.border(px(0.5)).border_color(colors.control_edge)
             })
             .shadow(shadows)
-            .focus_visible(move |s| {
-                s.shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), ring).spread_radius(px(3.)),
-                ])
-            })
+            .focus_visible(ring)
             .when(!disabled && !busy, |b| {
                 b.hover(move |s| s.bg(hover)).active(move |s| s.bg(pressed))
             })

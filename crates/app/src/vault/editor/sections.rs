@@ -12,8 +12,8 @@ use gpui::{
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, Popover, button, card, field_error, form_row,
-    icon, menu_item, menu_separator, password_text, popover, segmented_control, sheet_title,
-    switch, toggle_row,
+    icon, menu_item, menu_separator, password_text, popover, row_focus_ring, segmented_control,
+    sheet_title, switch, toggle_row,
 };
 
 use super::form::Key;
@@ -454,18 +454,14 @@ impl ItemEditor {
         }
         let name = self.folder_name();
         let theme = cx.theme();
-        let (hover, faint, ring) = (
-            theme.colors.hover,
-            theme.colors.text_tertiary,
-            theme.colors.focus_ring,
-        );
+        let (hover, faint) = (theme.colors.hover, theme.colors.text_tertiary);
         BaseButton::new("folder")
             .accessibility_label(format!("Folder, {name}"))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_folder_menu(window, cx)))
             .w_full()
             .justify_start()
             .hover(move |s| s.bg(hover))
-            .focus_visible(move |s| s.bg(ring.opacity(0.25)))
+            .focus_visible(row_focus_ring(cx))
             .child(form_row(
                 "Folder",
                 div()

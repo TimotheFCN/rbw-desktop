@@ -8,7 +8,7 @@ use gpui::{
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
-    glass, menu_item, menu_separator, nav_row, popover, section_label,
+    glass, menu_item, menu_separator, nav_row, popover, row_focus_ring, section_label,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -216,6 +216,7 @@ impl VaultView {
             .rounded(px(10.))
             .hover(move |s| s.bg(hover))
             .active(move |s| s.bg(pressed))
+            .focus_visible(row_focus_ring(cx))
             .when(self.account_menu_open, |b| b.bg(pressed))
             .child(avatar(&name, cx))
             .child(

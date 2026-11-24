@@ -9,6 +9,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
+use crate::focus::row_ring;
 use crate::icon::{IconName, icon};
 use crate::motion as m;
 use crate::rows::ROW_LINE_HEIGHT;
@@ -98,6 +99,8 @@ pub struct FieldRow {
     value: AnyElement,
     actions: SmallVec<[AnyElement; 2]>,
     copied: bool,
+    /// The value as text, for assistive technologies, when it shows.
+    spoken_value: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
 
@@ -112,6 +115,7 @@ pub fn field_row(
         value: value.into_any_element(),
         actions: SmallVec::new(),
         copied: false,
+        spoken_value: None,
         on_click: None,
     }
 }
@@ -124,6 +128,13 @@ impl FieldRow {
 
     pub fn copied(mut self, copied: bool) -> Self {
         self.copied = copied;
+        self
+    }
+
+    /// What assistive technologies read after the label: the value, when
+    /// it shows.
+    pub fn spoken_value(mut self, value: impl Into<SharedString>) -> Self {
+        self.spoken_value = Some(value.into());
         self
     }
 
@@ -166,7 +177,11 @@ impl RenderOnce for FieldRow {
         };
         BaseButton::new(self.id)
             .group(group)
-            .accessibility_label(self.label.clone())
+            .accessibility_label(match &self.spoken_value {
+                Some(value) => format!("{}, {value}", self.label).into(),
+                None => self.label.clone(),
+            })
+            .focus_visible(row_ring(colors.focus_ring))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .flex()
             .items_center()

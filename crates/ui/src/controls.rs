@@ -10,6 +10,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px, relative, white,
 };
 
+use crate::focus::control_ring;
 use crate::motion as m;
 use crate::theme::{ActiveTheme, Look};
 
@@ -61,10 +62,30 @@ impl RenderOnce for SegmentedControl {
         let ring = colors.focus_ring;
         let on_select = self.on_select.map(std::rc::Rc::new);
         let id = self.id.clone();
+        let (selected, last) = (self.selected, self.labels.len().saturating_sub(1));
+        let on_arrow = on_select.clone();
 
         div()
             .id(self.id)
             .role(gpui::Role::RadioGroup)
+            // The arrow keys move the choice, and the keyboard with it, as
+            // in a group of radio buttons.
+            .on_key_down(move |event, window, cx| {
+                let next = match event.keystroke.key.as_str() {
+                    "left" if selected > 0 => selected - 1,
+                    "right" if selected < last => selected + 1,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                if next < selected {
+                    window.focus_prev(cx);
+                } else {
+                    window.focus_next(cx);
+                }
+                if let Some(on_select) = &on_arrow {
+                    on_select(next, window, cx);
+                }
+            })
             .flex()
             .p(px(2.))
             .rounded(if macos { px(9.) } else { px(8.) })
@@ -95,6 +116,9 @@ impl RenderOnce for SegmentedControl {
                             .role(gpui::Role::RadioButton)
                             .accessibility_label(label.clone())
                             .selected(selected)
+                            // One stop of Tab, at the choice; the arrow keys
+                            // move it.
+                            .tab_stop(selected)
                             .relative()
                             .flex_1()
                             .py(px(2.5))
@@ -156,6 +180,7 @@ impl RenderOnce for Switch {
             window,
             cx,
         );
+        let ring = control_ring(cx);
         let colors = &cx.theme().colors;
         let track = colors
             .fill
@@ -174,6 +199,7 @@ impl RenderOnce for Switch {
             .h(height)
             .rounded_full()
             .bg(track)
+            .focus_visible(ring)
             .child(
                 div()
                     .absolute()

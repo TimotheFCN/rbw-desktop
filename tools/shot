@@ -91,13 +91,15 @@ options:
                 <out>-frames/NNN.png at 30 frames per second
   --demo WORDS  more RBW_DESKTOP_DEMO words (see crates/app/src/demo.rs),
                 such as slow
+  --keyboard    rest the pointer before the input rather than after it: a
+                pointer that moves hides the keyboard's focus ring
   --tray        run a stand-in system tray, which shows the app's item
   --no-build    use the binaries already built
 EOF
 	exit 2
 }
 
-theme=macos-light size="" scale=2 record="" build=1 then=() demo="" tray=0
+theme=macos-light size="" scale=2 record="" build=1 then=() demo="" tray=0 keyboard=0
 while [[ $# -gt 0 && $1 == --* ]]; do
 	case $1 in
 	--theme) theme=$2; shift 2 ;;
@@ -107,6 +109,7 @@ while [[ $# -gt 0 && $1 == --* ]]; do
 	--then) then+=("$2"); shift 2 ;;
 	--demo) demo=$2; shift 2 ;;
 	--tray) tray=1; shift ;;
+	--keyboard) keyboard=1; shift ;;
 	--no-build) build=0; shift ;;
 	*) usage ;;
 	esac
@@ -207,6 +210,7 @@ into_page() {
 	xdotool key "${tabs[@]}"
 }
 act() {
+	((keyboard)) && x11_rest_pointer
 	# The window's size in points, without the frame.
 	local width=$((win_w / scale - 2 * frame)) height=$((win_h / scale - 2 * frame))
 	# The middle of the account button at the bottom of the sidebar.
@@ -304,7 +308,7 @@ act() {
 		sleep 0.4
 		eval "xdotool $args"
 	done
-	x11_rest_pointer
+	((keyboard)) || x11_rest_pointer
 }
 
 if [[ -n $record ]]; then
