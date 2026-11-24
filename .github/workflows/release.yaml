@@ -1,0 +1,199 @@
+name: release
+
+# Pushing a version tag (such as 0.1.0, as in Cargo.toml) builds the macOS
+# disk image and the Linux packages with the rbw-ng revision pinned in
+# packaging/rbw-ng-revision, checks them, and attaches them to a draft
+# GitHub release, which is published by hand. Running the workflow by hand
+# with an existing tag does the same for that tag, replacing the assets of
+# its release.
+#
+# Secrets, each optional. Without the first three the app is signed ad hoc,
+# and without the last three it isn't notarized:
+#   MACOS_CERTIFICATE           a Developer ID Application certificate and
+#                               its key, as a base64 .p12
+#   MACOS_CERTIFICATE_PASSWORD  the .p12's password
+#   MACOS_SIGNING_IDENTITY      its name, "Developer ID Application: … (TEAM)"
+#   NOTARY_KEY                  an App Store Connect API key, the .p8's text
+#   NOTARY_KEY_ID               its key id
+#   NOTARY_ISSUER               its issuer id
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, such as 0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    working-directory: rbw-desktop
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          path: rbw-desktop
+          persist-credentials: false
+      - name: The tag is the version in Cargo.toml and the AppStream releases
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [[ $version != "$TAG" ]]; then
+            echo "::error::Tag $TAG doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+          if ! grep -q "<release version=\"$TAG\"" packaging/linux/*.metainfo.xml; then
+            echo "::error::packaging/linux/*.metainfo.xml has no release $TAG"
+            exit 1
+          fi
+
+  linux:
+    needs: version
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          apt: >-
+            dpkg-dev desktop-file-utils appstream xvfb xdotool xcompmgr hsetroot x11-utils
+            imagemagick xclip mesa-vulkan-drivers fonts-inter dbus-daemon python3-gi
+            gir1.2-glib-2.0 python3-cryptography
+          rbw-ng: "true"
+      - uses: cargo-bins/cargo-binstall@v1.28.0
+      - run: cargo binstall -y --locked cargo-about@0.9.3
+      - run: RBW_NG=../rbw-ng packaging/linux/package.sh
+      - name: Install and run on Ubuntu, Debian and Fedora
+        run: packaging/linux/check.sh
+      - name: The packaged app, end to end, on the rbw it bundles
+        run: |
+          mkdir -p target/unpacked
+          tar -xJf target/packages/rbw-desktop-*-linux.tar.xz -C target/unpacked --strip-components=1
+          RBW_NG=../rbw-ng tools/e2e --app target/unpacked/bin/rbw-desktop
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-shots-${{ matrix.os }}
+          path: rbw-desktop/target/shots/package
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.os }}
+          path: rbw-desktop/target/packages
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-26
+    env:
+      HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE != '' }}
+      HAS_NOTARY_KEY: ${{ secrets.NOTARY_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          rbw-ng: "true"
+      - uses: cargo-bins/cargo-binstall@v1.28.0
+      - run: cargo binstall -y --locked cargo-about@0.9.3
+      - name: Signing certificate, in a keychain of this run
+        if: env.HAS_CERTIFICATE == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          base64 --decode <<<"$CERTIFICATE" >"$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+      - name: Notary key
+        if: env.HAS_NOTARY_KEY == 'true'
+        env:
+          NOTARY_KEY_TEXT: ${{ secrets.NOTARY_KEY }}
+        run: |
+          printf '%s\n' "$NOTARY_KEY_TEXT" >"$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8" >>"$GITHUB_ENV"
+      - name: The app and its disk image
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          options=(--universal)
+          if [[ $HAS_CERTIFICATE == true ]]; then
+            options+=(--sign "$IDENTITY")
+            [[ $HAS_NOTARY_KEY == true ]] && options+=(--notarize)
+          fi
+          RBW_NG=../rbw-ng packaging/macos/bundle.sh "${options[@]}"
+          codesign --display --verbose=4 "target/packages/rbw Desktop.app"
+      - name: Run the bundled demo
+        run: tools/smoke-macos "target/packages/rbw Desktop.app/Contents/MacOS/rbw-desktop" target/shots/bundle
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: macos-shots
+          path: rbw-desktop/target/shots/bundle
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-macos
+          path: |
+            rbw-desktop/target/packages/*.dmg
+            rbw-desktop/target/packages/*.dmg.sha256
+          if-no-files-found: error
+
+  github-release:
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Create the draft release or replace its assets
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" ../dist/* --clobber
+          else
+            gh release create "$TAG" --draft --verify-tag --title "rbw Desktop $TAG" \
+              --notes "rbw Desktop $TAG, with rbw-ng $(cat packaging/rbw-ng-revision)." ../dist/*
+          fi

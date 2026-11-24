@@ -1,0 +1,63 @@
+name: setup
+description: >
+  What every job needs after checking out this repository into rbw-desktop:
+  the system libraries GPUI builds against on Linux, the pinned Rust, a
+  cache of the build, and, if asked, the pinned rbw-ng revision in rbw-ng.
+
+inputs:
+  apt:
+    description: More Ubuntu packages to install
+    default: ""
+  rust-components:
+    description: Rust components, comma-separated
+    default: ""
+  rust-targets:
+    description: Rust targets, comma-separated
+    default: ""
+  rbw-ng:
+    description: Check out the rbw-ng revision in packaging/rbw-ng-revision into rbw-ng
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: System libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        APT: ${{ inputs.apt }}
+      run: |
+        sudo apt-get update -q
+        # shellcheck disable=SC2086 # a list of packages
+        sudo apt-get install -y -q --no-install-recommends \
+          libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+          libfontconfig-dev libfreetype-dev libvulkan-dev libssl-dev libzstd-dev $APT
+    - name: Rust
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.rust-components }}
+        TARGETS: ${{ inputs.rust-targets }}
+        # the toolchain the app is built and checked with
+        TOOLCHAIN: 1.100.0
+      run: |
+        args=(--profile minimal)
+        [[ -n $COMPONENTS ]] && args+=(--component "$COMPONENTS")
+        [[ -n $TARGETS ]] && args+=(--target "$TARGETS")
+        rustup toolchain install "$TOOLCHAIN" "${args[@]}"
+        rustup default "$TOOLCHAIN"
+        rustc --version
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rbw-desktop
+    - name: rbw-ng revision
+      id: rbw-ng
+      if: inputs.rbw-ng == 'true'
+      shell: bash
+      run: echo "revision=$(cat rbw-desktop/packaging/rbw-ng-revision)" >>"$GITHUB_OUTPUT"
+    - uses: actions/checkout@v7
+      if: inputs.rbw-ng == 'true'
+      with:
+        repository: TimotheFCN/rbw-ng
+        ref: ${{ steps.rbw-ng.outputs.revision }}
+        path: rbw-ng
+        persist-credentials: false

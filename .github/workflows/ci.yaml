@@ -1,0 +1,167 @@
+name: ci
+
+# On every push to main and every pull request: formatting, lints and tests
+# on Linux, the macOS code checked from Linux, then built, tested and run on
+# a Mac, the app driven end to end against Vaultwarden, and the Linux
+# packages built and installed on Ubuntu, Debian and Fedora. Pushes to main
+# also build the macOS app and its disk image.
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    working-directory: rbw-desktop
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          apt: shellcheck desktop-file-utils appstream
+          rust-components: clippy,rustfmt
+          rust-targets: aarch64-apple-darwin
+      - uses: cargo-bins/cargo-binstall@v1.28.0
+      - run: cargo binstall -y --locked cargo-deny@0.22.0
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: The macOS code, checked from Linux
+        run: tools/check-macos -- -D warnings
+      - run: cargo deny check
+      - name: Scripts
+        run: |
+          shellcheck -x tools/check-macos tools/e2e tools/footprint tools/perf tools/shot tools/smoke-macos \
+            tools/lib/*.sh packaging/*.sh packaging/*/*.sh crates/core/tests/*.sh
+          python3 -m py_compile packaging/icon/render.py packaging/macos/check.py tools/lib/*.py
+      - name: Desktop file and AppStream metadata
+        run: |
+          desktop-file-validate packaging/linux/*.desktop
+          appstreamcli validate --no-net --explain packaging/linux/*.metainfo.xml
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+      - run: cargo test --locked --workspace
+
+  # The first place the macOS code links and runs: build, test, then run
+  # the demo and keep its log and a screenshot.
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          rust-components: clippy
+      - run: sw_vers && xcodebuild -version
+      - run: cargo build --locked -p rbw-desktop
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Run the demo
+        run: tools/smoke-macos target/debug/rbw-desktop target/shots/macos
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: macos-demo
+          path: rbw-desktop/target/shots/macos
+          if-no-files-found: ignore
+
+  # Pushes to main: the app as people get it, signed ad hoc.
+  macos-bundle:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          rbw-ng: "true"
+      - uses: cargo-bins/cargo-binstall@v1.28.0
+      - run: cargo binstall -y --locked cargo-about@0.9.3
+      - run: RBW_NG=../rbw-ng packaging/macos/bundle.sh
+      - run: codesign --display --verbose=4 "target/packages/rbw Desktop.app"
+      - name: Run the bundled demo
+        run: tools/smoke-macos "target/packages/rbw Desktop.app/Contents/MacOS/rbw-desktop" target/shots/bundle
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: macos-bundle
+          path: |
+            rbw-desktop/target/packages/*.dmg
+            rbw-desktop/target/shots/bundle
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          apt: >-
+            xvfb xdotool xcompmgr hsetroot x11-utils imagemagick xclip mesa-vulkan-drivers
+            fonts-inter dbus-daemon python3-gi gir1.2-glib-2.0 python3-cryptography
+          rbw-ng: "true"
+      - run: RBW_NG=../rbw-ng tools/e2e
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-shots
+          path: rbw-desktop/target/shots/e2e
+          if-no-files-found: ignore
+
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+        with:
+          apt: dpkg-dev desktop-file-utils appstream
+          rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          rbw-ng: "true"
+      - uses: cargo-bins/cargo-binstall@v1.28.0
+      - run: cargo binstall -y --locked cargo-about@0.9.3
+      - run: RBW_NG=../rbw-ng packaging/linux/package.sh
+      - name: Install and run on Ubuntu, Debian and Fedora
+        run: packaging/linux/check.sh
+      - name: The macOS bundle's layout
+        run: RBW_NG=../rbw-ng packaging/macos/bundle.sh --dry-run --universal
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages
+          path: rbw-desktop/target/packages
+          retention-days: 14
