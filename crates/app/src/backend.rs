@@ -117,6 +117,15 @@ pub fn forget(cx: &mut App, call: impl FnOnce(&dyn Backend) -> Result<()> + Send
     .detach();
 }
 
+/// Runs `call` on this thread, waiting for it: only while the app quits,
+/// when nothing is drawn anymore and the call must finish before the end.
+/// A failure is only logged.
+pub fn block(cx: &App, call: impl FnOnce(&dyn Backend) -> Result<()>) {
+    if let Err(error) = call(cx.global::<Shared>().0.as_ref()) {
+        log::warn!("{error}");
+    }
+}
+
 /// What a view shows while its data is on the way.
 pub enum Load<T> {
     Loading,

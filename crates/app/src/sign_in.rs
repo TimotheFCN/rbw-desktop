@@ -85,11 +85,18 @@ impl SignIn {
         let this = Self::new(None, accounts, window, cx);
         this.focus_step(window, cx);
         // An account added and then abandoned is removed, even when the
-        // window closes in the middle.
+        // window closes or the app quits in the middle.
         cx.on_release(|this, cx| {
             if let Some(id) = this.added.take() {
                 backend::forget(cx, move |backend| backend.remove_account(&id));
             }
+        })
+        .detach();
+        cx.on_app_quit(|this, cx| {
+            if let Some(id) = this.added.take() {
+                backend::block(cx, move |backend| backend.remove_account(&id));
+            }
+            async {}
         })
         .detach();
         this
@@ -272,8 +279,10 @@ impl SignIn {
             Step::Password => self.sign_in(None, None, window, cx),
             Step::Verification(methods) => {
                 let code = self.text(&self.code, cx);
-                if !code.is_empty() {
-                    let method = methods[self.method.min(methods.len() - 1)];
+                let method = methods.get(self.method).or(methods.last()).copied();
+                if let Some(method) = method
+                    && !code.is_empty()
+                {
                     let code = LoginCode::TwoStep { method, code };
                     self.sign_in(Some(code), None, window, cx);
                 }
@@ -322,49 +331,64 @@ impl SignIn {
         if password.is_empty() {
             return;
         }
-        let account = self.account().or(self.added.as_ref()).cloned();
-        let new = match account {
-            Some(_) => None,
-            None => self
-                .chosen_server(cx)
-                .map(|server| (server, self.email(cx))),
-        };
         self.busy = true;
         self.problem = None;
         cx.notify();
+        let Some(id) = self.account().or(self.added.as_ref()).cloned() else {
+            self.add_then_sign_in(code, api_key, window, cx);
+            return;
+        };
         self.task = backend::request_in(
             window,
             cx,
             move |backend| {
-                let id = match (account, new) {
-                    (Some(id), _) => id,
-                    (None, Some((server, email))) => backend.add_account(&server, &email)?,
-                    (None, None) => return Err(Error::AccountNotFound),
-                };
-                let registered = match &api_key {
-                    Some((key_id, secret)) => backend.register_device(&id, key_id, secret),
-                    None => Ok(()),
-                };
-                let signed_in =
-                    registered.and_then(|()| backend.sign_in(&id, &password, code.as_ref()));
-                Ok((id, signed_in))
+                if let Some((key_id, secret)) = &api_key {
+                    backend.register_device(&id, key_id, secret)?;
+                }
+                backend.sign_in(&id, &password, code.as_ref())?;
+                Ok(id)
             },
             |this, result, window, cx| {
-                let signed_in = match result {
-                    Ok((id, signed_in)) => {
-                        if this.existing.is_none() {
-                            this.added = Some(id.clone());
-                        }
-                        signed_in.map(|()| id)
-                    }
-                    Err(error) => Err(error),
-                };
-                match signed_in {
+                match result {
                     Ok(id) => {
                         // Done: the account stays, and the spinner keeps
                         // going until its vault replaces this screen.
                         this.added = None;
+                        this.password
+                            .update(cx, |password, cx| password.set_value("", window, cx));
                         cx.emit(Request::SignedIn(id));
+                    }
+                    Err(error) => this.fail(error, window, cx),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// Makes the account on this computer, then signs in to it. The account
+    /// is noted as soon as it exists, so that it goes again if the sign-in
+    /// is abandoned while the server answers.
+    fn add_then_sign_in(
+        &mut self,
+        code: Option<LoginCode>,
+        api_key: Option<(String, Secret)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(server) = self.chosen_server(cx) else {
+            self.busy = false;
+            return;
+        };
+        let email = self.email(cx);
+        self.task = backend::request_in(
+            window,
+            cx,
+            move |backend| backend.add_account(&server, &email),
+            move |this, result, window, cx| {
+                match result {
+                    Ok(id) => {
+                        this.added = Some(id);
+                        this.sign_in(code, api_key, window, cx);
                     }
                     Err(error) => this.fail(error, window, cx),
                 }
@@ -376,7 +400,7 @@ impl SignIn {
     fn fail(&mut self, error: Error, window: &mut Window, cx: &mut Context<Self>) {
         self.busy = false;
         match error {
-            Error::TwoStepRequired { mut methods } => {
+            Error::TwoStepRequired { mut methods } if !methods.is_empty() => {
                 // The authenticator app first: it needs nothing sent.
                 methods.sort_by_key(|method| match method {
                     TwoStepMethod::Authenticator => 0,
@@ -410,7 +434,8 @@ impl SignIn {
             error => {
                 self.problem = Some(match error {
                     Error::AccountExists(_) => "This account is already on this computer.",
-                    Error::TwoStepUnsupported => {
+                    // No method this version knows.
+                    Error::TwoStepUnsupported | Error::TwoStepRequired { .. } => {
                         "This account's two-step login method can't be used here."
                     }
                     ref error => backend::describe(error),

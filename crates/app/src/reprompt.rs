@@ -91,7 +91,11 @@ impl Reprompt {
             |this, result, window, cx| {
                 this.busy = false;
                 match result {
-                    Ok(()) => cx.emit(Unlocked),
+                    Ok(()) => {
+                        this.password
+                            .update(cx, |password, cx| password.set_value("", window, cx));
+                        cx.emit(Unlocked);
+                    }
                     Err(error) => {
                         this.problem = Some(backend::describe(&error));
                         if error == Error::WrongPassword {

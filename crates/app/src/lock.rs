@@ -6,7 +6,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     IntoElement, ParentElement as _, Render, Styled as _, Task, Window, div, px,
 };
-use rbw_desktop_core::{Account, AccountId, Error, Secret};
+use rbw_desktop_core::{Account, AccountId, Error, LockState, Secret};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, field_error, motion,
     text_field,
@@ -24,6 +24,9 @@ pub struct LockScreen {
     /// Counts wrong passwords, each of which shakes the field.
     wrong: usize,
     busy: bool,
+    /// Whether the password unlocked the account, and the screen waits for
+    /// the vault to replace it.
+    unlocked: bool,
     menu_open: bool,
     menu_focus: FocusHandle,
     task: Task<()>,
@@ -65,6 +68,7 @@ impl LockScreen {
             problem: None,
             wrong: 0,
             busy: false,
+            unlocked: false,
             menu_open: false,
             menu_focus: cx.focus_handle(),
             task: Task::ready(()),
@@ -81,6 +85,13 @@ impl LockScreen {
         accounts: Vec<Account>,
         cx: &mut Context<Self>,
     ) {
+        // Unlocked, then locked again before the vault showed, as by the
+        // lock timeout or an agent that restarted: try again.
+        if self.unlocked && account.state == LockState::Locked {
+            self.unlocked = false;
+            self.busy = false;
+            cx.notify();
+        }
         if account != self.account || accounts != self.accounts {
             self.account = account;
             self.accounts = accounts;
@@ -119,7 +130,12 @@ impl LockScreen {
         self.task = backend::request_in(window, cx, call, |this, result, window, cx| {
             match result {
                 // The spinner keeps going until the vault replaces this screen.
-                Ok(()) => crate::accounts::refresh(cx),
+                Ok(()) => {
+                    this.unlocked = true;
+                    this.password
+                        .update(cx, |password, cx| password.set_value("", window, cx));
+                    crate::accounts::refresh(cx);
+                }
                 Err(error) => {
                     this.busy = false;
                     this.fail(&error, window, cx);
