@@ -70,11 +70,10 @@ pub struct Metrics {
     pub control_height: Pixels,
     pub control_radius: Pixels,
     pub toolbar_height: Pixels,
+    /// The sidebar, flush with the window's edges.
     pub sidebar_width: Pixels,
-    /// Gap between the floating sidebar and the window edge; zero when the
-    /// sidebar is a flush pane.
-    pub sidebar_inset: Pixels,
-    pub sidebar_radius: Pixels,
+    /// Room between the sidebar's edges and its rows.
+    pub sidebar_padding: Pixels,
     pub nav_row_height: Pixels,
     pub nav_row_radius: Pixels,
     pub list_width: Pixels,
@@ -95,10 +94,9 @@ impl Look {
                 control_height: px(30.),
                 control_radius: px(15.),
                 toolbar_height: px(50.),
-                sidebar_width: px(186.),
-                sidebar_inset: px(7.),
-                sidebar_radius: px(13.),
-                nav_row_height: px(30.),
+                sidebar_width: px(180.),
+                sidebar_padding: px(10.),
+                nav_row_height: px(32.),
                 nav_row_radius: px(8.),
                 list_width: px(236.),
                 row_radius: px(10.),
@@ -113,8 +111,7 @@ impl Look {
                 control_radius: px(8.),
                 toolbar_height: px(46.),
                 sidebar_width: px(196.),
-                sidebar_inset: px(0.),
-                sidebar_radius: px(0.),
+                sidebar_padding: px(6.),
                 nav_row_height: px(32.),
                 nav_row_radius: px(6.),
                 list_width: px(240.),
@@ -134,8 +131,12 @@ pub struct Colors {
     pub window: Hsla,
     /// The item list pane.
     pub list: Hsla,
-    /// The sidebar when no system material is drawn behind it.
+    /// The sidebar where the system draws no material of its own under it:
+    /// on Linux, and in the macOS look previewed there.
     pub sidebar: Background,
+    /// The selected row of a sidebar: a neutral fill.
+    pub sidebar_selection: Hsla,
+    /// The hairline edge of sheets, popovers and GNOME's window frame.
     pub sidebar_edge: Hsla,
     pub card: Hsla,
     pub card_border: Option<Hsla>,
@@ -223,9 +224,10 @@ impl Colors {
             list: c(0xffffff),
             sidebar: linear_gradient(
                 180.,
-                linear_color_stop(c(0xeaf0fb), 0.),
-                linear_color_stop(c(0xf7efec), 1.),
+                linear_color_stop(c(0xebecf0), 0.),
+                linear_color_stop(c(0xefebea), 1.),
             ),
+            sidebar_selection: ca(0x00000017),
             sidebar_edge: ca(0xffffffe6),
             card: c(0xf3f3f6),
             card_border: None,
@@ -267,9 +269,10 @@ impl Colors {
             list: c(0x1c1c1e),
             sidebar: linear_gradient(
                 180.,
-                linear_color_stop(c(0x262a36), 0.),
-                linear_color_stop(c(0x2c2729), 1.),
+                linear_color_stop(c(0x2a2b31), 0.),
+                linear_color_stop(c(0x2d2a2b), 1.),
             ),
+            sidebar_selection: ca(0xffffff1f),
             sidebar_edge: ca(0xffffff21),
             card: c(0x2a2a2e),
             card_border: None,
@@ -310,6 +313,7 @@ impl Colors {
             window: c(0xfafafb),
             list: c(0xffffff),
             sidebar: c(0xebebed).into(),
+            sidebar_selection: ca(0x00000012),
             sidebar_edge: ca(0x0000001a),
             card: c(0xffffff),
             card_border: Some(ca(0x0000001a)),
@@ -350,6 +354,7 @@ impl Colors {
             window: c(0x222226),
             list: c(0x1d1d20),
             sidebar: c(0x2e2e32).into(),
+            sidebar_selection: ca(0xffffff1a),
             sidebar_edge: ca(0x00000059),
             card: ca(0xffffff14),
             card_border: Some(ca(0x00000059)),

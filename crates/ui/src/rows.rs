@@ -76,9 +76,15 @@ impl RenderOnce for NavRow {
             Look::MacOs => colors.accent_text,
             Look::Gnome => colors.text,
         };
-        let fill = colors.fill;
+        let fill = colors.sidebar_selection;
         let hover = colors.hover;
         let ring = row_ring(colors.focus_ring);
+        // A Mac's sidebar says which row is chosen in bold, GNOME's in a
+        // heavier weight.
+        let weight = match theme.look {
+            Look::MacOs => FontWeight::BOLD,
+            Look::Gnome => FontWeight::SEMIBOLD,
+        };
         BaseButton::new(self.id)
             .selected(self.selected)
             .accessibility_label(self.label.clone())
@@ -95,7 +101,7 @@ impl RenderOnce for NavRow {
             .when(!self.selected && theme.look == Look::Gnome, |b| {
                 b.hover(move |s| s.bg(hover))
             })
-            .when(self.selected, |b| b.font_weight(FontWeight::SEMIBOLD))
+            .when(self.selected, |b| b.font_weight(weight))
             .child(icon(self.icon).size(px(16.)).text_color(icon_color))
             .child(div().flex_1().min_w_0().truncate().child(self.label))
     }

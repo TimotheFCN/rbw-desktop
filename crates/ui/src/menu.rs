@@ -19,7 +19,6 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::glass::Material;
 use crate::icon::{IconName, icon};
 use crate::motion as m;
 use crate::sheet::surface;
@@ -195,7 +194,7 @@ impl RenderOnce for Popover {
                 }
             })
             .child(
-                surface((self.id.clone(), "surface"), Material::Popover)
+                surface()
                     .map(|surface| {
                         if dialog {
                             surface.p(px(12.)).rounded(px(14.))

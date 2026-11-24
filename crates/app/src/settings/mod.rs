@@ -18,8 +18,7 @@ use gpui::{
 };
 use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
-    ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, glass_surround, icon, motion,
-    nav_row, row_focus_ring,
+    ActiveTheme as _, IconName, Look, Theme, chrome, icon, motion, nav_row, row_focus_ring, sidebar,
 };
 
 use crate::CloseWindow;
@@ -230,7 +229,7 @@ impl SettingsWindow {
             .into_any_element()
     }
 
-    /// macOS: the pages in a glass sidebar, the page's name over its body.
+    /// macOS: the pages in the sidebar, the page's name over its body.
     fn render_macos(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let metrics = theme.metrics;
@@ -241,30 +240,14 @@ impl SettingsWindow {
                 .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
                 .into_any_element()
         });
-        let sidebar = div()
-            .flex_none()
-            .w(px(190.))
-            .h_full()
-            .p(metrics.sidebar_inset)
-            // As in the vault: the window's colour around the glass, which
-            // lies under this pane on macOS. Elsewhere the window's frame
-            // fills behind it.
-            .when(cfg!(target_os = "macos"), |d| {
-                d.relative().child(glass_surround(
-                    metrics.sidebar_inset,
-                    metrics.sidebar_radius,
-                    fill,
-                ))
-            })
+        let sidebar = sidebar("settings-sidebar")
+            .children(chrome::traffic_lights(cx))
             .child(
-                glass("settings-sidebar", Material::Sidebar)
-                    .size_full()
+                div()
                     .flex()
                     .flex_col()
                     .gap(px(1.))
-                    .rounded(metrics.sidebar_radius)
-                    .px(px(7.))
-                    .children(chrome::traffic_lights(cx))
+                    .px(metrics.sidebar_padding)
                     .children(rows),
             );
         let toolbar = chrome::drag_region(

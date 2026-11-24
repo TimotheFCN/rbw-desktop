@@ -190,7 +190,7 @@ esac
 
 # Where things are, in points.
 case $theme in
-macos-*) toolbar=50 sidebar=186 inset=7 sidebar_top=42 nav=30 ;;
+macos-*) toolbar=50 sidebar=180 inset=0 sidebar_top=50 nav=32 ;;
 gnome-*) toolbar=46 sidebar=196 inset=0 sidebar_top=46 nav=32 ;;
 esac
 click() { x11_click "$@"; }

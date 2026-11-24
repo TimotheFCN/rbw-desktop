@@ -7,11 +7,11 @@
 //! it outlives it.
 
 use gpui::{
-    AnyElement, AnyView, App, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, AnyView, App, BoxShadow, Div, InteractiveElement, IntoElement, ParentElement,
+    Pixels, RenderOnce, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, point,
+    prelude::FluentBuilder as _, px,
 };
 
-use crate::glass::{Glass, Material, glass};
 use crate::motion as m;
 use crate::theme::{ActiveTheme, Look};
 
@@ -92,7 +92,7 @@ impl SheetSlot {
                 .occlude()
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
-                    surface(id, Material::Sheet)
+                    surface()
                         .w(width)
                         .max_h(max_height)
                         .rounded(radius)
@@ -107,7 +107,51 @@ impl SheetSlot {
     }
 }
 
-/// The translucent surface of sheets and popovers, without placement.
-pub fn surface(id: impl Into<ElementId>, material: Material) -> Glass {
-    glass(id, material).flex().flex_col()
+/// The surface of sheets, alerts and popovers, without placement: opaque,
+/// since GPUI can't blur what is under it, with a hairline edge and the
+/// shadows of the mockups. Its children stack in a column.
+#[derive(IntoElement)]
+pub struct Surface {
+    base: Div,
+}
+
+pub fn surface() -> Surface {
+    Surface {
+        base: div().flex().flex_col(),
+    }
+}
+
+impl Styled for Surface {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.base.style()
+    }
+}
+
+impl ParentElement for Surface {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.base.extend(elements);
+    }
+}
+
+impl RenderOnce for Surface {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let colors = &theme.colors;
+        let highlight = (theme.look == Look::MacOs).then(|| BoxShadow {
+            color: colors.control_highlight,
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        });
+        let shadows = [
+            BoxShadow::new(px(0.), px(24.), colors.shadow).blur_radius(px(50.)),
+            BoxShadow::new(px(0.), px(0.), colors.shadow.opacity(0.3)).spread_radius(px(0.5)),
+        ];
+        self.base
+            .bg(colors.frost)
+            .border(px(0.5))
+            .border_color(colors.sidebar_edge)
+            .shadow(shadows.into_iter().chain(highlight).collect())
+    }
 }

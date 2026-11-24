@@ -1,5 +1,5 @@
-//! Window chrome. On macOS the system draws the traffic lights inside the
-//! sidebar over a transparent title bar. On Linux the app draws its own
+//! Window chrome. On macOS the system draws the traffic lights over the
+//! sidebar, under a transparent title bar. On Linux the app draws its own
 //! frame, GNOME-style: rounded corners, a hairline edge, a shadow it can be
 //! resized from, header bars to drag it by, and the window buttons the desktop
 //! asks for.
@@ -16,11 +16,9 @@ use crate::button::{ButtonStyle, button};
 use crate::icon::IconName;
 use crate::theme::{ActiveTheme, Look};
 
-/// Where the macOS traffic lights sit, from the window's top-left corner.
-/// They line up with the floating sidebar's first row.
-const TRAFFIC_LIGHTS: Point<Pixels> = point(px(21.), px(21.));
-/// Room the traffic lights take at the top of the sidebar.
-pub const TRAFFIC_LIGHTS_HEIGHT: Pixels = px(42.);
+/// Where the macOS traffic lights sit, from the window's top-left corner:
+/// in the middle of the toolbars' height, over the sidebar.
+const TRAFFIC_LIGHTS: Point<Pixels> = point(px(19.), px(18.));
 /// The radius of the window's corners where the app draws them, and zero
 /// where it doesn't. GPUI clips to rectangles only, so a pane that paints its
 /// own background at a corner of the window rounds that corner itself.
@@ -52,9 +50,10 @@ pub fn window_options(
             appears_transparent: true,
             traffic_light_position: Some(TRAFFIC_LIGHTS),
         }),
-        // macOS: the window blurs what is behind it, for the sidebar's glass
-        // and for screens that tint it with `material`. Linux: the drawn
-        // frame's rounded corners and shadow need a see-through window.
+        // macOS: the window blurs what is behind it, for screens that tint
+        // it with `material`, and lets the sidebar's material through.
+        // Linux: the drawn frame's rounded corners and shadow need a
+        // see-through window.
         window_background: if cfg!(target_os = "macos") {
             WindowBackgroundAppearance::Blurred
         } else {
@@ -130,7 +129,7 @@ pub fn window_frame(content: impl IntoElement, window: &mut Window, cx: &mut App
         .size_full()
         .flex()
         .overflow_hidden()
-        // On macOS the window stays see-through for the sidebar's glass.
+        // On macOS the window stays see-through for the sidebar's material.
         .when(!cfg!(target_os = "macos"), |content| {
             content.bg(theme.colors.window)
         })
@@ -337,27 +336,30 @@ pub fn window_buttons(side: Side, window: &Window, cx: &App) -> Option<AnyElemen
     )
 }
 
-/// Room for the traffic lights at the top of the macOS sidebar. When the
-/// macOS look is previewed on another system, stand-ins show where the
-/// system would draw them.
+/// Room for the traffic lights at the top of the macOS sidebar, as tall as
+/// a toolbar; place it at the window's left edge. When the macOS look is
+/// previewed on another system, stand-ins show where the system would draw
+/// them.
 pub fn traffic_lights(cx: &App) -> Option<AnyElement> {
-    if cx.theme().look != Look::MacOs {
+    let theme = cx.theme();
+    if theme.look != Look::MacOs {
         return None;
     }
     let lights = div()
-        .h(TRAFFIC_LIGHTS_HEIGHT)
+        .flex_none()
+        .h(theme.metrics.toolbar_height)
         .flex()
         .items_center()
-        .px(px(7.));
+        .pl(TRAFFIC_LIGHTS.x);
     if cfg!(target_os = "macos") {
         return Some(lights.into_any_element());
     }
     Some(
         lights
-            .gap(px(8.))
+            .gap(px(9.))
             .children(
                 [0xff5f57, 0xfebc2e, 0x28c840]
-                    .map(|color| div().size(px(12.)).rounded_full().bg(gpui::rgb(color))),
+                    .map(|color| div().size(px(14.)).rounded_full().bg(gpui::rgb(color))),
             )
             .into_any_element(),
     )
@@ -405,7 +407,7 @@ pub fn plain_screen(
             .h(height)
             .flex()
             .items_center()
-            .px(px(8.))
+            .when(look == Look::Gnome, |bar| bar.px(px(8.)))
             .children(traffic_lights(cx))
             .children(window_buttons(Side::Start, window, cx))
             .child(div().flex_1())

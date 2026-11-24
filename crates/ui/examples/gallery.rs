@@ -8,11 +8,10 @@ use gpui::{
     Render, Styled as _, Window, div, px, size,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, ConfirmDialog, Confirmation, IconName, Material, Theme,
-    ToastSlot, app_icon, avatar, button, card, chrome, copied_badge, field_error, field_row,
-    form_row, icon, list_row, menu_item, menu_separator, nav_row, password_text, progress_ring,
-    search_field, section_label, segmented_control, slider, surface, switch, text_field, tile,
-    toggle_row,
+    ActiveTheme as _, ButtonStyle, ConfirmDialog, Confirmation, IconName, Theme, ToastSlot,
+    app_icon, avatar, button, card, chrome, copied_badge, field_error, field_row, form_row, icon,
+    list_row, menu_item, menu_separator, nav_row, password_text, progress_ring, search_field,
+    section_label, segmented_control, slider, surface, switch, text_field, tile, toggle_row,
 };
 
 struct Gallery {
@@ -220,7 +219,7 @@ impl Render for Gallery {
                     .child(progress_ring(0.6, cx)),
             ));
 
-        let sheet = surface("sheet", Material::Sheet)
+        let sheet = surface()
             .w(px(320.))
             .rounded(px(18.))
             .p(px(16.))
@@ -240,7 +239,7 @@ impl Render for Gallery {
                     )),
             );
 
-        let popover = surface("popover", Material::Popover)
+        let popover = surface()
             .w(px(220.))
             .rounded(px(12.))
             .p(px(8.))
@@ -254,7 +253,7 @@ impl Render for Gallery {
             )
             .child(copied_badge(cx));
 
-        let menu = surface("menu", Material::Popover)
+        let menu = surface()
             .w(px(240.))
             .p(px(5.))
             .rounded(px(10.))
@@ -271,7 +270,7 @@ impl Render for Gallery {
             )
             .child(menu_separator(cx))
             .child(menu_item("menu-add", "Add Account…").icon(IconName::Plus));
-        let alert = surface("alert", Material::Sheet)
+        let alert = surface()
             .w(px(300.))
             .rounded(px(18.))
             .p(px(16.))

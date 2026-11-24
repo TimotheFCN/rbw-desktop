@@ -7,9 +7,8 @@ use gpui::{
 };
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
-    glass, glass_surround, menu_item, menu_separator, nav_row, popover, row_focus_ring,
-    section_label,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, avatar, button, chrome, menu_item,
+    menu_separator, nav_row, popover, row_focus_ring, section_label, sidebar,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -100,15 +99,7 @@ impl VaultView {
         let theme = cx.theme();
         let metrics = theme.metrics;
         let look = theme.look;
-        let window_fill = theme.colors.window;
-        let corner = chrome::corner_radius(window, cx);
-        // A flush sidebar meets the window's rounded corners; a floating one
-        // keeps its own.
-        let glass_radius = if metrics.sidebar_inset > px(0.) {
-            metrics.sidebar_radius
-        } else {
-            corner
-        };
+        let padding = metrics.sidebar_padding;
         // Only the kinds the vault holds are worth a row.
         let kinds: Vec<_> = KINDS
             .iter()
@@ -133,6 +124,8 @@ impl VaultView {
                     "sidebar-header",
                     div()
                         .relative()
+                        .flex_none()
+                        .px(padding)
                         .h(metrics.toolbar_height)
                         .flex()
                         .items_center()
@@ -234,15 +227,12 @@ impl VaultView {
         // a sidebar's bottom bar with a hairline across the sidebar.
         let account = div()
             .relative()
-            .mt_auto()
+            .flex_none()
+            .px(padding)
             .pt(px(4.))
+            .pb(px(7.))
             .when(look == Look::Gnome, |d| {
-                d.mt(px(2.))
-                    .pt(px(6.))
-                    .mx(px(-6.))
-                    .px(px(6.))
-                    .border_t_1()
-                    .border_color(separator)
+                d.mt(px(2.)).pt(px(6.)).border_t_1().border_color(separator)
             })
             .flex()
             .items_center()
@@ -260,56 +250,21 @@ impl VaultView {
             )
             .child(menu);
 
-        div()
-            .id("sidebar")
-            .flex_none()
-            .w(metrics.sidebar_width)
-            .h_full()
-            .p(metrics.sidebar_inset)
-            .rounded_l(corner)
-            // The window's colour around the floating sidebar. On macOS the
-            // sidebar's glass is under this pane, which a background would
-            // cover.
-            .map(|d| {
-                if cfg!(target_os = "macos") {
-                    d.relative().child(glass_surround(
-                        metrics.sidebar_inset,
-                        glass_radius,
-                        window_fill,
-                    ))
-                } else {
-                    d.bg(window_fill)
-                }
-            })
+        sidebar("sidebar")
+            .child(header)
             .child(
-                glass("sidebar-glass", Material::Sidebar)
-                    .size_full()
+                div()
+                    .id("sidebar-rows")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .rounded_l(glass_radius)
-                    .when(look == Look::MacOs, |d| d.rounded_r(glass_radius))
-                    .px(match look {
-                        Look::MacOs => px(7.),
-                        Look::Gnome => px(6.),
-                    })
-                    .pb(px(7.))
-                    .when(look == Look::Gnome, |d| {
-                        d.border_r_1().border_color(cx.theme().colors.separator)
-                    })
-                    .child(header)
-                    .child(
-                        div()
-                            .id("sidebar-rows")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.))
-                            .children(rows),
-                    )
-                    .child(account),
+                    .gap(px(1.))
+                    .px(padding)
+                    .children(rows),
             )
+            .child(account)
             .into_any_element()
     }
 }
