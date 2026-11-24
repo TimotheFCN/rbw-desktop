@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Type-checks and lints the macOS build from Linux: everything behind
+# cfg(target_os = "macos") is compiled against the real AppKit bindings, but
+# nothing is linked or run. See docs/DEVELOPMENT.md.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+target=aarch64-apple-darwin
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+rustup target list --installed | grep -qx "$target" || rustup target add "$target"
+
+# gpui-pre-apple's build script checks the host instead of the target, so it
+# writes no Metal shader source when run on Linux, and its include_str! of
+# that file fails. Checking needs no shader, so an empty one stands in.
+cargo check --quiet --manifest-path "$root/Cargo.toml" --target "$target" -p gpui-pre-apple 2>/dev/null || true
+for out in "$root/target/$target"/debug/build/gpui-pre-apple/*/out; do
+	[[ -e $out/stitched_shaders.metal ]] || : >"$out/stitched_shaders.metal"
+done
+
+cargo clippy --manifest-path "$root/Cargo.toml" --target "$target" --all-targets \
+	-p rbw-desktop -p rbw-desktop-ui "$@"

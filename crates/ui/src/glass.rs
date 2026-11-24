@@ -89,10 +89,10 @@ impl RenderOnce for Glass {
         };
 
         #[cfg(target_os = "macos")]
-        if self.material == Material::Sidebar {
-            if let Some(glass) = native::GlassView::for_element(self.id.clone(), window, cx) {
-                return base.child(glass);
-            }
+        if self.material == Material::Sidebar
+            && let Some(glass) = native::GlassView::for_element(self.id.clone(), window, cx)
+        {
+            return base.child(glass);
         }
         // The id and window only serve the macOS glass.
         let _ = (self.id, window);
