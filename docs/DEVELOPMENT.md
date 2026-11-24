@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, glass, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. One module per screen (`vault/`), plus `backend.rs` and `clipboard.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `accounts.rs` the account menu the screens share; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -15,8 +15,13 @@ reduced motion). Nothing from the styled `gpui-component` layer is used. The
 workspace names the dependency `gpui`, because GPUI's macros expand to
 `gpui::…` paths.
 
-The app runs on `FakeBackend` until the rbw backend exists, and unlocks the
-first demo account at start (`main.rs`).
+The app runs on `FakeBackend` until it switches to `RbwBackend`.
+`RBW_DESKTOP_DEMO` sets the demo up (`demo.rs`): without it both demo
+accounts start locked; `first-run`, `unlocked`, `signed-out`, `touch-id`,
+`slow` and `offline`, comma-separated, reach the other states. The demo's
+master password is `demo` and its codes `123456`; an email with `+device@`
+asks for a new device code and one with `+apikey@` for the API key
+`user.d3m0` / `demo-secret`.
 
 ## Build and run
 
@@ -39,14 +44,15 @@ Look at a screenshot after every visual change, next to the mockup it
 implements.
 
 ```sh
-tools/shot vault out.png                          # states: vault search logins select copied sheet gallery
+tools/shot vault out.png                          # tools/shot --help lists the states
 tools/shot --theme gnome-dark sheet out.png
 tools/shot --size 680x470 vault out.png           # the mockups' window size
 tools/shot --then 'type "Netflix"' --then 'key ctrl+Return' sheet out.png
 tools/shot --record 0.9 sheet out.png             # also out-frames/NNN.png at 30 fps, to check motion
+tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
 ```
 
-It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
+Each state starts the demo it needs. It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
 wallpaper with `xcompmgr`, reaches the state with real keys and clicks, and
 crops around the window. `--then` runs `xdotool` with `$window` and `$scale`
 set; pointer positions are in device pixels from the window's top-left, which
@@ -55,6 +61,15 @@ GPUI does not see the pointer leave, so the script rests it on an empty spot
 before capturing.
 
 ## Patterns
+
+**The window** (`MainWindow`) shows the screen the current account's state
+calls for, asks the backend for the accounts every two seconds and fades a
+new screen in over the old one (`motion::screen_enter`). Screens don't poll:
+the window passes them the account's latest state (`set_account`). A screen
+asks the window for things by emitting a `Request` (show an account, add
+one, sign out, look again now). The window also holds the alert slot:
+`window::confirm(Confirmation { … }, window, cx, |window, cx| …)` asks
+before something that can't be undone, from any view in the window.
 
 **A screen** is a view entity holding its state, `impl Render`, and methods
 for its actions; long renders split into `render_*` methods in submodules
@@ -80,9 +95,18 @@ last children; `present(entity)` shows a sheet and `dismiss()` animates it out
 and then drops it. The sheet view binds `escape` to its own Cancel action and
 calls back into the window view to dismiss (`ItemEditor::close`).
 
-**Popovers** inside a window: `deferred(anchored().child(surface(id,
-Material::Popover)…))` placed inside the element it hangs from, as the
-editor's folder menu does.
+**Popovers and menus**: `popover(id, open, &focus, label)` with
+`menu_item`s, placed inside the element it hangs from, its `Opening` saying
+where it goes. Keep `open` and a `FocusHandle` in the view, focus the handle
+when it opens, and close it and put the focus back in `on_dismiss` (a click
+outside or Escape). The editor's folder menu and `accounts::menu` (with the
+`AccountMenu` trait the screens implement) are the examples.
+
+**Forms**: `text_field(id, &input, label)` (the label is for assistive
+technologies; the placeholder shows it), `field_error` under it in a line
+that stays when empty so nothing moves, `button(…).busy(true)` while the
+backend works, and `motion::shake` after a wrong entry. Escape goes back or
+cancels, Return goes on.
 
 **A keyboard shortcut and a menu item.** Add the action to the screen's
 `actions!`, bind it in `init` with `KeyBinding::new(secondary!("e"), …)`
@@ -92,14 +116,27 @@ editor's folder menu does.
 **Theme and motion.** Colours, sizes and durations come from
 `cx.theme()` and `rbw_desktop_ui::motion`; app code holds none of its own. A
 new colour goes into `Colors` for all four palettes. Motion uses the
-`motion` helpers (`fade`, `presence`, `content_enter`, the `SELECTION`
-spring), which follow the system's reduced-motion setting.
+`motion` helpers (`fade`, `presence`, `content_enter`, `screen_enter`,
+`shake`, `spin`, the `SELECTION` spring), which follow the system's
+reduced-motion setting.
 
 ## GPUI gotchas
 
 - Updating or reading an entity from a listener that runs inside that
   entity's update panics ("already being updated"). To reach a parent view
   from a child's listener, dispatch an action (`EditItem`).
+- `gpui::open_window` (gpui-kit) already wraps the view in gpui-base's
+  `Root`, which gives Tab, Shift-Tab and focus traps. Don't wrap it again;
+  reach the window's view through `window.root::<gpui::base::Root>()`
+  (`window::main_window`).
+- gpui-base's `Button` sets the line height to the font size. Text in a
+  row built on it needs its own (`ROW_LINE_HEIGHT`).
+- A box shadow is painted under the whole element, so a translucent fill
+  shows it. GNOME's translucent fields draw their focus ring as a border.
+- Text in a column centred with `items_center` takes its own width and
+  doesn't wrap; give a sentence `flex_1().min_w_0()` in a full-width row.
+- A deferred popover's `on_mouse_down_out` runs before the elements under
+  it; it stops propagation so a click outside a menu only closes it.
 - `svg()` paints only with its own text colour. `ui::Icon` falls back to the
   inherited one.
 - `Hsla::opacity(x)` multiplies the alpha; don't pass `color.a * x`.
@@ -130,6 +167,8 @@ The macOS-only code is small and type-checked from Linux by
 - `ui/src/chrome.rs`: transparent title bar, traffic lights at (21, 21) inside
   the sidebar, the `Blurred` window background.
 - Fonts: `.SystemUIFont` and Menlo.
+- `app/src/window.rs`: the lock and sign-in screens paint no background
+  there, so the window's blurred material shows through them.
 
 Everything else, the macOS look included, is the code Linux runs and is
 checked with `RBW_DESKTOP_THEME=macos-light` / `macos-dark` screenshots.
