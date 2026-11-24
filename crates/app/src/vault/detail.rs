@@ -31,7 +31,7 @@ const SETTLE: Duration = Duration::from_millis(150);
 /// How often a verification code's countdown moves.
 const COUNTDOWN_STEP: Duration = Duration::from_secs(1);
 /// The narrowest the item gets, beside the list.
-const MIN_WIDTH: Pixels = px(240.);
+const MIN_WIDTH: Pixels = px(220.);
 /// The widest the item's fields get: in a wide window they stay in the
 /// middle rather than stretch across it.
 const MAX_CONTENT_WIDTH: Pixels = px(620.);

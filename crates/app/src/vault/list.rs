@@ -22,7 +22,7 @@ use crate::secondary;
 /// The space under each row of the list.
 pub(super) const ROW_GAP: Pixels = px(1.);
 /// The narrowest the list gets, however small the window or its share.
-pub(super) const MIN_WIDTH: Pixels = px(220.);
+pub(super) const MIN_WIDTH: Pixels = px(240.);
 /// How far either side of the list's edge its divider takes the pointer.
 const DIVIDER_REACH: Pixels = px(3.);
 
