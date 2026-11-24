@@ -17,3 +17,9 @@ gpui = { package = "gpui-kit", version = "=0.11.0", default-features = false, fe
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# What the packages ship: a whole-program LTO trims 7% off the binary for a
+# build that takes three times as long, which tools/perf needn't wait for.
+[profile.dist]
+inherits = "release"
+lto = "fat"
