@@ -46,7 +46,10 @@ On Ubuntu the build needs `libxkbcommon-dev libxkbcommon-x11-dev
 libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev
 libvulkan-dev libssl-dev libzstd-dev`; screenshots also need `xvfb xdotool
 xcompmgr hsetroot x11-utils mesa-vulkan-drivers imagemagick ffmpeg`, and
-`tools/e2e` `xclip`, `dbus-daemon` and Python's `gi`.
+`tools/e2e` `xclip`, `dbus-daemon` and Python's `gi`. The packages need
+`dpkg-dev`, `desktop-file-utils`, `appstream`, Docker and cargo-about
+(`cargo install --locked --features cli cargo-about`); the icons
+`librsvg2-bin`.
 
 ## Screenshots
 
@@ -63,6 +66,7 @@ tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
 tools/shot --theme gnome-dark ssh-other out.png   # settings states shoot the Settings window
 tools/shot panel-generator out.png                # panel states shoot the panel, opened alone
 tools/shot --keyboard --then 'key Tab Tab' vault out.png   # the keyboard's focus ring
+tools/shot --binary target/package/linux/rbw-desktop-*/bin/rbw-desktop vault out.png   # a package's app
 ```
 
 Each state starts the demo it needs. It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
@@ -111,6 +115,11 @@ RBW_NG=~/src/rbw-ng tools/e2e            # builds rbw-ng into target/rbw-ng
 RBW_NG=~/src/rbw-ng tools/e2e --no-build
 ```
 
+`tools/e2e --app path/to/bin/rbw-desktop` drives a packaged app instead,
+on the `rbw` it bundles, with none on `PATH`, and checks that the agent
+that runs is the bundled one; its screenshots go to
+`target/shots/package/e2e`.
+
 `tools/e2e` starts a throwaway Vaultwarden in Docker on 127.0.0.1, makes two
 accounts with rbw-ng's `tools/scripting-check` helpers (the first with
 shared items, some protected), runs the app on rbw with a private `HOME`,
@@ -130,6 +139,120 @@ with `xclip`, and screenshotted to `target/shots/e2e/NN-step.png`. A stand-in `s
 records what rbw asks of systemd and refuses `start`, so nothing of this
 machine's user services changes; rbw then starts its agent itself. Run it
 after any change to how the app calls the backend.
+
+## Size and start-up
+
+```sh
+tools/footprint                # release build: binary, launch to window, memory idle
+tools/footprint --binary target/dist/rbw-desktop
+```
+
+`tools/footprint` runs the demo on the private display: the size of the
+binary, the time from launch to the window shown (the best and the median
+of five), and the memory, resident and proportional, once idle with the
+vault open, then with only the menu bar item left. Mesa's software Vulkan
+counts towards the memory there, about 100 MB of it, which a GPU's driver
+mostly keeps elsewhere.
+
+The packages are built with the `dist` profile, the release profile with a
+whole-program LTO, which trims 7% off the binary and takes three times as
+long to build. Most of the rest is GPUI's and the menu bar item's: D-Bus
+(zbus), wgpu and naga, the Secret Service client, and every image format of
+the `image` crate, which GPUI turns on.
+
+## Packages
+
+```sh
+RBW_NG=~/src/rbw-ng packaging/linux/package.sh    # target/packages: .tar.xz and .deb
+packaging/linux/check.sh                          # install and run them in containers
+RBW_NG=~/src/rbw-ng packaging/macos/bundle.sh     # on a Mac: rbw Desktop.app and a .dmg
+RBW_NG=~/src/rbw-ng packaging/macos/bundle.sh --dry-run --universal   # its layout, anywhere
+packaging/icon/render.py                          # after changing the icon
+```
+
+Every package bundles `rbw` and `rbw-agent`, built from the rbw-ng checkout
+in `RBW_NG` (only read; built into `target/package/rbw-ng`) where the app
+finds them (`crates/core/README.md`): off `PATH`, so they never take the
+place of a terminal's `rbw`. Releases bundle the revision in
+`packaging/rbw-ng-revision`; the scripts say when the checkout is at
+another. `packaging/lib.sh` holds what the scripts share: the app's id, name
+and version, read from the code, the rbw-ng build, and the licences every
+package carries: ours, rbw-ng's, the Inter font's, the Rust crates' of both
+as cargo-about lists them (`packaging/licenses`), and a `copyright` file
+that says which is which.
+
+**The icon.** `packaging/icon/icon.svg` is the drawing, in the macOS icon
+grid (an 824-point rounded square with continuous corners on 1024), which
+reads on Linux too; `icon-small.svg` is its 16 to 32 pixel version, on the
+pixel grid and without the keyhole. `render.py` (rsvg-convert) writes the
+Linux theme's PNGs and `AppIcon.icns`, which are committed. Look at the
+16-pixel icon after any change. The menu bar item's icon is
+`crates/app/assets/menu-bar-symbolic.svg`.
+
+**Linux.** `package.sh` builds the `dist` binary and lays out a prefix:
+`bin/rbw-desktop`, `libexec/rbw-desktop/{rbw,rbw-agent}`, the desktop file
+and AppStream metadata from `packaging/linux`, the icons and
+`share/doc/rbw-desktop`. The tarball is that prefix and unpacks into
+`~/.local`; the .deb puts it under `/usr`, with its dependencies from
+`dpkg-shlibdeps` plus what GPUI opens as it starts (Vulkan or EGL, and
+Wayland's client library). The binaries need the glibc of the machine that
+builds them or a later one: the release builds on Ubuntu 24.04, for glibc
+2.39. `check.sh` validates the metadata and installs the .deb on Ubuntu
+24.04 and Debian 13 and the tarball on Fedora 43 in containers, where it
+checks the libraries and the bundled `rbw` and opens the demo's window.
+The AppStream screenshots are `docs/screenshots/linux-*.png`, taken with
+`tools/shot --theme gnome-light` (`gnome-dark` for the item); the metadata
+links them on GitHub.
+
+There's no Flatpak. rbw-agent has to outlive the app and be the one the
+`rbw` command line reaches, through sockets in `$XDG_RUNTIME_DIR`; the SSH
+agent is a systemd user service that `ssh` outside the app reaches; and the
+whole design is that the app and the terminal share one agent. A sandbox
+would need host access for each of these (`flatpak-spawn --host`, the
+session's runtime folder, systemd), which leaves little of it while adding
+its costs.
+
+**macOS.** `bundle.sh` builds `rbw Desktop.app` for this Mac's architecture
+or, with `--universal`, both: `Contents/MacOS/rbw-desktop`,
+`Contents/Helpers/{rbw,rbw-agent}`, `Info.plist` from
+`packaging/macos/Info.plist` (macOS 12 or later, GPUI's Metal shaders'
+minimum), the icon and the licences. `check.py` checks the layout, the
+plist and the icon, on any system. It signs with the hardened runtime, ad
+hoc unless `--sign` names a Developer ID identity, the helpers first;
+`--notarize` notarizes and staples the app and the .dmg with
+`NOTARY_PROFILE` or an App Store Connect API key (`NOTARY_KEY`,
+`NOTARY_KEY_ID`, `NOTARY_ISSUER`). Neither the app nor rbw-agent needs an
+entitlement: rbw-agent's Touch ID unlock makes a Secure Enclave key that
+isn't kept in the keychain and lives as long as the agent, and
+LocalAuthentication needs none. `tools/smoke-macos` runs a built app on the
+demo for CI and keeps screenshots and logs. Without a Mac, `--dry-run`
+lays the bundle out from stand-in executables and checks it.
+
+## Continuous integration and releases
+
+`.github/workflows/ci.yaml` runs on every push to main and pull request:
+formatting, clippy, `tools/check-macos`, `cargo deny`, shellcheck and the
+metadata validators; the tests; a build, the tests and `tools/smoke-macos`
+on a macOS runner; `tools/e2e` against Vaultwarden; the Linux packages with
+`packaging/linux/check.sh` and the macOS dry run. Pushes to main also build
+the macOS bundle and its .dmg, signed ad hoc. The jobs share
+`.github/actions/setup`: the system libraries, the pinned Rust, a cache, and
+rbw-ng at the pinned revision, which must be pushed to GitHub.
+
+To release:
+
+1. Set the version in `Cargo.toml` and add a `<release>` to
+   `packaging/linux/*.metainfo.xml`. Update `packaging/rbw-ng-revision` if
+   the app needs a newer rbw-ng.
+2. Commit, then push a tag of the bare version, such as `0.1.0`.
+3. `.github/workflows/release.yaml` builds the universal .dmg and the Linux
+   packages for x86_64 and arm64, checks them (the Linux ones end to end
+   against Vaultwarden, on the rbw they bundle), and attaches them to a
+   draft release.
+4. Read the draft, then publish it.
+
+The .dmg is signed with a Developer ID and notarized when the repository
+has the secrets the workflow lists, and signed ad hoc otherwise.
 
 ## Patterns
 
@@ -370,7 +493,8 @@ Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code.
 ## macOS
 
 The macOS-only code is small and type-checked from Linux by
-`tools/check-macos`, but none of it has run:
+`tools/check-macos`; CI builds and runs it on a macOS runner
+(`tools/smoke-macos`), but nobody has used it on a Mac yet:
 
 - `ui/src/glass.rs`: the `NSGlassEffectView` under the sidebar (macOS 26+),
   placed below GPUI's view and moved with the sidebar's bounds.
