@@ -52,6 +52,27 @@ pub fn request_in<V: 'static, T: Send + 'static>(
     })
 }
 
+/// Runs `call` off the main thread, for an answer that no view waits for.
+pub fn call<T: Send + 'static>(
+    cx: &mut App,
+    call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
+) -> Task<Result<T>> {
+    let backend = cx.global::<Shared>().0.clone();
+    cx.background_spawn(async move { call(backend.as_ref()) })
+}
+
+/// Runs `call` off the main thread when nothing waits for its answer, such
+/// as removing an account that was abandoned. A failure is only logged.
+pub fn forget(cx: &mut App, call: impl FnOnce(&dyn Backend) -> Result<()> + Send + 'static) {
+    let backend = cx.global::<Shared>().0.clone();
+    cx.background_spawn(async move {
+        if let Err(error) = call(backend.as_ref()) {
+            log::warn!("{error}");
+        }
+    })
+    .detach();
+}
+
 /// What a view shows while its data is on the way.
 pub enum Load<T> {
     Loading,
@@ -83,6 +104,8 @@ pub fn describe(error: &Error) -> &'static str {
     match error {
         Error::Locked => "The vault is locked.",
         Error::NotSignedIn => "This account is signed out.",
+        Error::WrongPassword => "Incorrect password. Try again.",
+        Error::WrongCode => "That code isn't right. Try again.",
         Error::Offline => "The server can't be reached. Check your connection.",
         Error::Timeout => "rbw is taking too long to answer.",
         Error::RbwNotFound => "rbw isn't installed.",
@@ -91,7 +114,8 @@ pub fn describe(error: &Error) -> &'static str {
         Error::Conflict => "The item changed on another device. Sync, then try again.",
         Error::ReadOnly => "This item can't be changed.",
         Error::InvalidItem(_) => "Some details of the item aren't valid.",
-        Error::Server(_) => "The server refused the change.",
+        Error::Server(_) => "The server refused the request.",
+        Error::PasswordRequired => "rbw needs the master password for this.",
         _ => "Something went wrong.",
     }
 }

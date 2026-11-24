@@ -5,19 +5,20 @@ mod editor;
 mod list;
 mod sidebar;
 
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy, Styled as _, Task,
-    UniformListScrollHandle, Window, actions, div, px, size,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
+    Styled as _, Task, UniformListScrollHandle, Window, actions, div, px,
 };
 use rbw_desktop_core::{
     Account, AccountId, Error, Folder, FolderId, ItemId, ItemKind, ItemSummary,
 };
-use rbw_desktop_ui::{SheetSlot, Theme, ToastSlot, chrome};
+use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot};
 
+use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
 use crate::secondary;
 use detail::ItemDetail;
@@ -30,6 +31,8 @@ actions!(
         NewItem,
         /// Opens the selected item in the edit sheet.
         EditItem,
+        /// Asks, then moves the selected item to the trash.
+        DeleteItem,
         /// Moves the keyboard to the search field.
         Find,
         SelectNext,
@@ -41,13 +44,12 @@ actions!(
 );
 
 const CONTEXT: &str = "Vault";
-/// How often the account is asked whether it locked or synced.
-const POLL: Duration = Duration::from_secs(2);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(secondary!("n"), NewItem, Some(CONTEXT)),
         KeyBinding::new(secondary!("e"), EditItem, Some(CONTEXT)),
+        KeyBinding::new(secondary!("backspace"), DeleteItem, Some("VaultList")),
         KeyBinding::new(secondary!("f"), Find, Some(CONTEXT)),
         KeyBinding::new(secondary!("r"), Sync, Some(CONTEXT)),
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
@@ -55,21 +57,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("up", SelectPrevious, Some("VaultList")),
     ]);
     editor::init(cx);
-}
-
-pub fn open(account: Account, cx: &mut App) {
-    let options = chrome::window_options(
-        "Vault",
-        size(px(880.), px(580.)),
-        size(px(680.), px(440.)),
-        cx,
-    );
-    let window = gpui::open_window(options, cx, |window, cx| {
-        cx.new(|cx| VaultView::new(account, window, cx))
-    });
-    if let Err(error) = window {
-        log::error!("opening the vault window: {error:#}");
-    }
 }
 
 /// What the sidebar selected.
@@ -94,6 +81,10 @@ impl Filter {
 
 pub struct VaultView {
     account: Account,
+    /// Every account on this computer, for the account menu.
+    accounts: Vec<Account>,
+    account_menu_open: bool,
+    account_menu_focus: FocusHandle,
     items: Load<Vec<ItemSummary>>,
     folders: Vec<Folder>,
     filter: Filter,
@@ -109,11 +100,17 @@ pub struct VaultView {
     list_scroll: UniformListScrollHandle,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
-    _poll: Task<()>,
 }
 
+impl EventEmitter<Request> for VaultView {}
+
 impl VaultView {
-    fn new(account: Account, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        account: Account,
+        accounts: Vec<Account>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         cx.subscribe_in(
             &search,
@@ -128,23 +125,14 @@ impl VaultView {
             },
         )
         .detach();
-        cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::follow_window_appearance(window, cx);
-        })
-        .detach();
         let vault = cx.entity().downgrade();
         let detail = cx.new(|_| ItemDetail::new(account.id.clone(), vault));
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL).await;
-                if this.update(cx, |this, cx| this.poll(cx)).is_err() {
-                    break;
-                }
-            }
-        });
         let mut this = Self {
             last_sync: account.last_sync,
             account,
+            accounts,
+            account_menu_open: false,
+            account_menu_focus: cx.focus_handle(),
             items: Load::Loading,
             folders: vec![],
             filter: Filter::All,
@@ -157,15 +145,37 @@ impl VaultView {
             list_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
             load_task: Task::ready(()),
-            _poll: poll,
         };
         this.reload(cx);
         window.focus(&this.list_focus, cx);
         this
     }
 
+    pub fn account(&self) -> &AccountId {
+        &self.account.id
+    }
+
     fn account_id(&self) -> AccountId {
         self.account.id.clone()
+    }
+
+    /// Takes the account's latest state, and reloads the vault after a sync,
+    /// whether this app, the command line or the agent ran it.
+    pub fn set_account(
+        &mut self,
+        account: Account,
+        accounts: Vec<Account>,
+        cx: &mut Context<Self>,
+    ) {
+        let synced = account.last_sync != self.last_sync;
+        self.last_sync = account.last_sync;
+        self.account = account;
+        self.accounts = accounts;
+        if synced {
+            self.reload(cx);
+            self.detail.update(cx, |detail, cx| detail.reload(cx));
+        }
+        cx.notify();
     }
 
     /// Loads the items and folders again, keeping the selection if it still
@@ -187,28 +197,6 @@ impl VaultView {
                 this.refilter(cx);
             },
         );
-    }
-
-    fn poll(&mut self, cx: &mut Context<Self>) {
-        let account = self.account_id();
-        // The poll replaces nothing and is cheap, so its task can run
-        // detached: the view going away ends it at the next update.
-        backend::request(
-            cx,
-            move |backend| backend.account(&account),
-            |this, result, cx| {
-                let Ok(account) = result else { return };
-                let synced = account.last_sync != this.last_sync;
-                let state_changed = account.state != this.account.state;
-                this.last_sync = account.last_sync;
-                this.account = account;
-                if synced || state_changed {
-                    this.reload(cx);
-                    this.detail.update(cx, |detail, cx| detail.reload(cx));
-                }
-            },
-        )
-        .detach();
     }
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
@@ -351,7 +339,7 @@ impl VaultView {
             cx,
             move |backend| backend.sync(&account),
             |this, result, cx| match result {
-                Ok(()) => this.poll(cx),
+                Ok(()) => cx.emit(Request::Refresh),
                 Err(error) => this.show_error(&error, cx),
             },
         )
@@ -364,7 +352,70 @@ impl VaultView {
             cx,
             move |backend| backend.lock(&account),
             |this, result, cx| match result {
-                Ok(()) => this.poll(cx),
+                Ok(()) => cx.emit(Request::Refresh),
+                Err(error) => this.show_error(&error, cx),
+            },
+        )
+        .detach();
+    }
+
+    fn delete_selected(&mut self, _: &DeleteItem, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = self.detail.read(cx).item().filter(|item| item.editable) {
+            let (id, name) = (item.id.clone(), item.data.name.clone());
+            self.delete_item(id, name, window, cx);
+        }
+    }
+
+    /// Asks, then moves the item to the trash and selects the one after it.
+    pub(crate) fn delete_item(
+        &mut self,
+        id: ItemId,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let confirmation = Confirmation {
+            title: format!("Delete “{name}”?").into(),
+            message: "It moves to the trash of your vault.".into(),
+            confirm: "Delete".into(),
+            destructive: true,
+        };
+        let vault = cx.entity().downgrade();
+        crate::window::confirm(confirmation, window, cx, move |window, cx| {
+            vault
+                .update(cx, |vault, cx| vault.delete_confirmed(id, window, cx))
+                .ok();
+        });
+    }
+
+    fn delete_confirmed(&mut self, id: ItemId, window: &mut Window, cx: &mut Context<Self>) {
+        let account = self.account_id();
+        let deleted = id.clone();
+        backend::request_in(
+            window,
+            cx,
+            move |backend| backend.delete_item(&account, &id),
+            move |this, result, window, cx| match result {
+                Ok(()) => {
+                    if this.sheet.is_open() {
+                        this.dismiss_sheet(None, window, cx);
+                    }
+                    // The next item takes its place, or the one before it at
+                    // the end of the list.
+                    let position = this.selected_index();
+                    let neighbour = position.and_then(|index| {
+                        let items: Vec<_> =
+                            this.visible_items().map(|item| item.id.clone()).collect();
+                        items
+                            .get(index + 1)
+                            .or_else(|| index.checked_sub(1).and_then(|before| items.get(before)))
+                            .cloned()
+                    });
+                    if this.selected.as_ref() == Some(&deleted) {
+                        this.select(neighbour, cx);
+                    }
+                    this.reload(cx);
+                }
                 Err(error) => this.show_error(&error, cx),
             },
         )
@@ -393,6 +444,24 @@ fn matches(item: &ItemSummary, query: &str) -> bool {
             .any(|website| website.to_lowercase().contains(query))
 }
 
+impl AccountMenu for VaultView {
+    fn menu_open(&self) -> bool {
+        self.account_menu_open
+    }
+
+    fn set_menu_open(&mut self, open: bool) {
+        self.account_menu_open = open;
+    }
+
+    fn menu_focus(&self) -> &FocusHandle {
+        &self.account_menu_focus
+    }
+
+    fn menu_return(&self, _: &App) -> FocusHandle {
+        self.list_focus.clone()
+    }
+}
+
 impl Focusable for VaultView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.list_focus.clone()
@@ -405,10 +474,11 @@ impl Render for VaultView {
         let list = self.render_list(window, cx);
         let sheet = self.sheet.render(px(360.), window, cx);
         let toast = self.toast.render(window, cx);
-        let content = div()
+        div()
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::new_item))
             .on_action(cx.listener(Self::edit_item))
+            .on_action(cx.listener(Self::delete_selected))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))
@@ -421,7 +491,6 @@ impl Render for VaultView {
             .child(list)
             .child(self.detail.clone())
             .children(sheet)
-            .children(toast);
-        chrome::window_frame(content, window, cx)
+            .children(toast)
     }
 }

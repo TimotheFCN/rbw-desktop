@@ -4,12 +4,26 @@
 use std::time::Duration;
 
 use gpui::{App, ClipboardItem, Global};
-use rbw_desktop_core::Secret;
+use rbw_desktop_core::{Preferences, Secret};
+
+use crate::backend;
 
 /// How long a copied secret stays on the clipboard; `None` leaves it there.
 pub struct ClearAfter(pub Option<Duration>);
 
 impl Global for ClearAfter {}
+
+/// Reads how long to keep copied secrets from the preferences, and until
+/// they arrive uses the default.
+pub fn init(cx: &mut App) {
+    cx.set_global(ClearAfter(Preferences::default().clipboard_clear));
+    let preferences = backend::call(cx, |backend| backend.preferences());
+    cx.spawn(async move |cx| match preferences.await {
+        Ok(preferences) => cx.update(|cx| cx.set_global(ClearAfter(preferences.clipboard_clear))),
+        Err(error) => log::warn!("reading the preferences: {error}"),
+    })
+    .detach();
+}
 
 pub fn copy(value: &Secret, secret: bool, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(value.expose().to_string()));

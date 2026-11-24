@@ -7,14 +7,39 @@ usage() {
 	cat <<'EOF'
 usage: tools/shot [options] <state> <out.png>
 
-states:
-  vault      the vault as it opens
-  search     "bank" typed into the search field
-  logins     Logins chosen in the sidebar
-  select     the third item selected with the keyboard
-  copied     the first field of the item copied
-  sheet      the New Item sheet
-  gallery    the design system gallery
+states, in the vault:
+  vault          the vault of an unlocked account
+  search         "bank" typed into the search field
+  logins         Logins chosen in the sidebar
+  select         the third item selected with the keyboard
+  copied         the first field of the item copied
+  revealed       the item's password shown
+  sheet          the New Item sheet
+  folder-menu    the sheet's folder menu
+  new-folder     a folder being created from it
+  delete         asking before deleting the selected item
+  accounts       the account menu
+  sign-out       asking before signing out
+  add-account    adding another account
+
+locking and signing in:
+  lock           the lock screen
+  lock-wrong     a wrong password entered
+  lock-busy      unlocking, with a slow backend
+  lock-touch-id  Touch ID ready to unlock
+  lock-accounts  the account menu from the lock screen
+  unlock         the vault, unlocked with the password
+  first-run      no accounts yet: the server and email
+  self-hosted    a self-hosted server chosen
+  password       the master password step
+  sign-in-wrong  a wrong master password
+  offline        the server can't be reached
+  two-step       the two-step login code step
+  email-code     a two-step code by email, sent
+  new-device     the new device code step
+  signed-out     signing in to an account that is signed out
+
+  gallery        the design system gallery
 
 options:
   --theme T     macos-light (default), macos-dark, gnome-light, gnome-dark
@@ -25,12 +50,14 @@ options:
                 and $scale are set; repeatable, run in order
   --record S    also record S seconds from the state's input as
                 <out>-frames/NNN.png at 30 frames per second
+  --demo WORDS  more RBW_DESKTOP_DEMO words (see crates/app/src/demo.rs),
+                such as slow
   --no-build    use the binaries already built
 EOF
 	exit 2
 }
 
-theme=macos-light size="" scale=2 record="" build=1 then=()
+theme=macos-light size="" scale=2 record="" build=1 then=() demo=""
 while [[ $# -gt 0 && $1 == --* ]]; do
 	case $1 in
 	--theme) theme=$2; shift 2 ;;
@@ -38,6 +65,7 @@ while [[ $# -gt 0 && $1 == --* ]]; do
 	--scale) scale=$2; shift 2 ;;
 	--record) record=$2; shift 2 ;;
 	--then) then+=("$2"); shift 2 ;;
+	--demo) demo=$2; shift 2 ;;
 	--no-build) build=0; shift ;;
 	*) usage ;;
 	esac
@@ -107,6 +135,18 @@ set_property(b"_NET_SUPPORTED", ATOM, x.XInternAtom(display, b"_GTK_FRAME_EXTENT
 x.XCloseDisplay(display)
 PY
 
+# Each state starts from the demo setup it needs.
+case $state in
+lock | lock-wrong | lock-accounts | unlock | gallery) state_demo="" ;;
+lock-busy) state_demo=slow ;;
+lock-touch-id) state_demo=touch-id ;;
+first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new-device) state_demo=first-run ;;
+offline) state_demo=first-run,offline ;;
+signed-out) state_demo=first-run,signed-out ;;
+*) state_demo=unlocked ;;
+esac
+export RBW_DESKTOP_DEMO=$state_demo,$demo
+
 # Keep the pointer off where the window will appear.
 xdotool mousemove 0 0
 RBW_DESKTOP_THEME=$theme GPUI_X11_SCALE_FACTOR=$scale RUST_LOG=${RUST_LOG:-error} \
@@ -147,15 +187,53 @@ click() {
 	xdotool mousemove --window "$window" $((($1 + frame) * scale)) $((($2 + frame) * scale)) click 1
 }
 act() {
+	# The window's size in points, without the frame.
+	local width=$((win_w / scale - 2 * frame)) height=$((win_h / scale - 2 * frame))
+	# The middle of the account button at the bottom of the sidebar.
+	local footer_x=$((inset + 60)) footer_y=$((height - inset - 7 - 19))
 	case $state in
-	vault | gallery) ;;
+	vault | gallery | lock | lock-touch-id | first-run | signed-out) ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.
 	logins) click $((sidebar / 2)) $((inset + sidebar_top + nav * 2 + 30 + nav / 2)) ;;
 	select) xdotool key Down Down ;;
 	# The first field: under the toolbar, the 56-point header and its gap.
 	copied) click $((sidebar + 236 + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20)) ;;
+	# The eye of the second field, the password.
+	revealed) click $((width - 62)) $((toolbar + 2 + 56 + 4 + 10 + 51 + 25)) ;;
 	sheet) xdotool key ctrl+n ;;
+	# Name, Username, Password, its Generate button, Website, then Folder.
+	folder-menu) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Return ;;
+	new-folder)
+		xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Return sleep 0.4 key Up Return
+		xdotool sleep 0.4 type --delay 60 Travel
+		;;
+	delete) xdotool key ctrl+BackSpace ;;
+	accounts) click "$footer_x" "$footer_y" ;;
+	# Up from the menu goes round to its last items.
+	sign-out) click "$footer_x" "$footer_y" && xdotool sleep 0.4 key Up Return ;;
+	add-account) click "$footer_x" "$footer_y" && xdotool sleep 0.4 key Up Up Return ;;
+	lock-wrong) xdotool type --delay 40 nope && xdotool key Return sleep 0.6 ;;
+	lock-busy) xdotool sleep 2 type --delay 40 demo && xdotool key Return ;;
+	lock-accounts) xdotool key shift+Tab Return ;;
+	unlock) xdotool type --delay 40 demo && xdotool key Return ;;
+	self-hosted) xdotool key shift+Tab Return ;;
+	password) xdotool type --delay 40 alex@example.org && xdotool key Return ;;
+	sign-in-wrong | two-step | email-code)
+		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
+		xdotool type --delay 40 "$([[ $state == sign-in-wrong ]] && echo nope || echo demo)"
+		xdotool key Return sleep 0.6
+		# The Email method, then its button.
+		[[ $state == email-code ]] && xdotool key shift+Tab Return sleep 0.3 key Tab Return
+		;;
+	offline)
+		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
+		xdotool type --delay 40 demo && xdotool key Return sleep 0.4
+		;;
+	new-device)
+		xdotool type --delay 40 alex+device@example.org && xdotool key Return sleep 0.4
+		xdotool type --delay 40 demo && xdotool key Return
+		;;
 	*) usage ;;
 	esac
 	for args in "${then[@]}"; do

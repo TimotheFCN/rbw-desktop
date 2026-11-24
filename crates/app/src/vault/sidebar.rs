@@ -1,16 +1,18 @@
 //! The sidebar: what to show, and the account at the bottom.
 
+use gpui::base::Button as BaseButton;
 use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Material, avatar, button, chrome, glass,
-    nav_row, section_label,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
+    glass, nav_row, section_label,
 };
 
 use super::{Filter, Lock, VaultView};
+use crate::accounts;
 
 const KINDS: [(ItemKind, IconName, &str); 5] = [
     (ItemKind::Login, IconName::Key, "Logins"),
@@ -114,26 +116,56 @@ impl VaultView {
             );
         }
 
-        let email = self.account.email.clone().unwrap_or_default();
+        let name = accounts::name(&self.account);
         let theme = cx.theme();
-        let account = div()
-            .mt_auto()
-            .flex()
-            .items_center()
+        let (hover, pressed, dim, separator) = (
+            theme.colors.hover,
+            theme.colors.fill,
+            theme.colors.text_secondary,
+            theme.colors.separator,
+        );
+        let switcher = BaseButton::new("account")
+            .accessibility_label(format!("{name}, accounts"))
+            .on_click(cx.listener(|this, _, window, cx| accounts::toggle(this, window, cx)))
+            .flex_1()
+            .min_w_0()
+            .justify_start()
             .gap(px(8.))
-            .px(px(6.))
-            .py(px(6.))
-            .child(avatar(&email, cx))
+            .p(px(6.))
+            .rounded(px(10.))
+            .hover(move |s| s.bg(hover))
+            .active(move |s| s.bg(pressed))
+            .when(self.account_menu_open, |b| b.bg(pressed))
+            .child(avatar(&name, cx))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(email),
-            )
+                    .child(name),
+            );
+        let menu = accounts::menu(self, &self.accounts, &self.account.id, Opening::Above, cx);
+        // Rows scrolling under the account stop short of it; GNOME divides
+        // a sidebar's bottom bar with a hairline across the sidebar.
+        let account = div()
+            .relative()
+            .mt_auto()
+            .pt(px(4.))
+            .when(look == Look::Gnome, |d| {
+                d.mt(px(2.))
+                    .pt(px(6.))
+                    .mx(px(-6.))
+                    .px(px(6.))
+                    .border_t_1()
+                    .border_color(separator)
+            })
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .child(switcher)
             .child(
-                div().text_color(theme.colors.text_secondary).child(
+                div().pr(px(4.)).text_color(dim).child(
                     button("lock")
                         .icon(IconName::Lock)
                         .style(ButtonStyle::Flat)
@@ -141,7 +173,8 @@ impl VaultView {
                         .accessibility_label("Lock")
                         .on_click(cx.listener(|this, _, window, cx| this.lock(&Lock, window, cx))),
                 ),
-            );
+            )
+            .child(menu);
 
         div()
             .id("sidebar")
