@@ -41,7 +41,7 @@ pub use item::{
 };
 pub use rbw::{OutdatedRbw, RBW_ENV, REQUIRED_RBW, RbwBackend, session_dir};
 pub use secret::Secret;
-pub use settings::{Preferences, SortOrder};
+pub use settings::{Preferences, SortOrder, WindowPlace};
 pub use ssh::{SshAgentStatus, SshKeySummary, SshService, SshUses};
 
 pub trait Backend: Send + Sync {

@@ -23,7 +23,7 @@ mod window;
 use std::sync::Arc;
 
 use gpui::{App, KeyBinding, Menu, MenuItem, QuitMode, actions};
-use rbw_desktop_core::{APP_NAME, Backend};
+use rbw_desktop_core::{APP_NAME, Backend, Error};
 
 /// A key binding with the platform's command modifier: Command on macOS,
 /// Control elsewhere.
@@ -100,16 +100,22 @@ fn main() {
             }
             Err(error) => Some(error),
         };
-        if missing.is_none() && demo::wants("panel") {
-            panel::open(panel::Anchor::Centered, cx);
-        } else {
-            window::open(missing, cx);
-            if demo::wants("settings") {
-                settings::open(None, cx);
-            }
+        match missing {
+            None if demo::wants("panel") => panel::open(panel::Anchor::Centered, cx),
+            // Where the window was last comes with the preferences.
+            None => preferences::when_read(cx, |cx| open_windows(None, cx)),
+            missing => open_windows(missing, cx),
         }
         cx.activate(true);
     });
+}
+
+/// Opens the main window, and Settings over it if the demo asks.
+fn open_windows(missing: Option<Error>, cx: &mut App) {
+    window::open(missing, cx);
+    if demo::wants("settings") {
+        settings::open(None, cx);
+    }
 }
 
 /// Starts what runs on the backend, once there is one.

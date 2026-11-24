@@ -19,6 +19,19 @@ pub struct Preferences {
     pub list_share: Option<f32>,
     /// How the vault's item list is sorted.
     pub sort: SortOrder,
+    /// Where the main window was last, to open there again.
+    pub window: Option<WindowPlace>,
+}
+
+/// Where a window is on the screen, in points, and whether it fills it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowPlace {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Maximized, at `x`, `y`, `width` and `height` once it is no longer.
+    pub maximized: bool,
 }
 
 /// How the vault's item list is sorted.
@@ -42,6 +55,7 @@ impl Default for Preferences {
             menu_bar: true,
             list_share: None,
             sort: SortOrder::Name,
+            window: None,
         }
     }
 }

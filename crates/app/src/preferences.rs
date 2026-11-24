@@ -11,6 +11,7 @@ use crate::clipboard;
 use crate::icons::Icons;
 
 type Change = Box<dyn Fn(&mut Preferences)>;
+type Then = Box<dyn FnOnce(&mut App)>;
 
 pub struct Prefs {
     preferences: Preferences,
@@ -18,6 +19,8 @@ pub struct Prefs {
     loaded: bool,
     /// Changes made before they were read, made again on what was read.
     early: Vec<Change>,
+    /// What waits for them to be read.
+    waiting: Vec<Then>,
 }
 
 /// A change could not be saved; the preferences are back as they were.
@@ -52,6 +55,9 @@ pub fn init(cx: &mut App) {
                 }
                 apply(&this.preferences, cx);
                 cx.notify();
+                for then in std::mem::take(&mut this.waiting) {
+                    cx.defer(then);
+                }
             },
         )
         .detach();
@@ -59,6 +65,7 @@ pub fn init(cx: &mut App) {
             preferences: Preferences::default(),
             loaded: false,
             early: vec![],
+            waiting: vec![],
         }
     });
     cx.set_global(Shared(prefs));
@@ -112,6 +119,17 @@ impl Prefs {
             },
         )
         .detach();
+    }
+}
+
+/// Runs `then` once the preferences have been read, at once if they have,
+/// such as opening the main window where it was last.
+pub fn when_read(cx: &mut App, then: impl FnOnce(&mut App) + 'static) {
+    let prefs = Prefs::global(cx);
+    if prefs.read(cx).loaded {
+        then(cx);
+    } else {
+        prefs.update(cx, |prefs, _| prefs.waiting.push(Box::new(then)));
     }
 }
 

@@ -271,7 +271,10 @@ has the secrets the workflow lists, and signed ad hoc otherwise.
 them with `preferences::update(cx, |preferences| …)`, which applies the
 change at once (the clipboard's clearing, website icons) and saves it, and
 observe `Prefs::global(cx)` to follow them. A failed save puts them back
-and emits `SaveFailed`, which Settings shows.
+and emits `SaveFailed`, which Settings shows. `preferences::when_read`
+runs something once they have been read: the main window opens then, a
+moment after launch, where it was last (`window::open`; it saves its
+place once a move or resize rests).
 
 **The generator** (`generator::Generator`) is one entity wherever it shows:
 rendered whole in the panel and the main window's popover, or only

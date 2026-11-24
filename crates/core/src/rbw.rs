@@ -20,7 +20,7 @@ use crate::{
     Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, Error, Folder,
     FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
     Preferences, Result, Secret, Server, SortOrder, SshAgentStatus, SshService, SshUses,
-    VerificationCode, WebsiteIcon, icon,
+    VerificationCode, WebsiteIcon, WindowPlace, icon,
 };
 
 /// How many recently used items each account keeps.
@@ -214,6 +214,42 @@ struct PreferencesJson {
     list_share: Option<f32>,
     #[serde(default)]
     sort: Option<SortJson>,
+    #[serde(default)]
+    window: Option<WindowJson>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WindowJson {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    #[serde(default)]
+    maximized: bool,
+}
+
+impl From<WindowJson> for WindowPlace {
+    fn from(saved: WindowJson) -> Self {
+        Self {
+            x: saved.x,
+            y: saved.y,
+            width: saved.width,
+            height: saved.height,
+            maximized: saved.maximized,
+        }
+    }
+}
+
+impl From<WindowPlace> for WindowJson {
+    fn from(place: WindowPlace) -> Self {
+        Self {
+            x: place.x,
+            y: place.y,
+            width: place.width,
+            height: place.height,
+            maximized: place.maximized,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -775,6 +811,7 @@ impl Backend for RbwBackend {
                 menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
                 list_share: saved.list_share,
                 sort: saved.sort.map_or(defaults.sort, Into::into),
+                window: saved.window.map(Into::into),
             })
             .unwrap_or(defaults))
     }
@@ -787,6 +824,7 @@ impl Backend for RbwBackend {
             menu_bar: Some(preferences.menu_bar),
             list_share: preferences.list_share,
             sort: Some(preferences.sort.into()),
+            window: preferences.window.map(Into::into),
         };
         write_json(&self.preferences, &saved)
             .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
@@ -899,6 +937,23 @@ mod tests {
         let linux = APP_ID_PARTS[2].to_lowercase();
         assert_eq!(linux, "rbwdesktop");
         assert!(!linux.starts_with("rbw-"));
+    }
+
+    #[test]
+    fn the_windows_place_comes_back_as_it_was_saved() {
+        let place = WindowPlace {
+            x: -1280.,
+            y: 24.5,
+            width: 900.,
+            height: 600.,
+            maximized: false,
+        };
+        let json = serde_json::to_string(&WindowJson::from(place)).unwrap();
+        let back: WindowJson = serde_json::from_str(&json).unwrap();
+        assert_eq!(WindowPlace::from(back), place);
+        let older: PreferencesJson =
+            serde_json::from_str(r#"{"clipboard_clear": 30, "website_icons": true}"#).unwrap();
+        assert!(older.window.is_none());
     }
 
     #[test]

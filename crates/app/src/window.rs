@@ -4,14 +4,16 @@
 //! locking and signing in or out done elsewhere, in Settings, by the command
 //! line or the lock timeout, show here too.
 
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle,
-    Global, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, Window, WindowOptions, actions, div, point, prelude::FluentBuilder as _,
-    px, size,
+    AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity,
+    FocusHandle, Global, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+    Size, Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, actions, div,
+    point, prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::{
-    APP_ID, APP_NAME, Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW,
+    APP_ID, APP_NAME, Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW, WindowPlace,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion, screen_title,
@@ -22,6 +24,7 @@ use crate::accounts::{self, Accounts, Refreshed, Request};
 use crate::alerts::{self, Alerts};
 use crate::backend;
 use crate::lock::LockScreen;
+use crate::preferences::{self, Prefs};
 use crate::sign_in::SignIn;
 use crate::vault::VaultView;
 
@@ -38,19 +41,27 @@ const CONTEXT: &str = "MainWindow";
 /// Where rbw-ng is, for the screen that says it is missing.
 const RBW_NG: &str = "https://github.com/TimotheFCN/rbw-ng";
 
-/// Opens the main window. `missing` says why there is no backend, such as
-/// rbw not being installed; the window then says so and offers to look
-/// again.
+/// The main window's size the first time, and the smallest it gets.
+const SIZE: Size<Pixels> = size(px(880.), px(580.));
+const MIN_SIZE: Size<Pixels> = size(px(680.), px(440.));
+/// How long the window rests after a move or a resize before where it is
+/// is saved.
+const SAVE_PLACE_AFTER: Duration = Duration::from_millis(500);
+
+/// Opens the main window, where it was last if that is still on a
+/// display. `missing` says why there is no backend, such as rbw not being
+/// installed; the window then says so and offers to look again.
 pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, Entity<MainWindow>)> {
-    let options = WindowOptions {
+    let mut options = WindowOptions {
         app_id: Some(APP_ID.into()),
-        ..chrome::window_options(
-            "Vault",
-            size(px(880.), px(580.)),
-            size(px(680.), px(440.)),
-            cx,
-        )
+        ..chrome::window_options("Vault", SIZE, MIN_SIZE, cx)
     };
+    let saved = backend::ready(cx)
+        .then(|| Prefs::global(cx).read(cx).get().window)
+        .flatten();
+    if let Some(bounds) = saved.and_then(|place| restored(place, cx)) {
+        options.window_bounds = Some(bounds);
+    }
     // gpui-base's Root around the view gives the window Tab and Shift-Tab.
     let window = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| MainWindow::new(missing, window, cx))
@@ -61,6 +72,43 @@ pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, En
             log::error!("opening the window: {error:#}");
             None
         }
+    }
+}
+
+/// Where a window saved at `place` opens: there, at least its smallest
+/// size, unless no display shows it any more, as after one was unplugged.
+fn restored(place: WindowPlace, cx: &App) -> Option<WindowBounds> {
+    let bounds = Bounds::new(
+        point(px(place.x), px(place.y)),
+        size(
+            px(place.width).max(MIN_SIZE.width),
+            px(place.height).max(MIN_SIZE.height),
+        ),
+    );
+    let shown = cx
+        .displays()
+        .iter()
+        .any(|display| display.bounds().intersects(&bounds));
+    shown.then_some(if place.maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    })
+}
+
+/// Where a window is, to open there again; full screen, it opens as it was
+/// before.
+fn place(bounds: WindowBounds) -> WindowPlace {
+    let (rect, maximized) = match bounds {
+        WindowBounds::Windowed(rect) | WindowBounds::Fullscreen(rect) => (rect, false),
+        WindowBounds::Maximized(rect) => (rect, true),
+    };
+    WindowPlace {
+        x: rect.origin.x.into(),
+        y: rect.origin.y.into(),
+        width: rect.size.width.into(),
+        height: rect.size.height.into(),
+        maximized,
     }
 }
 
@@ -168,6 +216,8 @@ pub struct MainWindow {
     _accounts_events: Option<Subscription>,
     leave_task: Task<()>,
     retry_task: Task<()>,
+    /// Saves where the window is once it rests.
+    place_task: Task<()>,
 }
 
 impl MainWindow {
@@ -176,6 +226,8 @@ impl MainWindow {
             Theme::follow_window_appearance(window, cx);
         })
         .detach();
+        cx.observe_window_bounds(window, |this, window, cx| this.save_place_later(window, cx))
+            .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
@@ -193,6 +245,7 @@ impl MainWindow {
             _accounts_events: None,
             leave_task: Task::ready(()),
             retry_task: Task::ready(()),
+            place_task: Task::ready(()),
         };
         match missing {
             Some(error) => this.screen = Screen::Unavailable(error),
@@ -213,6 +266,22 @@ impl MainWindow {
         ));
         self.accounts = Some(accounts);
         self.accounts_refreshed(window, cx);
+    }
+
+    /// Saves where the window is once it has rested there, for the next
+    /// launch.
+    fn save_place_later(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !backend::ready(cx) {
+            return;
+        }
+        self.place_task = cx.spawn_in(window, async move |_, cx| {
+            cx.background_executor().timer(SAVE_PLACE_AFTER).await;
+            cx.update(|window, cx| {
+                let place = place(window.window_bounds());
+                preferences::update(cx, move |preferences| preferences.window = Some(place));
+            })
+            .ok();
+        });
     }
 
     /// Says once, in passing, that the rbw command line needs updating;
