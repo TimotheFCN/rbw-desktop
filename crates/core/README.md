@@ -61,7 +61,11 @@ account was unlocked with its password since its agent started.
 
 Account settings (lock timeout, Touch ID, SSH confirmation) are rbw's, per
 profile; changing them doesn't lock. Preferences (clipboard clearing, website
-icons) are the app's, in `preferences.json` in its configuration folder.
+icons) are the app's, in `preferences.json` in its configuration folder:
+`~/.config/rbwdesktop` on Linux and
+`~/Library/Application Support/io.github.TimotheFCN.rbw-desktop` on macOS.
+On Linux, `rbw-desktop` would be the folder of an rbw profile called
+`desktop`, which `rbw purge --all` removes.
 
 `website_icon` gives a login's website icon, to show instead of its letter.
 It picks the website as the official clients do (the first one, when it is a

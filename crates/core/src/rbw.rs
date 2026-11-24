@@ -56,8 +56,7 @@ impl RbwBackend {
     }
 
     fn with_rbw(rbw: Rbw, outdated: Option<OutdatedRbw>) -> Result<Self> {
-        let dirs = directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw-desktop")
-            .ok_or_else(|| Error::Other("this system has no home folder".into()))?;
+        let dirs = app_dirs()?;
         Ok(Self {
             rbw,
             outdated,
@@ -113,6 +112,15 @@ impl RbwBackend {
     fn set_config(&self, account: &AccountId, key: &str, value: &str) -> Result<()> {
         self.run(account, &["config", "set", "--", key, value], Wait::Local)
     }
+}
+
+// The app's folders. On Linux, rbw's profiles take the folders named rbw-
+// and a name, so "rbw-desktop" would belong to a profile called desktop,
+// whose rbw purge --all would remove them. The space makes it rbwdesktop;
+// macOS names them after the whole id.
+fn app_dirs() -> Result<directories::ProjectDirs> {
+    directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw desktop")
+        .ok_or_else(|| Error::Other("this system has no home folder".into()))
 }
 
 #[derive(serde::Deserialize)]
@@ -580,5 +588,17 @@ impl Backend for RbwBackend {
 
     fn outdated_rbw(&self) -> Option<OutdatedRbw> {
         self.outdated.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_apps_folders_are_no_rbw_profiles() {
+        let dirs = super::app_dirs().unwrap();
+        for dir in [dirs.config_dir(), dirs.cache_dir()] {
+            let name = dir.file_name().unwrap().to_str().unwrap();
+            assert!(name != "rbw" && !name.starts_with("rbw-"), "{name}");
+        }
     }
 }
