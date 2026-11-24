@@ -6,7 +6,7 @@ use gpui::base::motion;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Pixels, RenderOnce, SharedString, Styled, Window, div, linear_color_stop,
-    linear_gradient, prelude::FluentBuilder as _, px,
+    linear_gradient, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::icon::{IconName, icon};
@@ -196,7 +196,10 @@ pub struct ListRow {
     on_click: Option<ClickHandler>,
 }
 
-const ROW_HEIGHT: Pixels = px(44.);
+const ROW_HEIGHT: Pixels = px(46.);
+/// Text in rows reads at the mockups' line height. gpui-base's buttons set
+/// it to the font size, which presses a name onto its subtitle.
+pub(crate) const ROW_LINE_HEIGHT: f32 = 1.35;
 
 pub fn list_row(
     id: impl Into<ElementId>,
@@ -260,6 +263,7 @@ impl RenderOnce for ListRow {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .line_height(relative(ROW_LINE_HEIGHT))
                     .child(
                         div()
                             .truncate()

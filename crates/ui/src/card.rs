@@ -5,11 +5,13 @@ use gpui::base::Button as BaseButton;
 use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, RenderOnce, SharedString, Styled, Window, div, prelude::FluentBuilder as _, px,
+    relative,
 };
 use smallvec::SmallVec;
 
 use crate::icon::{IconName, icon};
 use crate::motion as m;
+use crate::rows::ROW_LINE_HEIGHT;
 use crate::theme::{ActiveTheme, Look};
 
 #[derive(IntoElement)]
@@ -177,6 +179,7 @@ impl RenderOnce for FieldRow {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .line_height(relative(ROW_LINE_HEIGHT))
                     .child(
                         div()
                             .text_size(theme.metrics.small_text_size)
