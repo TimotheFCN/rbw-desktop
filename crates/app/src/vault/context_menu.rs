@@ -15,6 +15,7 @@ use rbw_desktop_ui::{IconName, Opening, menu_item, menu_separator, popover};
 use super::{OpenContextMenu, VaultView};
 use crate::backend;
 use crate::clipboard;
+use crate::recent;
 
 /// The height of a row of the list, with the gap under it.
 const LIST_ROW: Pixels = px(47.);
@@ -128,7 +129,7 @@ impl VaultView {
                 cx,
                 move |backend| backend.verification_code(&account, &requested),
                 move |this, result, cx| match result {
-                    Ok(code) => this.copied(&code.code, "Verification code copied", cx),
+                    Ok(code) => this.copied(&id, &code.code, "Verification code copied", cx),
                     Err(Error::RepromptRequired) => this.ask_password_for(id, cx),
                     Err(error) => this.show_error(&error, cx),
                 },
@@ -141,17 +142,27 @@ impl VaultView {
                 return;
             };
             match what {
-                Copy::Username => {
-                    this.copied(&Secret::new(login.username.clone()), "Username copied", cx)
-                }
-                Copy::Password => this.copied(&login.password, "Password copied", cx),
+                Copy::Username => this.copied(
+                    &item.id,
+                    &Secret::new(login.username.clone()),
+                    "Username copied",
+                    cx,
+                ),
+                Copy::Password => this.copied(&item.id, &login.password, "Password copied", cx),
                 Copy::Code => {}
             }
         });
     }
 
-    fn copied(&mut self, value: &Secret, message: &'static str, cx: &mut Context<Self>) {
+    fn copied(
+        &mut self,
+        item: &ItemId,
+        value: &Secret,
+        message: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         clipboard::copy(value, true, cx);
+        recent::used(&self.account.id, item, cx);
         self.toast
             .show(message, |this: &mut Self| &mut this.toast, cx);
     }

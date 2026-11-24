@@ -23,6 +23,7 @@ use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
 use crate::generator::Generator;
 use crate::icons::Icons;
+use crate::recent;
 use crate::secondary;
 use context_menu::ContextMenu;
 use detail::ItemDetail;
@@ -282,8 +283,12 @@ impl VaultView {
         self.select_by(item, false, cx);
     }
 
-    /// Selects an item; `by_pointer` when it was clicked.
+    /// Selects an item; `by_pointer` when it was clicked, which counts as
+    /// using it.
     fn select_by(&mut self, item: Option<ItemId>, by_pointer: bool, cx: &mut Context<Self>) {
+        if by_pointer && let Some(item) = &item {
+            recent::used(&self.account.id, item, cx);
+        }
         if self.selected == item {
             if by_pointer {
                 self.detail
@@ -383,6 +388,7 @@ impl VaultView {
         self.sheet.dismiss();
         window.focus(&self.list_focus, cx);
         if let Some(item) = saved {
+            recent::used(&self.account.id, &item, cx);
             self.select(Some(item), cx);
             self.detail.update(cx, |detail, cx| detail.reload(cx));
             self.reload(cx);

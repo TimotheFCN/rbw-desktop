@@ -115,10 +115,9 @@ impl Screen {
 }
 
 pub struct MainWindow {
-    /// `None` until there is a backend to ask.
+    /// `None` until there is a backend to ask. Its current account is the
+    /// one shown, or the one to go back to while adding another.
     accounts: Option<Entity<Accounts>>,
-    /// The account shown, or the one to go back to while adding another.
-    current: Option<AccountId>,
     screen: Screen,
     /// Names the screen shown, so that each new one plays its entrance.
     generation: usize,
@@ -144,7 +143,6 @@ impl MainWindow {
         .detach();
         let mut this = Self {
             accounts: None,
-            current: None,
             screen: Screen::Loading,
             generation: 0,
             leaving: None,
@@ -217,25 +215,25 @@ impl MainWindow {
         self.show_current(window, cx);
     }
 
+    /// Makes `id` the account shown from now on, in every window.
+    fn choose(&self, id: Option<AccountId>, cx: &mut App) {
+        if let Some(accounts) = &self.accounts {
+            accounts.update(cx, |accounts, cx| accounts.choose(id, cx));
+        }
+    }
+
     fn show_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let accounts = self.account_list(cx);
         let current = self
-            .current
+            .accounts
             .as_ref()
-            .and_then(|id| accounts.iter().find(|account| &account.id == id))
-            .or_else(|| {
-                accounts
-                    .iter()
-                    .find(|account| account.state == LockState::Unlocked)
-            })
-            .or_else(|| accounts.first())
-            .cloned();
+            .and_then(|accounts| accounts.read(cx).current().cloned());
         let Some(account) = current else {
-            self.current = None;
+            self.choose(None, cx);
             self.add_account(window, cx);
             return;
         };
-        self.current = Some(account.id.clone());
+        self.choose(Some(account.id.clone()), cx);
         if !self.screen.suits(account.state) || !self.shows_account(&account.id, cx) {
             let screen = self.screen_for(account, accounts, window, cx);
             self.show(screen, window, cx);
@@ -309,7 +307,7 @@ impl MainWindow {
             Request::AddAccount => self.add_account(window, cx),
             Request::CancelAdd => self.show_current(window, cx),
             Request::SignedIn(id) => {
-                self.current = Some(id);
+                self.choose(Some(id), cx);
                 self.show_next = true;
                 accounts::refresh(cx);
             }
@@ -326,7 +324,7 @@ impl MainWindow {
 
     /// Shows this account, in whatever state it is.
     pub fn show_account(&mut self, id: AccountId, window: &mut Window, cx: &mut Context<Self>) {
-        self.current = Some(id);
+        self.choose(Some(id), cx);
         if !matches!(self.screen, Screen::Unavailable(_)) {
             self.show_current(window, cx);
         }

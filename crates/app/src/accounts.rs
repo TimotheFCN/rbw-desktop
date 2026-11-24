@@ -23,6 +23,9 @@ const POLL: Duration = Duration::from_secs(2);
 /// The accounts on this computer and their state, shared by every window.
 pub struct Accounts {
     list: Load<Vec<Account>>,
+    /// The account chosen last in the main window, which the menu bar panel
+    /// follows too.
+    chosen: Option<AccountId>,
     refresh_task: Task<()>,
     _poll: Task<()>,
 }
@@ -52,6 +55,7 @@ pub fn init(cx: &mut App) {
         });
         let mut this = Accounts {
             list: Load::Loading,
+            chosen: None,
             refresh_task: Task::ready(()),
             _poll: poll,
         };
@@ -77,6 +81,30 @@ impl Accounts {
 
     pub fn get(&self, id: &AccountId) -> Option<&Account> {
         self.list().iter().find(|account| account.id == *id)
+    }
+
+    /// The account the windows show: the one chosen last if it still
+    /// exists, else the first unlocked one, else the first.
+    pub fn current(&self) -> Option<&Account> {
+        let accounts = self.list();
+        self.chosen
+            .as_ref()
+            .and_then(|id| self.get(id))
+            .or_else(|| {
+                accounts
+                    .iter()
+                    .find(|account| account.state == LockState::Unlocked)
+            })
+            .or_else(|| accounts.first())
+    }
+
+    /// The account the windows show from now on, which may not be listed
+    /// yet, such as one just added.
+    pub fn choose(&mut self, id: Option<AccountId>, cx: &mut Context<Self>) {
+        if self.chosen != id {
+            self.chosen = id;
+            cx.notify();
+        }
     }
 
     /// Asks for the accounts again now, such as after unlocking one.

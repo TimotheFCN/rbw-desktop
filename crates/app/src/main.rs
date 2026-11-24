@@ -6,6 +6,7 @@ mod generator;
 mod icons;
 mod lock;
 mod preferences;
+mod recent;
 mod reprompt;
 mod settings;
 mod sign_in;

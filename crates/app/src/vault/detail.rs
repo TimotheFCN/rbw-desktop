@@ -21,6 +21,7 @@ use super::{EditItem, VaultView};
 use crate::backend::{self, Load};
 use crate::clipboard;
 use crate::icons::{self, Icons};
+use crate::recent;
 use crate::reprompt::{Reprompt, Unlocked};
 
 pub struct ItemDetail {
@@ -214,6 +215,9 @@ impl ItemDetail {
 
     fn copy(&mut self, key: SharedString, value: &Secret, secret: bool, cx: &mut Context<Self>) {
         clipboard::copy(value, secret, cx);
+        if let Some(item) = self.selected_id() {
+            recent::used(&self.account, item, cx);
+        }
         self.copied = Some(key);
         self.copied_timer = cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -408,10 +412,13 @@ impl ItemDetail {
             row = row.action(
                 div()
                     .id(ElementId::Name(format!("open-{}", field.key).into()))
-                    .on_click(move |_, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         cx.open_url(&url);
-                    })
+                        if let Some(item) = this.selected_id() {
+                            recent::used(&this.account, item, cx);
+                        }
+                    }))
                     .child(icon(IconName::External)),
             );
         } else if hidden {
