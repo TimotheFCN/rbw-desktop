@@ -13,6 +13,7 @@ use rbw_desktop_ui::{
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
 use crate::accounts;
+use crate::secondary;
 use crate::settings::{About, OpenSettings};
 
 const KINDS: [(ItemKind, IconName, &str); 5] = [
@@ -245,6 +246,7 @@ impl VaultView {
                         .style(ButtonStyle::Flat)
                         .size(px(26.))
                         .accessibility_label("Lock")
+                        .shortcut(secondary!("l"))
                         .on_click(cx.listener(|this, _, window, cx| this.lock(&Lock, window, cx))),
                 ),
             )

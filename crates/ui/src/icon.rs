@@ -74,6 +74,7 @@ icons! {
     Terminal => "term",
     TouchId => "finger",
     Warning => "warning",
+    Window => "window",
 }
 
 /// Serves the icons to GPUI's `svg()` element.

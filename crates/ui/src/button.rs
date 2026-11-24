@@ -13,7 +13,7 @@ use crate::controls::spinner;
 use crate::focus::control_ring;
 use crate::icon::{IconName, icon};
 use crate::theme::{ActiveTheme, Look};
-use crate::tooltip::tooltip;
+use crate::tooltip::WithTooltip as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
@@ -41,6 +41,7 @@ pub struct Button {
     icon: Option<IconName>,
     trailing_icon: Option<IconName>,
     accessibility_label: Option<SharedString>,
+    shortcut: Option<&'static str>,
     size: Option<Pixels>,
     disabled: bool,
     busy: bool,
@@ -57,6 +58,7 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         icon: None,
         trailing_icon: None,
         accessibility_label: None,
+        shortcut: None,
         size: None,
         disabled: false,
         busy: false,
@@ -88,6 +90,13 @@ impl Button {
 
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// The key binding that does the same, such as `cmd-o`, which the
+    /// tooltip shows beside the label.
+    pub fn shortcut(mut self, keys: &'static str) -> Self {
+        self.shortcut = Some(keys);
         self
     }
 
@@ -193,8 +202,11 @@ impl RenderOnce for Button {
         let (busy, disabled) = (self.busy, self.disabled);
         let label = self.accessibility_label.or_else(|| self.label.clone());
         // A button with only an icon says what it does when the pointer
-        // rests on it.
-        let tip = label.clone().filter(|_| round && !link);
+        // rests on it, as does one with a shortcut.
+        let tip = label
+            .clone()
+            .filter(|_| (round && !link) || self.shortcut.is_some());
+        let shortcut = self.shortcut;
         let padding = match self.style {
             ButtonStyle::Link => px(2.),
             ButtonStyle::Primary | ButtonStyle::Destructive => px(18.),
@@ -216,7 +228,7 @@ impl RenderOnce for Button {
             .when_some(self.focus, |b, focus| b.track_focus(&focus))
             .disabled(disabled || busy)
             .when_some(label, |b, label| b.accessibility_label(label))
-            .when_some(tip, |b, tip| b.tooltip(tooltip(tip)))
+            .when_some(tip, |b, tip| b.with_tooltip(tip, shortcut, cx))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .relative()
             .h(height)

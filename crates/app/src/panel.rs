@@ -16,7 +16,7 @@ use gpui::{
     uniform_list,
 };
 use rbw_desktop_core::{
-    APP_ID, APP_NAME, Account, AccountId, Error, ItemContent, ItemId, ItemKind, ItemSummary,
+    APP_ID, APP_NAME, Account, AccountId, Error, Item, ItemContent, ItemId, ItemKind, ItemSummary,
     LockState, Secret,
 };
 use rbw_desktop_ui::{
@@ -41,10 +41,13 @@ actions!(
         ClosePanel,
         SelectNext,
         SelectPrevious,
-        /// Copies the selected item's username.
+        /// Copies the selected login's username.
         CopyUsername,
-        /// Copies the selected item's verification code.
+        /// Copies the selected login's verification code, or a card's
+        /// security code.
         CopyCode,
+        /// Shows the selected item in the main window.
+        OpenInVault,
     ]
 );
 
@@ -68,6 +71,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("up", SelectPrevious, Some("PanelPasswords > Input")),
         KeyBinding::new(secondary!("shift-c"), CopyUsername, Some(PASSWORDS)),
         KeyBinding::new(secondary!("alt-c"), CopyCode, Some(PASSWORDS)),
+        KeyBinding::new(secondary!("o"), OpenInVault, Some(PASSWORDS)),
     ]);
     cx.set_global(PanelWindow::default());
 }
@@ -222,7 +226,7 @@ impl QuickPanel {
                 window,
                 |this, _, event: &InputEvent, _, cx| match event {
                     InputEvent::Change => this.refilter(cx),
-                    InputEvent::PressEnter { .. } => this.copy_selected(Part::Password, cx),
+                    InputEvent::PressEnter { .. } => this.copy_main(cx),
                     InputEvent::Focus | InputEvent::Blur => {}
                 },
             ),
@@ -385,48 +389,59 @@ impl QuickPanel {
     }
 
     fn copy_username(&mut self, _: &CopyUsername, _: &mut Window, cx: &mut Context<Self>) {
-        self.copy_selected(Part::Username, cx);
+        self.copy_selected(
+            |kind| (kind == ItemKind::Login).then_some(Part::Username),
+            cx,
+        );
     }
 
     fn copy_code(&mut self, _: &CopyCode, _: &mut Window, cx: &mut Context<Self>) {
-        self.copy_selected(Part::Code, cx);
+        self.copy_selected(
+            |kind| match kind {
+                ItemKind::Login => Some(Part::Code),
+                ItemKind::Card => Some(Part::SecurityCode),
+                _ => None,
+            },
+            cx,
+        );
     }
 
-    fn copy_selected(&mut self, what: Part, cx: &mut Context<Self>) {
-        if let Some(item) = self.item(self.selected).cloned() {
-            self.copy(item, what, cx);
+    /// Return: copies what the selected item is for.
+    fn copy_main(&mut self, cx: &mut Context<Self>) {
+        self.copy_selected(|kind| Some(Part::main(kind)), cx);
+    }
+
+    fn open_in_vault(&mut self, _: &OpenInVault, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = self.item(self.selected) {
+            self.open_item(item.id.clone(), cx);
         }
     }
 
-    /// Copies something of a login. Anything else, and an item that asks
-    /// for the master password again, opens in the main window.
-    fn copy(&mut self, item: ItemSummary, what: Part, cx: &mut Context<Self>) {
+    /// Copies what `part` picks of the selected item's kind, if anything.
+    fn copy_selected(&mut self, part: impl Fn(ItemKind) -> Option<Part>, cx: &mut Context<Self>) {
+        if let Some(item) = self.item(self.selected).cloned()
+            && let Some(part) = part(item.kind)
+        {
+            self.copy(item, part, cx);
+        }
+    }
+
+    /// Copies something of an item. An item that asks for the master
+    /// password again opens in the main window instead.
+    fn copy(&mut self, item: ItemSummary, part: Part, cx: &mut Context<Self>) {
         let Some(account) = self.account_id() else {
             return;
         };
-        if item.kind != ItemKind::Login {
-            self.open_item(item.id, cx);
-            return;
-        }
         let (requested, id) = (item.id.clone(), item.id);
         backend::request(
             cx,
-            move |backend| match what {
+            move |backend| match part {
                 Part::Code => Ok(backend.verification_code(&account, &requested)?.code),
-                Part::Password | Part::Username => {
-                    let item = backend.item(&account, &requested)?;
-                    let ItemContent::Login(login) = item.data.content else {
-                        return Err(Error::NotFound);
-                    };
-                    Ok(match what {
-                        Part::Username => Secret::new(login.username),
-                        Part::Password | Part::Code => login.password,
-                    })
-                }
+                _ => Ok(part.value(&backend.item(&account, &requested)?)),
             },
             move |this, result, cx| match result {
-                Ok(value) if value.expose().is_empty() => this.say(what.missing(), cx),
-                Ok(value) => this.copied(id, &value, what != Part::Username, cx),
+                Ok(value) if value.expose().is_empty() => this.say(part.missing(), cx),
+                Ok(value) => this.copied(id, &value, part.secret(), cx),
                 Err(Error::RepromptRequired) => this.open_item(id, cx),
                 Err(error) => this.say(backend::describe(&error), cx),
             },
@@ -572,6 +587,7 @@ impl QuickPanel {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::copy_username))
             .on_action(cx.listener(Self::copy_code))
+            .on_action(cx.listener(Self::open_in_vault))
             .flex_1()
             .min_h_0()
             .flex()
@@ -661,17 +677,18 @@ impl QuickPanel {
             .into_any_element()
     }
 
-    /// A row: a click copies a login's password, or opens anything else;
-    /// the selected row also offers the username and the verification code.
+    /// A row: a click copies what the item is for, such as a login's
+    /// password; the selected row also has a button for each thing it can
+    /// copy, and one that opens the item in the vault.
     fn render_row(&self, position: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let item = self.item(position)?.clone();
         let account = self.account.as_ref()?.id.clone();
         let selected = position == self.selected;
-        let login = item.kind == ItemKind::Login;
         let icon = icons::icon(&account, &item, cx);
         let copied = self.copied.as_ref() == Some(&item.id);
         let actions = selected.then(|| self.render_row_actions(&item, cx));
         let clicked = item.clone();
+        let main = Part::main(item.kind);
         Some(
             div()
                 .id(("panel-row", position))
@@ -692,65 +709,53 @@ impl QuickPanel {
                     // move through the rows.
                     .in_focusable_list(false)
                     .icon(icon)
-                    .accessibility_label(format!(
-                        "{}, {}",
-                        item.name,
-                        if login { "copy password" } else { "open" }
-                    ))
+                    .accessibility_label(format!("{}, {}", item.name, main.label()))
                     .copied(copied)
-                    .trailing(div().flex().items_center().gap(px(4.)).children(actions))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.copy(clicked.clone(), Part::Password, cx)
-                    })),
+                    .trailing(div().flex().items_center().children(actions))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.copy(clicked.clone(), main, cx)),
+                    ),
                 )
                 .into_any_element(),
         )
     }
 
+    /// The selected row's buttons: one for each thing of the item there is
+    /// to copy, then one that opens it in the vault. The list says whether
+    /// a login has a username or a code; it doesn't say whether a password,
+    /// a card's number or a note is empty, so those buttons always show and
+    /// say so when it is.
     fn render_row_actions(&self, item: &ItemSummary, cx: &mut Context<Self>) -> AnyElement {
-        let login = item.kind == ItemKind::Login;
-        let small = |id: &'static str, name: IconName, label: &'static str| {
-            button(id)
-                .icon(name)
-                .style(ButtonStyle::Flat)
-                .size(px(26.))
-                .accessibility_label(label)
-        };
-        let (for_username, for_code, for_main) = (item.clone(), item.clone(), item.clone());
+        let parts = Part::of(item);
+        let id = item.id.clone();
         div()
             .flex()
             .items_center()
             .gap(px(2.))
-            .when(login && item.subtitle.is_some(), |d| {
-                d.child(
-                    small("panel-username", IconName::Identity, "Copy Username").on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.copy(for_username.clone(), Part::Username, cx);
-                        }),
-                    ),
-                )
-            })
-            .when(login && item.has_code, |d| {
-                d.child(
-                    small("panel-code", IconName::Clock, "Copy Verification Code").on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.copy(for_code.clone(), Part::Code, cx);
-                        }),
-                    ),
-                )
-            })
+            .children(parts.into_iter().map(|part| {
+                let item = item.clone();
+                button(SharedString::from(format!("panel-{}", part.label())))
+                    .icon(part.icon())
+                    .style(ButtonStyle::Flat)
+                    .size(px(26.))
+                    .accessibility_label(part.label())
+                    .shortcut(part.keys(item.kind))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.copy(item.clone(), part, cx);
+                    }))
+            }))
             .child(
-                div().ml(px(4.)).text_size(px(12.)).child(
-                    button("panel-main-action")
-                        .label(if login { "Copy" } else { "Open" })
-                        .size(px(26.))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.copy(for_main.clone(), Part::Password, cx);
-                        })),
-                ),
+                button("panel-open")
+                    .icon(IconName::Window)
+                    .style(ButtonStyle::Flat)
+                    .size(px(26.))
+                    .accessibility_label("Open in Vault")
+                    .shortcut(secondary!("o"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_item(id.clone(), cx);
+                    })),
             )
             .into_any_element()
     }
@@ -833,21 +838,116 @@ impl QuickPanel {
     }
 }
 
-/// What a row copies.
+/// Something of an item that the panel copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
-    Password,
     Username,
+    Password,
     Code,
+    Number,
+    SecurityCode,
+    Note,
+    Name,
+    PublicKey,
 }
 
 impl Part {
-    /// What to say when the login has none.
+    /// What a click or Return copies of an item of `kind`.
+    fn main(kind: ItemKind) -> Self {
+        match kind {
+            ItemKind::Login => Part::Password,
+            ItemKind::Card => Part::Number,
+            ItemKind::SecureNote => Part::Note,
+            ItemKind::Identity => Part::Name,
+            ItemKind::SshKey => Part::PublicKey,
+        }
+    }
+
+    /// The things to copy of an item, leaving out those the list knows it
+    /// hasn't got.
+    fn of(item: &ItemSummary) -> Vec<Self> {
+        let named = item.subtitle.is_some();
+        match item.kind {
+            ItemKind::Login => [
+                (Part::Username, named),
+                (Part::Password, true),
+                (Part::Code, item.has_code),
+            ]
+            .into_iter()
+            .filter_map(|(part, has)| has.then_some(part))
+            .collect(),
+            ItemKind::Card => vec![Part::Number, Part::SecurityCode],
+            ItemKind::SecureNote => vec![Part::Note],
+            ItemKind::Identity | ItemKind::SshKey if !named => vec![],
+            ItemKind::Identity => vec![Part::Name],
+            ItemKind::SshKey => vec![Part::PublicKey],
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Part::Username => "Copy Username",
+            Part::Password => "Copy Password",
+            Part::Code => "Copy Verification Code",
+            Part::Number => "Copy Number",
+            Part::SecurityCode => "Copy Security Code",
+            Part::Note => "Copy Note",
+            Part::Name => "Copy Name",
+            Part::PublicKey => "Copy Public Key",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Part::Username | Part::Name => IconName::Identity,
+            Part::Password | Part::PublicKey => IconName::Key,
+            Part::Code => IconName::Clock,
+            Part::Number => IconName::Card,
+            Part::SecurityCode => IconName::Shield,
+            Part::Note => IconName::Note,
+        }
+    }
+
+    /// The keys that copy it from the search field.
+    fn keys(self, kind: ItemKind) -> &'static str {
+        match self {
+            _ if self == Part::main(kind) => "enter",
+            Part::Username => secondary!("shift-c"),
+            _ => secondary!("alt-c"),
+        }
+    }
+
+    /// Whether it is a secret, which the clipboard forgets after a while.
+    fn secret(self) -> bool {
+        !matches!(self, Part::Username | Part::Name | Part::PublicKey)
+    }
+
+    /// The value in an item; empty when the item has none.
+    fn value(self, item: &Item) -> Secret {
+        let text = |text: &str| Secret::new(text.to_string());
+        match (self, &item.data.content) {
+            (Part::Username, ItemContent::Login(login)) => text(&login.username),
+            (Part::Password, ItemContent::Login(login)) => login.password.clone(),
+            (Part::Number, ItemContent::Card(card)) => card.number.clone(),
+            (Part::SecurityCode, ItemContent::Card(card)) => card.code.clone(),
+            (Part::Name, ItemContent::Identity(identity)) => text(&identity.full_name()),
+            (Part::PublicKey, ItemContent::SshKey(key)) => text(&key.public_key),
+            (Part::Note, _) => item.data.notes.clone(),
+            _ => Secret::default(),
+        }
+    }
+
+    /// What to say when the item has none.
     fn missing(self) -> &'static str {
         match self {
-            Part::Password => "This login has no password.",
             Part::Username => "This login has no username.",
+            Part::Password => "This login has no password.",
             Part::Code => "This login has no verification code.",
+            Part::Number => "This card has no number.",
+            Part::SecurityCode => "This card has no security code.",
+            Part::Note => "This note is empty.",
+            Part::Name => "This identity has no name.",
+            Part::PublicKey => "This SSH key has no public key.",
         }
     }
 }
@@ -977,6 +1077,41 @@ impl Render for QuickPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_offer_what_their_items_have() {
+        let item = |kind, subtitle: Option<&str>, has_code| ItemSummary {
+            id: ItemId("a".into()),
+            kind,
+            name: "A".into(),
+            subtitle: subtitle.map(Into::into),
+            websites: vec![],
+            folder: None,
+            organization: None,
+            favorite: false,
+            has_code,
+            reprompt: false,
+            editable: true,
+        };
+        let login = item(ItemKind::Login, Some("alex"), true);
+        assert_eq!(
+            Part::of(&login),
+            [Part::Username, Part::Password, Part::Code]
+        );
+        assert_eq!(
+            Part::of(&item(ItemKind::Login, None, false)),
+            [Part::Password]
+        );
+        assert_eq!(
+            Part::of(&item(ItemKind::Card, Some("Visa"), false)),
+            [Part::Number, Part::SecurityCode]
+        );
+        assert_eq!(Part::of(&item(ItemKind::Identity, None, false)), []);
+        // Return copies the main thing; the others have keys of their own.
+        assert_eq!(Part::Password.keys(ItemKind::Login), "enter");
+        assert_eq!(Part::Number.keys(ItemKind::Card), "enter");
+        assert_ne!(Part::SecurityCode.keys(ItemKind::Card), "enter");
+    }
 
     #[test]
     fn the_panel_stays_on_its_display() {

@@ -15,6 +15,7 @@ use super::{ListDivider, MAX_LIST_SHARE, NewItem, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::generator;
 use crate::icons;
+use crate::secondary;
 
 /// The space under each row of the list.
 pub(super) const ROW_GAP: Pixels = px(1.);
@@ -55,6 +56,7 @@ impl VaultView {
                         .icon(IconName::Plus)
                         .style(add_style)
                         .accessibility_label("New Item")
+                        .shortcut(secondary!("n"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.new_item(&NewItem, window, cx)),
                         ),
@@ -210,6 +212,7 @@ impl VaultView {
                     .icon(IconName::Dice)
                     .style(style)
                     .accessibility_label("Password Generator")
+                    .shortcut(secondary!("shift-g"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_generator(&ShowGenerator, window, cx)
                     })),

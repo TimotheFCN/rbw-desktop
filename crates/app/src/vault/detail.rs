@@ -23,6 +23,7 @@ use crate::clipboard;
 use crate::icons::{self, Icons};
 use crate::recent;
 use crate::reprompt::{Reprompt, Unlocked};
+use crate::secondary;
 
 /// How long a selection moved with the keys rests before its item is
 /// fetched.
@@ -415,6 +416,7 @@ impl ItemDetail {
                         button("edit")
                             .label("Edit")
                             .style(ButtonStyle::Normal)
+                            .shortcut(secondary!("e"))
                             // An action, not a call: the vault reads this view
                             // to edit the item, and this view is mid-update.
                             .on_click(|_, window, cx| {

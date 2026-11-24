@@ -423,7 +423,11 @@ gpui-base's button): outside it on macOS, inside it on GNOME. A list moved throu
 with the arrow keys is one stop of Tab (`ListRow::in_focusable_list`), and
 sheets and alerts trap Tab. Copy shortcuts are the panel's in the vault
 too: Cmd/Ctrl-C the password where no text field has the keyboard,
-Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code.
+Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code; in the panel,
+Return copies what the item is for and Cmd/Ctrl-O opens it in the vault.
+A button with a shortcut says so in its tooltip (`button(…).shortcut(…)`,
+or `WithTooltip::with_tooltip` on another element), which waits the
+platform's delay and takes its style.
 
 ## GPUI gotchas
 

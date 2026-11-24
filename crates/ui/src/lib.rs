@@ -50,6 +50,7 @@ pub use sidebar::{Sidebar, sidebar};
 pub use text::{screen_title, sheet_title};
 pub use theme::{ActiveTheme, Appearance, Colors, Look, Metrics, Theme};
 pub use toast::ToastSlot;
+pub use tooltip::WithTooltip;
 
 use gpui::App;
 

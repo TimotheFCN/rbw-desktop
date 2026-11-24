@@ -73,6 +73,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   when the account it came from locks or signs out, and when the app quits.
 * Copy shortcuts: the password, the username and the verification code of
   the selected login, in the vault as in the menu bar panel.
+* Every button that shows only an icon says what it does, and its
+  shortcut, when the pointer rests on it.
 * Sync runs in the background and on request.
 
 ### Generator
@@ -100,10 +102,14 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   would be without the item. Settings, General turns it off.
 * A click opens a panel: on macOS hung under the item, elsewhere a small
   window next to the pointer (X11) or in the middle of the screen (Wayland).
-  Two tabs: the items used last, with a search through the whole vault
-  (a click or Return copies a login's password; the selected row also
-  copies its username and code), and the generator. Plus "Open Vault" and
-  "Lock". It shows the account the main window shows. Nothing about SSH
+  Two tabs: the items used last, with a search through the whole vault,
+  and the generator. A click or Return copies what an item is for: a
+  login's password, a card's number, a note's text, an identity's name,
+  an SSH key's public key. The selected row has a button for each thing
+  it can copy (a login's username, password and verification code, a
+  card's number and security code, and so on, leaving out what the item
+  hasn't got) and one that opens the item in the main window, each with a
+  tooltip that gives its shortcut. Plus "Open Vault" and "Lock". It shows the account the main window shows. Nothing about SSH
   lives here.
 * The item's menu has Open Vault, Lock and Quit.
 * While the item shows, closing the last window leaves the app running.
