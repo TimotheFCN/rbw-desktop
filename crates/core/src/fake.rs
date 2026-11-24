@@ -471,7 +471,7 @@ fn summary(item: &Item) -> ItemSummary {
         ItemContent::SecureNote => (None, vec![], false),
         ItemContent::Card(card) => (Some(card.brand.clone()), vec![], false),
         ItemContent::Identity(identity) => (Some(identity.full_name()), vec![], false),
-        ItemContent::SshKey(key) => (Some(key.fingerprint.clone()), vec![], false),
+        ItemContent::SshKey(key) => (ssh::key_subtitle(&key.public_key), vec![], false),
     };
     ItemSummary {
         id: item.id.clone(),
@@ -981,6 +981,7 @@ impl State {
                         name: item.data.name.clone(),
                         key_type: ssh::key_type(&key.public_key),
                         fingerprint: key.fingerprint.clone(),
+                        public_key: key.public_key.clone(),
                     }),
                     _ => None,
                 })
@@ -1233,7 +1234,8 @@ mod tests {
             ..crate::SshKey::default()
         });
         let key = fake.create_item(&id, &key).unwrap();
-        assert!(key.subtitle.unwrap().starts_with("SHA256:"));
+        // The public key, from the private one.
+        assert_eq!(key.subtitle.as_deref(), Some("Ed25519 key"));
     }
 
     #[test]

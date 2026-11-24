@@ -31,7 +31,7 @@ pub struct ItemSummary {
     pub kind: ItemKind,
     pub name: String,
     /// The line under the name: a login's username, a card's brand, an
-    /// identity's name or an SSH key's fingerprint.
+    /// identity's name or the kind of an SSH key, such as "Ed25519 key".
     pub subtitle: Option<String>,
     pub websites: Vec<String>,
     pub folder: Option<FolderId>,

@@ -180,7 +180,7 @@ fn against_vaultwarden() {
         ..SshKey::default()
     });
     let saved_key = backend.create_item(&id, &key).unwrap();
-    assert_eq!(saved_key.subtitle.as_deref(), Some(SSH_FINGERPRINT));
+    assert_eq!(saved_key.subtitle.as_deref(), Some("Ed25519 key"));
     let ItemContent::SshKey(read) = backend.item(&id, &saved_key.id).unwrap().data.content else {
         panic!("not an SSH key");
     };
@@ -228,6 +228,7 @@ fn against_vaultwarden() {
     let keys = ssh.keys.unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].fingerprint, SSH_FINGERPRINT);
+    assert!(keys[0].public_key.starts_with("ssh-ed25519 "));
 
     // the generator
     let generated = backend

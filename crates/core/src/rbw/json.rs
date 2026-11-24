@@ -218,7 +218,8 @@ impl ItemJson {
                 (Some(name), vec![], false)
             }
             ItemKind::SshKey => (
-                self.ssh_key.and_then(|key| key.key_fingerprint),
+                self.ssh_key
+                    .and_then(|key| ssh::key_subtitle(key.public_key.as_deref()?)),
                 vec![],
                 false,
             ),
@@ -247,6 +248,7 @@ impl ItemJson {
             name: self.name.clone().unwrap_or_default(),
             key_type: ssh::key_type(key.public_key.as_deref().unwrap_or_default()),
             fingerprint: key.key_fingerprint.clone().unwrap_or_default(),
+            public_key: key.public_key.clone().unwrap_or_default(),
         })
     }
 
@@ -595,7 +597,7 @@ mod tests {
         assert!(!summaries[1].editable && summaries[1].reprompt);
         assert!(!login.reprompt);
         assert_eq!(summaries[2].subtitle.as_deref(), Some("Alex Martin"));
-        assert_eq!(summaries[3].subtitle.as_deref(), Some("SHA256:x"));
+        assert_eq!(summaries[3].subtitle.as_deref(), Some("Ed25519 key"));
     }
 
     #[test]
@@ -615,6 +617,7 @@ mod tests {
                 name: "Laptop".into(),
                 key_type: "Ed25519".into(),
                 fingerprint: "SHA256:x".into(),
+                public_key: "ssh-ed25519 AAAA".into(),
             }]
         );
     }
