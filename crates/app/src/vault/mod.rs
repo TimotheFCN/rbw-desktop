@@ -92,6 +92,9 @@ pub struct VaultView {
     accounts: Vec<Account>,
     account_menu_open: bool,
     account_menu_focus: FocusHandle,
+    /// GNOME's primary menu, in the sidebar's header bar.
+    main_menu_open: bool,
+    main_menu_focus: FocusHandle,
     items: Load<Vec<ItemSummary>>,
     folders: Vec<Folder>,
     filter: Filter,
@@ -143,6 +146,8 @@ impl VaultView {
             accounts,
             account_menu_open: false,
             account_menu_focus: cx.focus_handle(),
+            main_menu_open: false,
+            main_menu_focus: cx.focus_handle(),
             items: Load::Loading,
             folders: vec![],
             filter: Filter::All,

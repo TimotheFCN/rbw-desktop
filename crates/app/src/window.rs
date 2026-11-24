@@ -427,7 +427,7 @@ impl MainWindow {
             .flex()
             .flex_col()
             .items_center()
-            .w(px(300.))
+            .w(px(320.))
             .text_center()
             .child(app_icon(cx))
             .child(

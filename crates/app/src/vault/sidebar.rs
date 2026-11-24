@@ -8,11 +8,12 @@ use gpui::{
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
-    glass, nav_row, section_label,
+    glass, menu_item, nav_row, popover, section_label,
 };
 
 use super::{Filter, Lock, VaultView};
 use crate::accounts;
+use crate::settings::{About, OpenSettings};
 
 const KINDS: [(ItemKind, IconName, &str); 5] = [
     (ItemKind::Login, IconName::Key, "Logins"),
@@ -23,6 +24,68 @@ const KINDS: [(ItemKind, IconName, &str); 5] = [
 ];
 
 impl VaultView {
+    /// GNOME's primary menu: Preferences and About, which a Mac has in its
+    /// app menu.
+    fn render_main_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let menu = popover(
+            "main-menu",
+            self.main_menu_open,
+            &self.main_menu_focus,
+            "Main Menu",
+        )
+        .opening(Opening::Below)
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_main_menu(window, cx))
+                .ok();
+        })
+        .child(
+            menu_item("preferences", "Preferences")
+                .on_click(Self::main_menu_choice(Box::new(OpenSettings), cx)),
+        )
+        .child(
+            menu_item("about", "About rbw-desktop")
+                .on_click(Self::main_menu_choice(Box::new(About), cx)),
+        );
+        div()
+            .relative()
+            .pr(px(4.))
+            .child(
+                button("main-menu-button")
+                    .icon(IconName::Menu)
+                    .style(ButtonStyle::Flat)
+                    .accessibility_label("Main Menu")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.main_menu_open {
+                            this.close_main_menu(window, cx);
+                        } else {
+                            this.main_menu_open = true;
+                            window.focus(&this.main_menu_focus, cx);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(menu)
+            .into_any_element()
+    }
+
+    /// A main menu item's click: closes the menu, then does `action`.
+    fn main_menu_choice(
+        action: Box<dyn gpui::Action>,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static {
+        cx.listener(move |this: &mut Self, _, window, cx| {
+            this.close_main_menu(window, cx);
+            window.dispatch_action(action.boxed_clone(), cx);
+        })
+    }
+
+    fn close_main_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.main_menu_open = false;
+        window.focus(&self.list_focus, cx);
+        cx.notify();
+    }
+
     pub(super) fn render_sidebar(
         &mut self,
         window: &mut Window,
@@ -58,20 +121,33 @@ impl VaultView {
 
         let header = match look {
             Look::MacOs => chrome::traffic_lights(cx).unwrap_or_else(|| div().into_any_element()),
-            Look::Gnome => chrome::drag_region(
-                "sidebar-header",
-                div()
-                    .h(metrics.toolbar_height)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font_weight(FontWeight::BOLD)
-                    .children(chrome::window_buttons(chrome::Side::Start, window, cx))
-                    .child("Vault"),
-                window,
-                cx,
-            )
-            .into_any_element(),
+            Look::Gnome => {
+                let main_menu = self.render_main_menu(cx);
+                chrome::drag_region(
+                    "sidebar-header",
+                    div()
+                        .relative()
+                        .h(metrics.toolbar_height)
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Vault"),
+                        )
+                        .children(chrome::window_buttons(chrome::Side::Start, window, cx))
+                        .child(div().flex_1())
+                        .child(main_menu),
+                    window,
+                    cx,
+                )
+                .into_any_element()
+            }
         };
 
         let mut rows = vec![
