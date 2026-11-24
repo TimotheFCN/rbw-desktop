@@ -171,17 +171,6 @@ settings_page() {
 	x11_click 60 $((inset + 42 + $1 * 31 + 15))
 	sleep 0.5
 }
-# Brings the main window forward and puts the settings aside, or back.
-to_main() {
-	settings=$window
-	xdotool windowmove "$settings" "$screen_w" 0
-	window=$main
-	xdotool windowfocus --sync "$window"
-}
-to_settings() {
-	x11_window '^(Settings|Preferences)$' 10
-}
-
 x11_tray
 RUST_BACKTRACE=1 x11_launch "$root/target/debug/rbw-desktop"
 x11_window '^Vault$'
@@ -251,7 +240,8 @@ until_true "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"
 step moved "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx $folder"
 keys ctrl+BackSpace
 step delete-asks
-keys Return
+# Return would cancel an alert that removes something: Tab to its button.
+keys Tab Return
 until_true "query 'all(i[\"name\"] != \"E2E renamed\" for i in j)' '' item list | grep -qx True" || true
 step deleted "query 'all(i[\"name\"] != \"E2E renamed\" for i in j)' '' item list | grep -qx True"
 
@@ -369,22 +359,16 @@ step ssh-page "[[ ! -e $units/rbw-agent.service ]]"
 keys Tab Tab Tab Return
 until_true "[[ -e $units/rbw-agent.service ]]" || true
 step ssh-set-up "[[ -e $units/rbw-agent.service ]] && grep -q 'enable --now' $HOME/systemctl.log"
-# rbw stopped the agent that held the vault: unlock it again.
-to_main
-until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
-step locked-by-ssh-setup "query 'j[\"status\"]' '' status --json | grep -qx locked"
-type_text "$password"
-keys Return
-until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
-to_settings
-step ssh-unlocked "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+# The vault stays unlocked: the service's agent took it over.
+step unlocked-after-ssh-setup "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
 settings_page 2
 keys Tab Tab Tab Return
 sleep 0.4
 step ssh-remove-asks
-keys Return
+keys Tab Return
 until_true "[[ ! -e $units/rbw-agent.service ]]" || true
 step ssh-removed "[[ ! -e $units/rbw-agent.service ]] && grep -q disable $HOME/systemctl.log"
+step unlocked-after-ssh-removal "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
 keys ctrl+w
 window=$main
 xdotool windowfocus --sync "$window"
@@ -394,7 +378,7 @@ account_menu
 keys Up Return
 sleep 0.4
 step sign-out-asks
-keys Return
+keys Tab Return
 until_true "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]" || true
 step signed-out "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]"
 

@@ -1,8 +1,10 @@
 //! The alert that asks before something that can't be undone, such as
 //! deleting an item or signing out.
 //!
-//! Present a [`ConfirmDialog`] in a [`SheetSlot::alert`](crate::SheetSlot::alert)
-//! and dismiss it on its [`ConfirmEvent`]. Return confirms and Escape cancels.
+//! Present a [`ConfirmDialog`] in a [`SheetSlot::alert`](crate::SheetSlot::alert),
+//! focus it, and dismiss it on its [`ConfirmEvent`]. Its default button has
+//! the keyboard, so Return presses it: the confirming one, or Cancel when
+//! confirming removes something, as macOS and GNOME do. Escape cancels.
 
 use gpui::base::FocusTrapElement as _;
 use gpui::{
@@ -14,15 +16,12 @@ use gpui::{
 use crate::button::{ButtonStyle, button};
 use crate::theme::ActiveTheme;
 
-actions!(confirm_dialog, [Confirm, Cancel]);
+actions!(confirm_dialog, [Cancel]);
 
 const CONTEXT: &str = "ConfirmDialog";
 
 pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
-        KeyBinding::new("enter", Confirm, Some(CONTEXT)),
-    ]);
+    cx.bind_keys([KeyBinding::new("escape", Cancel, Some(CONTEXT))]);
 }
 
 /// What to ask. The message says what will happen, in a sentence or two.
@@ -44,6 +43,8 @@ pub enum ConfirmEvent {
 pub struct ConfirmDialog {
     confirmation: Confirmation,
     focus: FocusHandle,
+    cancel_focus: FocusHandle,
+    confirm_focus: FocusHandle,
 }
 
 impl EventEmitter<ConfirmEvent> for ConfirmDialog {}
@@ -53,11 +54,9 @@ impl ConfirmDialog {
         Self {
             confirmation,
             focus: cx.focus_handle(),
+            cancel_focus: cx.focus_handle(),
+            confirm_focus: cx.focus_handle(),
         }
-    }
-
-    fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(ConfirmEvent::Confirmed);
     }
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
@@ -65,9 +64,14 @@ impl ConfirmDialog {
     }
 }
 
+/// The default button.
 impl Focusable for ConfirmDialog {
     fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+        if self.confirmation.destructive {
+            self.cancel_focus.clone()
+        } else {
+            self.confirm_focus.clone()
+        }
     }
 }
 
@@ -84,8 +88,6 @@ impl Render for ConfirmDialog {
         div()
             .id("confirm-dialog")
             .key_context(CONTEXT)
-            .track_focus(&self.focus)
-            .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::cancel))
             .role(gpui::Role::AlertDialog)
             .aria_label(confirmation.title.clone())
@@ -114,11 +116,15 @@ impl Render for ConfirmDialog {
                     .flex()
                     .gap(px(8.))
                     .child(
-                        div()
-                            .flex_1()
-                            .child(button("cancel").label("Cancel").wide().on_click(
-                                cx.listener(|this, _, window, cx| this.cancel(&Cancel, window, cx)),
-                            )),
+                        div().flex_1().child(
+                            button("cancel")
+                                .label("Cancel")
+                                .wide()
+                                .track_focus(&self.cancel_focus)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.cancel(&Cancel, window, cx)
+                                })),
+                        ),
                     )
                     .child(
                         div().flex_1().child(
@@ -126,9 +132,10 @@ impl Render for ConfirmDialog {
                                 .label(confirmation.confirm.clone())
                                 .style(style)
                                 .wide()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.confirm(&Confirm, window, cx)
-                                })),
+                                .track_focus(&self.confirm_focus)
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(ConfirmEvent::Confirmed)),
+                                ),
                         ),
                     ),
             )
