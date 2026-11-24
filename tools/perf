@@ -7,19 +7,21 @@ set -euo pipefail
 
 usage() {
 	cat <<'EOF'
-usage: tools/perf [--theme T] [--no-build]
+usage: tools/perf [--theme T] [--demo WORDS] [--no-build]
 
 Runs each scenario and prints the frames drawn during it, the slowest, and
 how many took longer than 16 ms; for the panel, also how long Return takes
-to copy the first result of a search.
+to copy the first result of a search. --demo adds RBW_DESKTOP_DEMO words,
+such as no-icons.
 EOF
 	exit 2
 }
 
-theme=macos-light scale=2 build=1
+theme=macos-light scale=2 build=1 demo=""
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--theme) theme=$2; shift 2 ;;
+	--demo) demo=,$2; shift 2 ;;
 	--no-build) build=0; shift ;;
 	*) usage ;;
 	esac
@@ -63,7 +65,7 @@ gnome-*) sidebar=196 toolbar=46 ;;
 esac
 
 # The main window.
-export RBW_DESKTOP_DEMO=unlocked,big
+export RBW_DESKTOP_DEMO=unlocked,big$demo
 x11_launch "$binary"
 x11_window '^Vault$'
 x11_geometry
@@ -89,7 +91,7 @@ kill "$app_pid"
 wait "$app_pid" 2>/dev/null || true
 
 # The menu bar panel, opened alone.
-export RBW_DESKTOP_DEMO=unlocked,big,panel
+export RBW_DESKTOP_DEMO=unlocked,big,panel$demo
 x11_launch "$binary"
 x11_window '^rbw-desktop$'
 sleep 3
