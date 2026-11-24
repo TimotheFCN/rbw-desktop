@@ -37,6 +37,7 @@ locking and signing in:
   two-step       the two-step login code step
   email-code     a two-step code by email, sent
   new-device     the new device code step
+  api-key        the server asks for the account's API key
   signed-out     signing in to an account that is signed out
 
   gallery        the design system gallery
@@ -140,7 +141,9 @@ case $state in
 lock | lock-wrong | lock-accounts | unlock | gallery) state_demo="" ;;
 lock-busy) state_demo=slow ;;
 lock-touch-id) state_demo=touch-id ;;
-first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new-device) state_demo=first-run ;;
+first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new-device | api-key)
+	state_demo=first-run
+	;;
 offline) state_demo=first-run,offline ;;
 signed-out) state_demo=first-run,signed-out ;;
 *) state_demo=unlocked ;;
@@ -230,8 +233,11 @@ act() {
 		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
 		xdotool type --delay 40 demo && xdotool key Return sleep 0.4
 		;;
-	new-device)
-		xdotool type --delay 40 alex+device@example.org && xdotool key Return sleep 0.4
+	new-device | api-key)
+		# The demo asks for a device code or an API key by the email.
+		local tag=device
+		[[ $state == api-key ]] && tag=apikey
+		xdotool type --delay 40 "alex+$tag@example.org" && xdotool key Return sleep 0.4
 		xdotool type --delay 40 demo && xdotool key Return
 		;;
 	*) usage ;;

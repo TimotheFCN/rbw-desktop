@@ -106,6 +106,7 @@ pub fn describe(error: &Error) -> &'static str {
         Error::NotSignedIn => "This account is signed out.",
         Error::WrongPassword => "Incorrect password. Try again.",
         Error::WrongCode => "That code isn't right. Try again.",
+        Error::WrongApiKey => "That API key isn't right.",
         Error::Offline => "The server can't be reached. Check your connection.",
         Error::Timeout => "rbw is taking too long to answer.",
         Error::RbwNotFound => "rbw isn't installed.",
@@ -115,7 +116,9 @@ pub fn describe(error: &Error) -> &'static str {
         Error::ReadOnly => "This item can't be changed.",
         Error::InvalidItem(_) => "Some details of the item aren't valid.",
         Error::Server(_) => "The server refused the request.",
-        Error::PasswordRequired => "rbw needs the master password for this.",
+        Error::PasswordRequired | Error::RepromptRequired => {
+            "This needs your master password again."
+        }
         _ => "Something went wrong.",
     }
 }

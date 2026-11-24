@@ -38,6 +38,9 @@ enum Step {
     Verification(Vec<TwoStepMethod>),
     /// The code the server emailed to verify this computer.
     NewDevice,
+    /// The account's personal API key, which some servers ask for before
+    /// they take the master password.
+    ApiKey,
 }
 
 pub struct SignIn {
@@ -57,6 +60,8 @@ pub struct SignIn {
     email: Entity<InputState>,
     password: Entity<InputState>,
     code: Entity<InputState>,
+    api_key_id: Entity<InputState>,
+    api_key_secret: Entity<InputState>,
     method: usize,
     email_sent: bool,
     /// The account made for this sign-in, removed again if it is abandoned.
@@ -128,6 +133,8 @@ impl SignIn {
             email: input("Email address", false),
             password: input("Master password", true),
             code: input("Verification code", false),
+            api_key_id: input("client_id", false),
+            api_key_secret: input("client_secret", true),
             method: 0,
             email_sent: false,
             added: None,
@@ -216,6 +223,7 @@ impl SignIn {
             Step::Account => &self.email,
             Step::Password => &self.password,
             Step::Verification(_) | Step::NewDevice => &self.code,
+            Step::ApiKey => &self.api_key_id,
         };
         input.update(cx, |input, cx| input.focus(window, cx));
     }
@@ -236,7 +244,7 @@ impl SignIn {
                 self.go(Step::Account, true, window, cx);
             }
             Step::Password => {}
-            Step::Verification(_) | Step::NewDevice => {
+            Step::Verification(_) | Step::NewDevice | Step::ApiKey => {
                 self.code
                     .update(cx, |code, cx| code.set_value("", window, cx));
                 self.email_sent = false;
@@ -249,7 +257,7 @@ impl SignIn {
         match self.step {
             Step::Account => !self.first,
             Step::Password => self.existing.is_none(),
-            Step::Verification(_) | Step::NewDevice => true,
+            Step::Verification(_) | Step::NewDevice | Step::ApiKey => true,
         }
     }
 
@@ -259,18 +267,26 @@ impl SignIn {
         }
         match self.step.clone() {
             Step::Account => self.check_account(window, cx),
-            Step::Password => self.sign_in(None, window, cx),
+            Step::Password => self.sign_in(None, None, window, cx),
             Step::Verification(methods) => {
                 let code = self.text(&self.code, cx);
                 if !code.is_empty() {
                     let method = methods[self.method.min(methods.len() - 1)];
-                    self.sign_in(Some(LoginCode::TwoStep { method, code }), window, cx);
+                    let code = LoginCode::TwoStep { method, code };
+                    self.sign_in(Some(code), None, window, cx);
                 }
             }
             Step::NewDevice => {
                 let code = self.text(&self.code, cx);
                 if !code.is_empty() {
-                    self.sign_in(Some(LoginCode::NewDevice(code)), window, cx);
+                    self.sign_in(Some(LoginCode::NewDevice(code)), None, window, cx);
+                }
+            }
+            Step::ApiKey => {
+                let id = self.text(&self.api_key_id, cx);
+                let secret = Secret::new(self.text(&self.api_key_secret, cx));
+                if !id.is_empty() && !secret.is_empty() {
+                    self.sign_in(None, Some((id, secret)), window, cx);
                 }
             }
         }
@@ -291,7 +307,15 @@ impl SignIn {
         cx.notify();
     }
 
-    fn sign_in(&mut self, code: Option<LoginCode>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Signs in with the master password and `code`, after registering this
+    /// computer with `api_key` when there is one.
+    fn sign_in(
+        &mut self,
+        code: Option<LoginCode>,
+        api_key: Option<(String, Secret)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let password = Secret::new(self.password.read(cx).value().to_string());
         if password.is_empty() {
             return;
@@ -315,7 +339,13 @@ impl SignIn {
                     (None, Some((server, email))) => backend.add_account(&server, &email)?,
                     (None, None) => return Err(Error::AccountNotFound),
                 };
-                Ok((id.clone(), backend.sign_in(&id, &password, code.as_ref())))
+                let registered = match &api_key {
+                    Some((key_id, secret)) => backend.register_device(&id, key_id, secret),
+                    None => Ok(()),
+                };
+                let signed_in =
+                    registered.and_then(|()| backend.sign_in(&id, &password, code.as_ref()));
+                Ok((id, signed_in))
             },
             |this, result, window, cx| {
                 let signed_in = match result {
@@ -354,6 +384,7 @@ impl SignIn {
                 self.method = 0;
                 self.go(Step::Verification(methods), false, window, cx);
             }
+            Error::RegistrationRequired => self.go(Step::ApiKey, false, window, cx),
             Error::NewDeviceCodeRequired => {
                 self.code
                     .update(cx, |code, cx| code.set_value("", window, cx));
@@ -367,10 +398,14 @@ impl SignIn {
                     }
                     ref error => backend::describe(error),
                 });
-                if matches!(error, Error::WrongPassword | Error::WrongCode) {
+                if matches!(
+                    error,
+                    Error::WrongPassword | Error::WrongCode | Error::WrongApiKey
+                ) {
                     self.wrong += 1;
                     let input = match error {
                         Error::WrongCode => &self.code,
+                        Error::WrongApiKey => &self.api_key_secret,
                         _ => &self.password,
                     };
                     input.update(cx, |input, cx| {
@@ -409,7 +444,8 @@ impl SignIn {
 
     fn render_title(&mut self, cx: &mut Context<Self>) -> (SharedString, Option<AnyElement>) {
         let email = self.email(cx);
-        let line = |text: String| Some(div().child(text).into_any_element());
+        // A sentence takes the column's width, so that a long one wraps.
+        let line = |text: String| Some(div().flex_1().min_w_0().child(text).into_any_element());
         match &self.step {
             Step::Account if self.first => (
                 "Welcome".into(),
@@ -434,6 +470,14 @@ impl SignIn {
                     }),
                 )
             }
+            Step::ApiKey => (
+                "Personal API Key".into(),
+                line(
+                    "Your server asks for this account's API key. Find it in the web \
+                     vault, in Settings › Security › Keys."
+                        .into(),
+                ),
+            ),
             Step::NewDevice => (
                 "Verify This Computer".into(),
                 line(format!("Enter the code sent to {email}.")),
@@ -575,6 +619,17 @@ impl SignIn {
                 }
                 fields
             }
+            Step::ApiKey => vec![
+                text_field("api-key-id", &self.api_key_id, "API key client_id").into_any_element(),
+                shaking(
+                    text_field(
+                        "api-key-secret",
+                        &self.api_key_secret,
+                        "API key client_secret",
+                    )
+                    .into_any_element(),
+                ),
+            ],
             Step::NewDevice => vec![shaking(
                 text_field("code", &self.code, "Verification code").into_any_element(),
             )],
@@ -617,6 +672,7 @@ impl Render for SignIn {
             Step::Account => "Continue",
             Step::Password => "Sign In",
             Step::Verification(_) | Step::NewDevice => "Verify",
+            Step::ApiKey => "Sign In",
         };
         // Equal halves, like an alert's buttons; alone, the action fills the
         // row.
@@ -672,8 +728,10 @@ impl Render for SignIn {
                             div()
                                 .mt(px(3.))
                                 .min_h(px(24.))
+                                .w_full()
                                 .flex()
                                 .items_center()
+                                .justify_center()
                                 .text_color(dim)
                                 .children(subtitle),
                         ),
