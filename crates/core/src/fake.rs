@@ -954,6 +954,14 @@ impl Backend for FakeBackend {
         let mut state = self.call(Operation::UninstallSshAgent)?;
         if state.ssh_agent.as_ref() == Some(account) {
             state.ssh_agent = None;
+            // launchd stops the service's agent with the service
+            if cfg!(target_os = "macos") {
+                let account = state.account_mut(account)?;
+                if account.state == LockState::Unlocked {
+                    account.lock();
+                    account.touch_id_ready = false;
+                }
+            }
         }
         state.ssh_status(account)
     }
@@ -1427,7 +1435,17 @@ mod tests {
             fake.install_ssh_agent(&work),
             Err(Error::SshAgentInstalledForOther(personal.clone()))
         );
+        // as rbw does, installing leaves the account unlocked, and so does
+        // uninstalling but on macOS
+        fake.install_ssh_agent(&personal).unwrap();
+        assert_eq!(fake.account(&personal).unwrap().state, LockState::Unlocked);
         fake.uninstall_ssh_agent(&personal).unwrap();
+        let after = if cfg!(target_os = "macos") {
+            LockState::Locked
+        } else {
+            LockState::Unlocked
+        };
+        assert_eq!(fake.account(&personal).unwrap().state, after);
         let status = fake.install_ssh_agent(&work).unwrap();
         assert_eq!(status.service, SshService::Installed);
         assert_eq!(status.keys, None);

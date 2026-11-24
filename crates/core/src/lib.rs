@@ -180,9 +180,14 @@ pub trait Backend: Send + Sync {
     fn ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus>;
 
     /// Installs the account's agent as a login service that serves its SSH
-    /// keys.
+    /// keys. It leaves the account as it is: an agent that runs keeps it
+    /// unlocked, and serves the SSH keys, until it stops, and the service
+    /// takes over then.
     fn install_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus>;
 
+    /// Removes the account's service. On Linux the account stays as it is
+    /// until its agent stops; on macOS removing the service stops its agent,
+    /// which locks the account.
     fn uninstall_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus>;
 
     /// The version of rbw the backend uses, for the About page.

@@ -115,8 +115,11 @@ preference off forgets the icons. The fake backend makes up an icon for most
 websites, as SVG.
 
 `ssh_agent` lists the keys the agent serves with their type ("Ed25519",
-"RSA", "ECDSA"), from the public key. Installing the agent's service stops
-the `rbw-agent` that was running, so the account is locked afterwards.
+"RSA", "ECDSA"), from the public key. Installing the agent's service leaves
+the account as it is: the `rbw-agent` that runs keeps it unlocked, and
+serves the SSH keys, until it stops, and the service takes over then.
+Removing the service does too on Linux; on macOS it stops the service's
+agent, which locks the account.
 
 The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
