@@ -1,8 +1,8 @@
 //! The item list with its search field.
 
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _,
-    Window, div, px, uniform_list,
+    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement as _, Styled as _, Window, div, px, uniform_list,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, button, chrome, list_row, search_field,
@@ -10,6 +10,7 @@ use rbw_desktop_ui::{
 
 use super::{NewItem, VaultView};
 use crate::backend::{self, Load};
+use crate::icons;
 
 impl VaultView {
     pub(super) fn render_list(
@@ -58,26 +59,43 @@ impl VaultView {
                 "items",
                 self.visible.len(),
                 cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                    let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
+                    let account = this.account.id.clone();
                     range
                         .map(|position| {
-                            let item = &items[this.visible[position]];
+                            let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
+                            let item = items[this.visible[position]].clone();
                             let selected = this.selected.as_ref() == Some(&item.id);
-                            let id = item.id.clone();
-                            div().px(px(7.)).pb(px(1.)).child(
-                                list_row(
-                                    gpui::ElementId::Name(format!("item-{}", item.id.0).into()),
-                                    item.name.clone(),
-                                    item.subtitle.clone().map(Into::into),
-                                    selected,
+                            let icon = icons::icon(&account, &item, cx);
+                            let (id, menu_id) = (item.id.clone(), item.id.clone());
+                            div()
+                                .px(px(7.))
+                                .pb(px(1.))
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                        this.open_context_menu(
+                                            menu_id.clone(),
+                                            event.position,
+                                            window,
+                                            cx,
+                                        );
+                                    }),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        window.focus(&this.list_focus, cx);
-                                        this.select(Some(id.clone()), cx);
-                                    },
-                                )),
-                            )
+                                .child(
+                                    list_row(
+                                        gpui::ElementId::Name(format!("item-{}", item.id.0).into()),
+                                        item.name.clone(),
+                                        item.subtitle.clone().map(Into::into),
+                                        selected,
+                                    )
+                                    .icon(icon)
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            window.focus(&this.list_focus, cx);
+                                            this.select_by(Some(id.clone()), true, cx);
+                                        },
+                                    )),
+                                )
                         })
                         .collect()
                 }),

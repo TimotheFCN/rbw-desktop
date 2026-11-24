@@ -1,0 +1,372 @@
+//! The Settings window, Preferences on GNOME: General, Accounts, SSH Agent
+//! and About. On macOS a sidebar lists the pages, as System Settings does;
+//! on GNOME a view switcher at the top of the window does, as Adwaita's
+//! preferences do. Changes apply at once; there is nothing to save.
+
+mod about;
+mod accounts;
+mod general;
+mod ssh;
+mod store;
+
+use gpui::base::Button as BaseButton;
+use gpui::{
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, actions, div,
+    prelude::FluentBuilder as _, px, size,
+};
+use rbw_desktop_ui::{
+    ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, icon, motion, nav_row,
+};
+
+use crate::backend;
+use crate::secondary;
+use crate::window::{self, Alerts, HasAlerts};
+use about::AboutPage;
+use accounts::AccountsPage;
+use general::GeneralPage;
+use ssh::SshPage;
+use store::{SaveFailed, Store};
+
+actions!(
+    settings,
+    [
+        /// Opens the Settings window, or brings it forward.
+        OpenSettings,
+        /// Opens the Settings window on its About page.
+        About,
+        CloseSettings,
+    ]
+);
+
+const CONTEXT: &str = "Settings";
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new(secondary!(","), OpenSettings, None),
+        KeyBinding::new(secondary!("w"), CloseSettings, Some(CONTEXT)),
+    ]);
+    // An Adwaita dialog closes with Escape; a Mac's settings window doesn't.
+    if cx.theme().look == Look::Gnome {
+        cx.bind_keys([KeyBinding::new("escape", CloseSettings, Some(CONTEXT))]);
+    }
+    cx.on_action(|_: &OpenSettings, cx| open(None, cx));
+    cx.on_action(|_: &About, cx| open(Some(Page::About), cx));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    General,
+    Accounts,
+    SshAgent,
+    About,
+}
+
+const PAGES: [(Page, IconName, &str); 4] = [
+    (Page::General, IconName::Gear, "General"),
+    (Page::Accounts, IconName::Identity, "Accounts"),
+    (Page::SshAgent, IconName::Terminal, "SSH Agent"),
+    (Page::About, IconName::Info, "About"),
+];
+
+/// The window's title, which each platform names its own way.
+pub fn title(cx: &App) -> &'static str {
+    match cx.theme().look {
+        Look::MacOs => "Settings",
+        Look::Gnome => "Preferences",
+    }
+}
+
+/// Opens the Settings window on `page`, or brings it forward if it is open.
+/// Without a backend, such as while rbw is missing, there is nothing to set.
+pub fn open(page: Option<Page>, cx: &mut App) {
+    if !backend::ready(cx) {
+        return;
+    }
+    for handle in cx.windows() {
+        let Some(root) = handle.downcast::<gpui::base::Root>() else {
+            continue;
+        };
+        let Some(settings) = root
+            .read(cx)
+            .ok()
+            .and_then(|root| root.view().clone().downcast::<SettingsWindow>().ok())
+        else {
+            continue;
+        };
+        root.update(cx, |_, window, cx| {
+            window.activate_window();
+            if let Some(page) = page {
+                settings.update(cx, |settings, cx| settings.show(page, window, cx));
+            }
+        })
+        .ok();
+        return;
+    }
+    let window_size = match cx.theme().look {
+        Look::MacOs => size(px(700.), px(500.)),
+        Look::Gnome => size(px(640.), px(560.)),
+    };
+    let options = chrome::window_options(title(cx), window_size, size(px(560.), px(400.)), cx);
+    let opened = gpui::open_window(options, cx, |window, cx| {
+        cx.new(|cx| SettingsWindow::new(page.unwrap_or(Page::General), window, cx))
+    });
+    if let Err(error) = opened {
+        log::error!("opening the settings: {error:#}");
+    }
+}
+
+pub struct SettingsWindow {
+    page: Page,
+    general: Entity<GeneralPage>,
+    accounts: Entity<AccountsPage>,
+    ssh: Entity<SshPage>,
+    about: Entity<AboutPage>,
+    alerts: Alerts,
+    focus: FocusHandle,
+}
+
+impl SettingsWindow {
+    fn new(page: Page, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_window_appearance(window, |_, window, cx| {
+            Theme::follow_window_appearance(window, cx);
+        })
+        .detach();
+        // What the SSH agent is doing can change while the window is in
+        // the background, such as when ssh starts it.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() && this.page == Page::SshAgent {
+                this.ssh.update(cx, |ssh, cx| ssh.refresh(cx));
+            }
+        })
+        .detach();
+        let store = cx.new(Store::new);
+        cx.subscribe_in(&store, window, |_, _, SaveFailed(error), window, cx| {
+            window::toast(backend::describe(error), window, cx);
+        })
+        .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        Self {
+            page,
+            general: cx.new(|cx| GeneralPage::new(store.clone(), cx)),
+            accounts: cx.new(|cx| AccountsPage::new(store.clone(), cx)),
+            ssh: cx.new(|cx| SshPage::new(store, window, cx)),
+            about: cx.new(AboutPage::new),
+            alerts: Alerts::new(),
+            focus,
+        }
+    }
+
+    fn show(&mut self, page: Page, _: &mut Window, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.page = page;
+            if page == Page::SshAgent {
+                self.ssh.update(cx, |ssh, cx| ssh.refresh(cx));
+            }
+            cx.notify();
+        }
+    }
+
+    fn close(&mut self, _: &CloseSettings, window: &mut Window, _: &mut Context<Self>) {
+        window.remove_window();
+    }
+
+    fn page_view(&self) -> AnyElement {
+        match self.page {
+            Page::General => self.general.clone().into_any_element(),
+            Page::Accounts => self.accounts.clone().into_any_element(),
+            Page::SshAgent => self.ssh.clone().into_any_element(),
+            Page::About => self.about.clone().into_any_element(),
+        }
+    }
+
+    fn page_name(&self) -> &'static str {
+        PAGES
+            .iter()
+            .find(|(page, ..)| *page == self.page)
+            .map_or("", |(_, _, name)| name)
+    }
+
+    /// The page, scrolling, and fading in when it replaces another.
+    fn render_body(&self, max_width: Option<gpui::Pixels>) -> AnyElement {
+        div()
+            .id("settings-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .px(px(20.))
+                    .pt(px(6.))
+                    .pb(px(24.))
+                    .child(motion::content_enter(
+                        ("settings-page", self.page as usize),
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .when_some(max_width, |d, width| d.max_w(width))
+                            .child(self.page_view()),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// macOS: the pages in a glass sidebar, the page's name over its body.
+    fn render_macos(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let metrics = theme.metrics;
+        let fill = theme.colors.window;
+        let corner = chrome::corner_radius(window, cx);
+        let rows = PAGES.map(|(page, icon_name, label)| {
+            nav_row(label, icon_name, label, self.page == page)
+                .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+                .into_any_element()
+        });
+        let sidebar = div()
+            .flex_none()
+            .w(px(190.))
+            .h_full()
+            .p(metrics.sidebar_inset)
+            .child(
+                glass("settings-sidebar", Material::Sidebar)
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .rounded(metrics.sidebar_radius)
+                    .px(px(7.))
+                    .children(chrome::traffic_lights(cx))
+                    .children(rows),
+            );
+        let toolbar = chrome::drag_region(
+            "settings-toolbar",
+            div()
+                .h(metrics.toolbar_height)
+                .flex_none()
+                .flex()
+                .items_center()
+                .px(px(20.))
+                .text_size(px(15.))
+                .font_weight(FontWeight::BOLD)
+                .child(self.page_name()),
+            window,
+            cx,
+        );
+        div()
+            .size_full()
+            .flex()
+            .child(sidebar)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .bg(fill)
+                    .rounded_r(corner)
+                    .child(toolbar)
+                    .child(self.render_body(Some(px(520.)))),
+            )
+            .into_any_element()
+    }
+
+    /// GNOME: a header bar with the view switcher, the page under it.
+    fn render_gnome(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let colors = &theme.colors;
+        let (hover, selected) = (colors.hover, colors.fill);
+        let height = theme.metrics.toolbar_height;
+        let switcher = div()
+            .id("view-switcher")
+            .role(gpui::Role::TabList)
+            .flex()
+            .gap(px(4.))
+            .children(PAGES.map(|(page, icon_name, label)| {
+                let current = self.page == page;
+                BaseButton::new(label)
+                    .role(gpui::Role::Tab)
+                    .selected(current)
+                    .accessibility_label(label)
+                    .on_click(cx.listener(move |this, _, window, cx| this.show(page, window, cx)))
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .h(px(34.))
+                    .px(px(12.))
+                    .rounded(theme.metrics.control_radius)
+                    .font_weight(FontWeight::BOLD)
+                    .when(current, |b| b.bg(selected))
+                    .when(!current, |b| b.hover(move |s| s.bg(hover)))
+                    .child(icon(icon_name).size(px(16.)))
+                    .child(SharedString::from(label))
+            }));
+        let header = chrome::drag_region(
+            "settings-header",
+            div()
+                .h(height)
+                .flex_none()
+                .flex()
+                .items_center()
+                .px(px(6.))
+                .children(chrome::window_buttons(chrome::Side::Start, window, cx))
+                .child(div().flex_1().flex().justify_center().child(switcher))
+                .children(chrome::window_buttons(chrome::Side::End, window, cx)),
+            window,
+            cx,
+        );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(self.render_body(Some(px(560.))))
+            .into_any_element()
+    }
+}
+
+impl HasAlerts for SettingsWindow {
+    fn alerts(&mut self) -> &mut Alerts {
+        &mut self.alerts
+    }
+}
+
+impl Focusable for SettingsWindow {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for SettingsWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let layout = match cx.theme().look {
+            Look::MacOs => self.render_macos(window, cx),
+            Look::Gnome => self.render_gnome(window, cx),
+        };
+        let alerts = self.alerts.render(window, cx);
+        let content = div()
+            .id("settings")
+            .key_context(CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::close))
+            .relative()
+            .size_full()
+            .child(layout)
+            .children(alerts.into_iter().flatten());
+        chrome::window_frame(content, window, cx)
+    }
+}
+
+/// A sentence of a settings page, outside any group: what a page is for,
+/// or what to do next.
+fn note(text: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    div()
+        .px(px(4.))
+        .text_color(cx.theme().colors.text_secondary)
+        .line_height(gpui::relative(1.4))
+        .child(text.into())
+}

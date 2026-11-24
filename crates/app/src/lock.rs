@@ -119,7 +119,7 @@ impl LockScreen {
         self.task = backend::request_in(window, cx, call, |this, result, window, cx| {
             match result {
                 // The spinner keeps going until the vault replaces this screen.
-                Ok(()) => cx.emit(Request::Refresh),
+                Ok(()) => crate::accounts::refresh(cx),
                 Err(error) => {
                     this.busy = false;
                     this.fail(&error, window, cx);
@@ -144,7 +144,7 @@ impl LockScreen {
         }
         // Another program may have signed the account out or unlocked it.
         if matches!(error, Error::NotSignedIn | Error::AccountNotFound) {
-            cx.emit(Request::Refresh);
+            crate::accounts::refresh(cx);
         }
     }
 }

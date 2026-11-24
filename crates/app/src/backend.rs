@@ -5,15 +5,33 @@
 use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Context, Global, Task, Window};
-use rbw_desktop_core::{Backend, Error, Result};
+use rbw_desktop_core::{Backend, Error, RbwBackend, Result};
+
+use crate::demo;
 
 #[derive(Clone)]
 struct Shared(Arc<dyn Backend>);
 
 impl Global for Shared {}
 
+/// The backend the app runs on: rbw, or the demo's when `RBW_DESKTOP_DEMO`
+/// is set. It fails when rbw is missing or too old. It blocks while it
+/// asks rbw its version.
+pub fn connect() -> Result<Arc<dyn Backend>> {
+    match demo::words() {
+        Some(words) => Ok(Arc::new(demo::backend(&words)?)),
+        None => Ok(Arc::new(RbwBackend::new()?)),
+    }
+}
+
 pub fn init(backend: Arc<dyn Backend>, cx: &mut App) {
     cx.set_global(Shared(backend));
+}
+
+/// Whether there is a backend to ask, which there isn't while rbw is
+/// missing.
+pub fn ready(cx: &App) -> bool {
+    cx.has_global::<Shared>()
 }
 
 /// Runs `call` off the main thread, then `then` with its result on the view

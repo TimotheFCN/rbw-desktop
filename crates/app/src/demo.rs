@@ -1,22 +1,43 @@
-//! The demo backend the app runs on until it uses rbw, set up by
-//! `RBW_DESKTOP_DEMO`: a comma-separated list of
+//! The demo backend, which the app runs on instead of rbw when
+//! `RBW_DESKTOP_DEMO` is set, even empty: for screenshots, and to try the
+//! interface without an account. Its value is a comma-separated list of
 //!
 //! * `first-run`: no accounts, as on a computer where rbw was never set up;
 //! * `unlocked`: the first demo account unlocked, to start in the vault;
 //! * `signed-out`: a third account that is signed out;
 //! * `touch-id`: Touch ID ready to unlock the first account;
 //! * `slow`: every call takes two seconds, to see what waits;
-//! * `offline`: calls that need the server fail.
+//! * `offline`: calls that need the server fail;
+//! * `no-rbw`, `old-rbw`: rbw missing, or too old;
+//! * `ssh-off`: no SSH agent set up; `ssh-unsupported`: none can be;
+//!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
+//!   setting it up fails; `ssh-slow`: setting it up takes a while;
+//! * `no-icons`: no website has an icon.
 //!
-//! Without it, both demo accounts start locked.
+//! Without a word, both demo accounts start locked.
 
 use std::time::Duration;
 
-use rbw_desktop_core::{Backend as _, FakeBackend, Server};
+use rbw_desktop_core::{
+    Backend as _, Error, FakeBackend, Operation, Preferences, REQUIRED_RBW, Result, Server, SshUses,
+};
 
-pub fn backend() -> FakeBackend {
-    let demo = std::env::var("RBW_DESKTOP_DEMO").unwrap_or_default();
+/// The words of `RBW_DESKTOP_DEMO`, or `None` to run on rbw.
+pub fn words() -> Option<String> {
+    std::env::var("RBW_DESKTOP_DEMO").ok()
+}
+
+pub fn backend(demo: &str) -> Result<FakeBackend> {
     let wants = |word: &str| demo.split(',').any(|w| w.trim() == word);
+    if wants("no-rbw") {
+        return Err(Error::RbwNotFound);
+    }
+    if wants("old-rbw") {
+        return Err(Error::RbwTooOld {
+            found: "1.13.2".to_string(),
+            required: REQUIRED_RBW.to_string(),
+        });
+    }
     let fake = if wants("first-run") {
         FakeBackend::empty()
     } else {
@@ -55,5 +76,36 @@ pub fn backend() -> FakeBackend {
     if wants("slow") {
         fake.set_latency(Duration::from_secs(2));
     }
-    fake
+    if wants("ssh-off")
+        && let Some(id) = &first
+        && fake.uninstall_ssh_agent(id).is_err()
+    {
+        log::error!("the demo's SSH agent wasn't removed");
+    }
+    if wants("ssh-unsupported") {
+        fake.set_ssh_supported(false);
+    }
+    if wants("ssh-elsewhere") {
+        fake.set_ssh_uses(Some(SshUses::Other("/run/user/1000/keyring/ssh".into())));
+    }
+    if wants("ssh-fails") {
+        fake.fail(
+            Operation::InstallSshAgent,
+            Error::Other("systemctl failed".into()),
+        );
+    }
+    if wants("ssh-slow") {
+        fake.set_latency_of(Operation::InstallSshAgent, Duration::from_secs(3));
+    }
+    if wants("no-icons")
+        && fake
+            .set_preferences(&Preferences {
+                website_icons: false,
+                ..Preferences::default()
+            })
+            .is_err()
+    {
+        log::error!("the demo's website icons weren't turned off");
+    }
+    Ok(fake)
 }

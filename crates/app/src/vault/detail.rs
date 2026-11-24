@@ -4,12 +4,13 @@
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    AnyElement, Context, ElementId, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, AppContext as _, Context, ElementId, Entity, FontWeight, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{
-    AccountId, FieldValue, Item, ItemContent, ItemId, ItemKind, Secret, VerificationCode,
+    AccountId, Error, FieldValue, Item, ItemContent, ItemId, ItemKind, ItemSummary, Secret,
+    VerificationCode,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, button, card, chrome, field_row, icon, motion,
@@ -19,20 +20,30 @@ use rbw_desktop_ui::{
 use super::{EditItem, VaultView};
 use crate::backend::{self, Load};
 use crate::clipboard;
+use crate::icons::{self, Icons};
+use crate::reprompt::{Reprompt, Unlocked};
 
 pub struct ItemDetail {
     account: AccountId,
     vault: WeakEntity<VaultView>,
-    selected: Option<ItemId>,
+    /// The item chosen in the list, as the list shows it.
+    selected: Option<ItemSummary>,
     /// The last item that arrived. While another one loads it stays on
     /// screen, so changing the selection never blanks the pane.
     loaded: Option<Load<Item>>,
     revealed: Vec<SharedString>,
     copied: Option<SharedString>,
     code: Option<VerificationCode>,
+    /// Asks for the master password, for an item that wants it again.
+    reprompt: Option<Entity<Reprompt>>,
+    /// Whether the password field takes the keyboard when it appears: when
+    /// the item was clicked rather than stepped to with the arrow keys.
+    focus_reprompt: bool,
+    _reprompt_events: Option<Subscription>,
     load_task: Task<()>,
     copied_timer: Task<()>,
     code_task: Task<()>,
+    _icons: Subscription,
 }
 
 /// How a field's value is drawn.
@@ -71,7 +82,7 @@ impl Field {
 }
 
 impl ItemDetail {
-    pub fn new(account: AccountId, vault: WeakEntity<VaultView>) -> Self {
+    pub fn new(account: AccountId, vault: WeakEntity<VaultView>, cx: &mut Context<Self>) -> Self {
         Self {
             account,
             vault,
@@ -80,25 +91,54 @@ impl ItemDetail {
             revealed: vec![],
             copied: None,
             code: None,
+            reprompt: None,
+            focus_reprompt: false,
+            _reprompt_events: None,
             load_task: Task::ready(()),
             copied_timer: Task::ready(()),
             code_task: Task::ready(()),
+            _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
         }
+    }
+
+    fn selected_id(&self) -> Option<&ItemId> {
+        self.selected.as_ref().map(|item| &item.id)
     }
 
     /// The selected item, once it has arrived.
     pub fn item(&self) -> Option<&Item> {
         let item = self.loaded.as_ref()?.ready()?;
-        (Some(&item.id) == self.selected.as_ref()).then_some(item)
+        (Some(&item.id) == self.selected_id()).then_some(item)
     }
 
-    pub fn show(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
+    /// Shows another item, or none. `by_pointer` says it was clicked, so
+    /// that a master password it asks for takes the keyboard at once.
+    pub fn show(&mut self, item: Option<ItemSummary>, by_pointer: bool, cx: &mut Context<Self>) {
         self.selected = item;
+        self.focus_reprompt = by_pointer;
         if self.selected.is_none() {
             self.loaded = None;
             self.forget_item_state();
         }
         self.reload(cx);
+    }
+
+    /// Gives the keyboard to the master password prompt, if one shows.
+    pub fn focus_reprompt(&mut self, cx: &mut Context<Self>) {
+        self.focus_reprompt = true;
+        cx.notify();
+    }
+
+    /// The selected item's latest summary, after the list reloaded. An
+    /// item selected before the list knew it, such as one just created,
+    /// shows now.
+    pub fn set_summary(&mut self, item: ItemSummary, cx: &mut Context<Self>) {
+        if self.selected_id() != Some(&item.id) {
+            self.show(Some(item), false, cx);
+        } else if self.selected.as_ref() != Some(&item) {
+            self.selected = Some(item);
+            cx.notify();
+        }
     }
 
     fn forget_item_state(&mut self) {
@@ -110,7 +150,7 @@ impl ItemDetail {
 
     /// Fetches the selected item again, after it may have changed.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone() else {
+        let Some(id) = self.selected_id().cloned() else {
             cx.notify();
             return;
         };
@@ -138,13 +178,23 @@ impl ItemDetail {
     }
 
     fn fetch_code(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = &self.selected else { return };
+        let Some(id) = self.selected_id() else { return };
         let (account, id) = (self.account.clone(), id.clone());
         self.code_task = backend::request(
             cx,
             move |backend| backend.verification_code(&account, &id),
             |this, result, cx| {
-                let Ok(code) = result else { return };
+                let code = match result {
+                    Ok(code) => code,
+                    // The item went unread long enough to lock again.
+                    Err(Error::RepromptRequired) => {
+                        this.loaded = Some(Load::Failed(Error::RepromptRequired));
+                        this.forget_item_state();
+                        cx.notify();
+                        return;
+                    }
+                    Err(_) => return,
+                };
                 let expires_at = code.expires_at;
                 this.code = Some(code);
                 // Redraw each second for the countdown, then fetch the next code.
@@ -187,8 +237,43 @@ impl ItemDetail {
         cx.notify();
     }
 
+    /// The prompt for the master password, for the selected item, made when
+    /// it is first needed.
+    fn reprompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Reprompt>> {
+        let id = self.selected_id()?.clone();
+        let reprompt = match &self.reprompt {
+            Some(reprompt) if *reprompt.read(cx).item() == id => reprompt.clone(),
+            _ => {
+                let account = self.account.clone();
+                let reprompt = cx.new(|cx| Reprompt::new(account, id, window, cx));
+                self._reprompt_events = Some(cx.subscribe_in(
+                    &reprompt,
+                    window,
+                    |this, _, _: &Unlocked, window, cx| {
+                        this.reprompt = None;
+                        this.reload(cx);
+                        // The field that had the keyboard goes with the prompt.
+                        this.vault
+                            .update(cx, |vault, cx| vault.focus_list(window, cx))
+                            .ok();
+                    },
+                ));
+                self.reprompt = Some(reprompt.clone());
+                reprompt
+            }
+        };
+        if std::mem::take(&mut self.focus_reprompt) {
+            reprompt.update(cx, |reprompt, cx| reprompt.focus(window, cx));
+        }
+        Some(reprompt)
+    }
+
     fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
-        let Some(item) = self.item() else { return };
+        let Some(item) = &self.selected else { return };
         let (account, id, favorite) = (self.account.clone(), item.id.clone(), !item.favorite);
         let vault = self.vault.clone();
         backend::request(
@@ -215,9 +300,10 @@ impl ItemDetail {
             Look::MacOs => ButtonStyle::Normal,
             Look::Gnome => ButtonStyle::Flat,
         };
-        let item = self.item();
-        let editable = item.is_some_and(|item| item.editable);
-        let favorite = item.is_some_and(|item| item.favorite);
+        let editable = self.item().is_some_and(|item| item.editable);
+        // Favourites belong to the account: any item can be one, even
+        // before it is unlocked.
+        let favorite = self.selected.as_ref().map(|item| item.favorite);
         let accent = theme.colors.accent_text;
         let height = theme.metrics.toolbar_height;
         chrome::drag_region(
@@ -230,7 +316,7 @@ impl ItemDetail {
                 .justify_end()
                 .gap(px(8.))
                 .px(px(12.))
-                .when(editable, |bar| {
+                .when_some(favorite, |bar, favorite| {
                     bar.child(
                         div().when(favorite, |d| d.text_color(accent)).child(
                             button("favorite")
@@ -244,7 +330,9 @@ impl ItemDetail {
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx))),
                         ),
                     )
-                    .child(
+                })
+                .when(editable, |bar| {
+                    bar.child(
                         button("edit")
                             .label("Edit")
                             .style(ButtonStyle::Normal)
@@ -330,6 +418,59 @@ impl ItemDetail {
             row = row.action(icon(IconName::Copy));
         }
         row.into_any_element()
+    }
+
+    /// In place of an item that asks for the master password again: what it
+    /// is, and the field that unlocks it.
+    fn render_reprompt(
+        &self,
+        item: &ItemSummary,
+        reprompt: Entity<Reprompt>,
+        icon: Option<std::sync::Arc<gpui::RenderImage>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let dim = cx.theme().colors.text_secondary;
+        motion::content_enter(
+            ElementId::Name(format!("reprompt-{}", item.id.0).into()),
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .pb(px(48.))
+                .child(
+                    div()
+                        .w(px(320.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .text_center()
+                        .child(
+                            tile(&item.name)
+                                .size(px(56.))
+                                .icon(ElementId::Name(format!("tile-{}", item.id.0).into()), icon),
+                        )
+                        .child(
+                            div()
+                                .mt(px(12.))
+                                .w_full()
+                                .truncate()
+                                .text_size(px(17.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(item.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(3.))
+                                .mb(px(16.))
+                                .text_color(dim)
+                                .child("Enter your master password to see this item."),
+                        )
+                        .child(div().w(px(270.)).child(reprompt)),
+                ),
+        )
+        .into_any_element()
     }
 
     fn render_code(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -566,6 +707,14 @@ impl Render for ItemDetail {
         let dim = theme.colors.text_secondary;
         let toolbar = self.render_toolbar(window, cx);
         let corner = chrome::corner_radius(window, cx);
+        let selected = self.selected.clone();
+        let icon = selected
+            .as_ref()
+            .and_then(|item| icons::icon(&self.account, item, cx));
+        let reprompt = match self.loaded {
+            Some(Load::Failed(Error::RepromptRequired)) => self.reprompt(window, cx),
+            _ => None,
+        };
         let body: Option<AnyElement> = match &self.loaded {
             Some(Load::Ready(item)) => {
                 let item = item.clone();
@@ -593,7 +742,11 @@ impl Render for ItemDetail {
                     .items_center()
                     .gap(px(13.))
                     .mb(px(4.))
-                    .child(tile(&item.data.name).size(px(56.)))
+                    .child(
+                        tile(&item.data.name)
+                            .size(px(56.))
+                            .icon(ElementId::Name(format!("tile-{}", item.id.0).into()), icon),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -623,6 +776,12 @@ impl Render for ItemDetail {
                     .into_any_element(),
                 )
             }
+            Some(Load::Failed(Error::RepromptRequired)) => match (selected, reprompt) {
+                (Some(item), Some(reprompt)) => {
+                    Some(self.render_reprompt(&item, reprompt, icon, cx))
+                }
+                _ => None,
+            },
             Some(Load::Failed(error)) => Some(
                 div()
                     .flex_1()
@@ -649,6 +808,8 @@ impl Render for ItemDetail {
                     .id("detail-body")
                     .flex_1()
                     .min_h_0()
+                    .flex()
+                    .flex_col()
                     .overflow_y_scroll()
                     .children(body),
             )

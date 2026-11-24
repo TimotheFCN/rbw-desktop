@@ -1,5 +1,6 @@
 //! The vault window: sidebar, item list and the selected item.
 
+mod context_menu;
 mod detail;
 mod editor;
 mod list;
@@ -11,16 +12,18 @@ use gpui::base::input::{InputEvent, InputState};
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
-    Styled as _, Task, UniformListScrollHandle, Window, actions, div, px,
+    Styled as _, Subscription, Task, UniformListScrollHandle, Window, actions, div, px,
 };
 use rbw_desktop_core::{
-    Account, AccountId, Error, Folder, FolderId, ItemId, ItemKind, ItemSummary,
+    Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary,
 };
 use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot};
 
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
+use crate::icons::Icons;
 use crate::secondary;
+use context_menu::ContextMenu;
 use detail::ItemDetail;
 use editor::ItemEditor;
 
@@ -40,6 +43,8 @@ actions!(
         /// Syncs the vault with the server now.
         Sync,
         Lock,
+        /// Opens the selected item's context menu from the keyboard.
+        OpenContextMenu,
     ]
 );
 
@@ -55,6 +60,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some("VaultList")),
         KeyBinding::new("up", SelectPrevious, Some("VaultList")),
+        KeyBinding::new("shift-f10", OpenContextMenu, Some("VaultList")),
+        KeyBinding::new("menu", OpenContextMenu, Some("VaultList")),
     ]);
     editor::init(cx);
 }
@@ -98,8 +105,11 @@ pub struct VaultView {
     toast: ToastSlot,
     list_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    context_menu: Option<ContextMenu>,
+    context_menu_focus: FocusHandle,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
+    _icons: Subscription,
 }
 
 impl EventEmitter<Request> for VaultView {}
@@ -126,7 +136,7 @@ impl VaultView {
         )
         .detach();
         let vault = cx.entity().downgrade();
-        let detail = cx.new(|_| ItemDetail::new(account.id.clone(), vault));
+        let detail = cx.new(|cx| ItemDetail::new(account.id.clone(), vault, cx));
         let mut this = Self {
             last_sync: account.last_sync,
             account,
@@ -144,7 +154,10 @@ impl VaultView {
             toast: ToastSlot::default(),
             list_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
+            context_menu: None,
+            context_menu_focus: cx.focus_handle(),
             load_task: Task::ready(()),
+            _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
         };
         this.reload(cx);
         window.focus(&this.list_focus, cx);
@@ -212,15 +225,28 @@ impl VaultView {
             Load::Loading | Load::Failed(_) => vec![],
         };
         match self.selected_index() {
-            Some(index) => self
-                .list_scroll
-                .scroll_to_item(index, ScrollStrategy::Nearest),
+            Some(index) => {
+                self.list_scroll
+                    .scroll_to_item(index, ScrollStrategy::Nearest);
+                if let Some(item) = self.visible_items().nth(index).cloned() {
+                    self.detail
+                        .update(cx, |detail, cx| detail.set_summary(item, cx));
+                }
+            }
             None => {
                 let first = self.visible_items().next().map(|item| item.id.clone());
                 self.select(first, cx);
             }
         }
         cx.notify();
+    }
+
+    pub(crate) fn focus_list(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.list_focus, cx);
+    }
+
+    fn summary(&self, id: &ItemId) -> Option<&ItemSummary> {
+        self.items.ready()?.iter().find(|item| item.id == *id)
     }
 
     fn visible_items(&self) -> impl Iterator<Item = &ItemSummary> {
@@ -237,11 +263,22 @@ impl VaultView {
     }
 
     fn select(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
+        self.select_by(item, false, cx);
+    }
+
+    /// Selects an item; `by_pointer` when it was clicked.
+    fn select_by(&mut self, item: Option<ItemId>, by_pointer: bool, cx: &mut Context<Self>) {
         if self.selected == item {
+            if by_pointer {
+                self.detail
+                    .update(cx, |detail, cx| detail.focus_reprompt(cx));
+            }
             return;
         }
         self.selected = item.clone();
-        self.detail.update(cx, |detail, cx| detail.show(item, cx));
+        let summary = item.and_then(|id| self.summary(&id).cloned());
+        self.detail
+            .update(cx, |detail, cx| detail.show(summary, by_pointer, cx));
         cx.notify();
     }
 
@@ -303,6 +340,10 @@ impl VaultView {
         let Some(item) = self.detail.read(cx).item().cloned() else {
             return;
         };
+        self.open_editor(item, window, cx);
+    }
+
+    fn open_editor(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
         let vault = cx.entity().downgrade();
         let folders = self.folders.clone();
         let account = self.account_id();
@@ -339,7 +380,7 @@ impl VaultView {
             cx,
             move |backend| backend.sync(&account),
             |this, result, cx| match result {
-                Ok(()) => cx.emit(Request::Refresh),
+                Ok(()) => crate::accounts::refresh(cx),
                 Err(error) => this.show_error(&error, cx),
             },
         )
@@ -352,7 +393,7 @@ impl VaultView {
             cx,
             move |backend| backend.lock(&account),
             |this, result, cx| match result {
-                Ok(()) => cx.emit(Request::Refresh),
+                Ok(()) => crate::accounts::refresh(cx),
                 Err(error) => this.show_error(&error, cx),
             },
         )
@@ -484,12 +525,14 @@ impl Render for VaultView {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::sync))
             .on_action(cx.listener(Self::lock))
+            .on_action(cx.listener(Self::open_context_menu_from_keyboard))
             .relative()
             .size_full()
             .flex()
             .child(sidebar)
             .child(list)
             .child(self.detail.clone())
+            .children(self.render_context_menu(cx))
             .children(sheet)
             .children(toast)
     }

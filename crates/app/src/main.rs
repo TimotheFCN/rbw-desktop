@@ -2,14 +2,17 @@ mod accounts;
 mod backend;
 mod clipboard;
 mod demo;
+mod icons;
 mod lock;
+mod reprompt;
+mod settings;
 mod sign_in;
 mod vault;
 mod window;
 
 use std::sync::Arc;
 
-use gpui::{KeyBinding, Menu, MenuItem, actions};
+use gpui::{App, KeyBinding, Menu, MenuItem, actions};
 use rbw_desktop_core::Backend;
 
 /// A key binding with the platform's command modifier: Command on macOS,
@@ -30,17 +33,15 @@ actions!(rbw_desktop, [Quit]);
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    // rbw-desktop runs on the demo vault until it switches to rbw.
-    let backend: Arc<dyn Backend> = Arc::new(demo::backend());
+    let backend = backend::connect();
 
     gpui::application()
         .with_assets(rbw_desktop_ui::Assets)
         .run(move |cx| {
             rbw_desktop_ui::init(cx);
-            backend::init(backend, cx);
-            clipboard::init(cx);
             sign_in::init(cx);
             vault::init(cx);
+            settings::init(cx);
             cx.bind_keys([KeyBinding::new(secondary!("q"), Quit, None)]);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(menus());
@@ -52,14 +53,35 @@ fn main() {
                 }
             })
             .detach();
-            window::open(cx);
+            let missing = match backend {
+                Ok(backend) => {
+                    start(backend, cx);
+                    None
+                }
+                Err(error) => Some(error),
+            };
+            window::open(missing, cx);
             cx.activate(true);
         });
 }
 
+/// Starts what runs on the backend, once there is one.
+pub fn start(backend: Arc<dyn Backend>, cx: &mut App) {
+    backend::init(backend, cx);
+    clipboard::init(cx);
+    icons::init(cx);
+    accounts::init(cx);
+}
+
 fn menus() -> Vec<Menu> {
     vec![
-        Menu::new("rbw-desktop").items([MenuItem::action("Quit rbw-desktop", Quit)]),
+        Menu::new("rbw-desktop").items([
+            MenuItem::action("About rbw-desktop", settings::About),
+            MenuItem::separator(),
+            MenuItem::action("Settings…", settings::OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("Quit rbw-desktop", Quit),
+        ]),
         Menu::new("File").items([
             MenuItem::action("New Item", vault::NewItem),
             MenuItem::action("Delete Item…", vault::DeleteItem),

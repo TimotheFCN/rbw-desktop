@@ -1,10 +1,150 @@
-//! The accounts on this computer, as the screens offer them: the menu that
-//! switches between them, adds one or signs out of one, and the requests
-//! screens make of the window to do so.
+//! The accounts on this computer: the list every window shows, asked of
+//! the backend every couple of seconds so that locking and signing in or
+//! out done anywhere, by the command line or the lock timeout too, shows
+//! everywhere at once; and the account menu the screens share.
 
-use gpui::{App, Context, EventEmitter, FocusHandle, ParentElement as _, Window};
-use rbw_desktop_core::{Account, AccountId, LockState};
-use rbw_desktop_ui::{IconName, Opening, Popover, avatar, menu_item, menu_separator, popover};
+use std::time::Duration;
+
+use gpui::{
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Global, ParentElement as _,
+    Task, Window,
+};
+use rbw_desktop_core::{Account, AccountId, Error, LockState};
+use rbw_desktop_ui::{
+    Confirmation, IconName, Opening, Popover, avatar, menu_item, menu_separator, popover,
+};
+
+use crate::backend::{self, Load};
+use crate::window;
+
+/// How often the accounts are asked whether they locked, unlocked or synced.
+const POLL: Duration = Duration::from_secs(2);
+
+/// The accounts on this computer and their state, shared by every window.
+pub struct Accounts {
+    list: Load<Vec<Account>>,
+    refresh_task: Task<()>,
+    _poll: Task<()>,
+}
+
+/// Each time the accounts have been asked again, changed or not.
+pub struct Refreshed;
+
+impl EventEmitter<Refreshed> for Accounts {}
+
+struct Shared(Entity<Accounts>);
+
+impl Global for Shared {}
+
+/// Starts asking for the accounts. Call once the backend is set up.
+pub fn init(cx: &mut App) {
+    let accounts = cx.new(|cx| {
+        let poll = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL).await;
+                if this
+                    .update(cx, |this: &mut Accounts, cx| this.refresh(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let mut this = Accounts {
+            list: Load::Loading,
+            refresh_task: Task::ready(()),
+            _poll: poll,
+        };
+        this.refresh(cx);
+        this
+    });
+    cx.set_global(Shared(accounts));
+}
+
+impl Accounts {
+    pub fn global(cx: &App) -> Entity<Self> {
+        cx.global::<Shared>().0.clone()
+    }
+
+    pub fn load(&self) -> &Load<Vec<Account>> {
+        &self.list
+    }
+
+    /// Every account, or none until they are known.
+    pub fn list(&self) -> &[Account] {
+        self.list.ready().map(Vec::as_slice).unwrap_or_default()
+    }
+
+    pub fn get(&self, id: &AccountId) -> Option<&Account> {
+        self.list().iter().find(|account| account.id == *id)
+    }
+
+    /// Asks for the accounts again now, such as after unlocking one.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh_task = backend::request(
+            cx,
+            |backend| backend.accounts(),
+            |this, result, cx| {
+                match result {
+                    Ok(accounts) => {
+                        if this.list.ready() != Some(&accounts) {
+                            this.list = Load::Ready(accounts);
+                            cx.notify();
+                        }
+                    }
+                    // A poll failing once leaves the accounts as they were;
+                    // only a list that was never read says why.
+                    Err(error) => {
+                        if this.list.ready().is_none() {
+                            this.list = Load::Failed(error);
+                            cx.notify();
+                        }
+                    }
+                }
+                cx.emit(Refreshed);
+            },
+        );
+    }
+}
+
+/// [`Accounts::refresh`] from anywhere.
+pub fn refresh(cx: &mut App) {
+    Accounts::global(cx).update(cx, |accounts, cx| accounts.refresh(cx));
+}
+
+/// Asks, then signs out of the account and removes it from this computer.
+/// `failed` hears of a failure, to say so in the window that asked.
+pub fn sign_out(
+    account: &Account,
+    window: &mut Window,
+    cx: &mut App,
+    failed: impl FnOnce(Error, &mut Window, &mut App) + 'static,
+) {
+    let confirmation = Confirmation {
+        title: format!("Sign out of {}?", name(account)).into(),
+        message: "Its vault is removed from this computer, for the rbw command line too. \
+                  You can sign in again at any time."
+            .into(),
+        confirm: "Sign Out".into(),
+        destructive: true,
+    };
+    let id = account.id.clone();
+    window::confirm(confirmation, window, cx, move |window, cx| {
+        let removed = backend::call(cx, move |backend| backend.remove_account(&id));
+        window
+            .spawn(cx, async move |cx| {
+                let result = removed.await;
+                cx.update(|window, cx| {
+                    if let Err(error) = result {
+                        failed(error, window, cx);
+                    }
+                    refresh(cx);
+                })
+                .ok();
+            })
+            .detach();
+    });
+}
 
 /// What a screen asks of the window that shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,9 +154,6 @@ pub enum Request {
     AddAccount,
     /// Ask, then sign out of this account and remove it from this computer.
     SignOut(AccountId),
-    /// An account may have changed state, such as after unlocking: look
-    /// again now rather than at the next poll.
-    Refresh,
     /// Leave adding an account for the account shown before.
     CancelAdd,
     /// Signing in to this account succeeded: show it once its new state is
