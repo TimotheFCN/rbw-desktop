@@ -76,7 +76,9 @@ so only bitmaps (PNG, JPEG, GIF, WebP, BMP, ICO) of at most 1024 pixels a
 side, by what their headers say, count as icons; anything else, SVG included,
 counts as none. Icons are kept in the app's cache folder for 30
 days, sites without one for 3 days, and the oldest go past 20 MB, so after
-the first time an icon comes from the disk. With the website icons
+the first time an icon comes from the disk. Each account keeps its own, as
+another server may have an icon that this one hasn't, and removing the
+account forgets them. With the website icons
 preference off it returns `None` without asking anything, and turning the
 preference off forgets the icons. The fake backend makes up an icon for most
 websites, as SVG.

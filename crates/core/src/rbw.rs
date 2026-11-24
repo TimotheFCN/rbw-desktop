@@ -291,7 +291,10 @@ impl Backend for RbwBackend {
     }
 
     fn remove_account(&self, account: &AccountId) -> Result<()> {
-        self.run(account, &["purge", "--all"], Wait::Local)
+        self.run(account, &["purge", "--all"], Wait::Local)?;
+        // only a cache, so failing to remove it doesn't fail the removal
+        let _ = self.icons.forget(account);
+        Ok(())
     }
 
     fn unlock(&self, account: &AccountId, password: &Secret) -> Result<()> {
@@ -418,7 +421,7 @@ impl Backend for RbwBackend {
         let Some(host) = icon::icon_host(item) else {
             return Ok(None);
         };
-        if let Some(cached) = self.icons.get(&host) {
+        if let Some(cached) = self.icons.get(account, &host) {
             return Ok(cached);
         }
         let icon = match self
@@ -430,7 +433,7 @@ impl Backend for RbwBackend {
             Err(failure) if failure.error == Error::NotFound => None,
             Err(failure) => return Err(failure.error),
         };
-        self.icons.put(&host, icon.as_ref());
+        self.icons.put(account, &host, icon.as_ref());
         Ok(icon)
     }
 

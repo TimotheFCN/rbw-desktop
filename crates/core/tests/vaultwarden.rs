@@ -238,7 +238,7 @@ fn against_vaultwarden() {
         .find(|item| item.id == created.id)
         .unwrap();
     let icon = backend.website_icon(&id, &github).unwrap();
-    let cache = std::path::PathBuf::from(env("XDG_CACHE_HOME")).join("rbwdesktop/icons");
+    let cache = std::path::PathBuf::from(env("XDG_CACHE_HOME")).join("rbwdesktop/icons/default");
     let kept = if icon.is_some() {
         "github.com.icon"
     } else {
