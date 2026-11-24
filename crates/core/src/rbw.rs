@@ -2,21 +2,23 @@
 //! process per call, `RBW_PROFILE` for the account, JSON in and out. The
 //! vault stays unlocked in each profile's `rbw-agent` between calls.
 
+mod icons;
 mod json;
 mod process;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
+use icons::IconCache;
 use json::{ItemJson, ProfileJson, StatusJson};
 pub use process::RBW_ENV;
 use process::{Rbw, Wait};
 
 use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, Item, ItemData, ItemId, ItemKind, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses,
-    VerificationCode,
+    GeneratorOptions, IconFormat, Item, ItemData, ItemId, ItemKind, ItemSummary, LockState,
+    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
+    SshUses, VerificationCode, WebsiteIcon, icon,
 };
 
 /// The rbw-ng release with everything this backend uses.
@@ -25,6 +27,7 @@ pub const REQUIRED_RBW: &str = "1.19.0";
 pub struct RbwBackend {
     rbw: Rbw,
     preferences: PathBuf,
+    icons: IconCache,
 }
 
 impl RbwBackend {
@@ -40,10 +43,13 @@ impl RbwBackend {
     }
 
     fn with_rbw(rbw: Rbw) -> Result<Self> {
-        let preferences = directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw-desktop")
-            .map(|dirs| dirs.config_dir().join("preferences.json"))
+        let dirs = directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw-desktop")
             .ok_or_else(|| Error::Other("this system has no home folder".into()))?;
-        let backend = Self { rbw, preferences };
+        let backend = Self {
+            rbw,
+            preferences: dirs.config_dir().join("preferences.json"),
+            icons: IconCache::new(dirs.cache_dir().join("icons")),
+        };
         backend.check_version()?;
         Ok(backend)
     }
@@ -379,6 +385,32 @@ impl Backend for RbwBackend {
         Ok(code.into())
     }
 
+    fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>> {
+        if !self.preferences()?.website_icons {
+            return Ok(None);
+        }
+        let Some(host) = icon::icon_host(item) else {
+            return Ok(None);
+        };
+        if let Some(cached) = self.icons.get(&host) {
+            return Ok(cached);
+        }
+        let icon = match self
+            .rbw
+            .run(Some(account), &["icon", &host], None, Wait::Network)
+        {
+            // a web page instead of an image counts as no icon
+            Ok(bytes) => IconFormat::of(&bytes).map(|format| WebsiteIcon {
+                format,
+                bytes: bytes.as_slice().into(),
+            }),
+            Err(failure) if failure.error == Error::NotFound => None,
+            Err(failure) => return Err(failure.error),
+        };
+        self.icons.put(&host, icon.as_ref());
+        Ok(icon)
+    }
+
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
         let (length, flag) = match *options {
             GeneratorOptions::Password { length, characters } => (
@@ -463,7 +495,13 @@ impl Backend for RbwBackend {
         // written whole, then moved over the old file
         let partial = self.preferences.with_extension("json.partial");
         std::fs::write(&partial, text).map_err(failed)?;
-        std::fs::rename(&partial, &self.preferences).map_err(failed)
+        std::fs::rename(&partial, &self.preferences).map_err(failed)?;
+        if !preferences.website_icons {
+            self.icons
+                .clear()
+                .map_err(|error| Error::Other(format!("can't forget the icons: {error}")))?;
+        }
+        Ok(())
     }
 
     fn ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {

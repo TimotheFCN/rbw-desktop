@@ -12,6 +12,7 @@ mod account;
 mod error;
 mod fake;
 mod generator;
+mod icon;
 mod item;
 mod rbw;
 mod secret;
@@ -24,6 +25,7 @@ pub use account::{
 pub use error::{Error, Result};
 pub use fake::FakeBackend;
 pub use generator::{Characters, GeneratorOptions};
+pub use icon::{IconFormat, WebsiteIcon};
 pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
     ItemKind, ItemSummary, Login, SshKey, UriMatch, VerificationCode, Website,
@@ -137,6 +139,17 @@ pub trait Backend: Send + Sync {
 
     /// The item's current verification code.
     fn verification_code(&self, account: &AccountId, item: &ItemId) -> Result<VerificationCode>;
+
+    /// The icon of a login's website, from the icon service of the
+    /// account's server, to show instead of the item's letter. `None` when
+    /// [`Preferences::website_icons`] is off, which also fetches nothing,
+    /// when the item has no website that gets an icon, or when the service
+    /// has none. Icons are kept on disk for 30 days, and misses for 3, so
+    /// after the first time this answers from the disk at once; the first
+    /// time it waits on the server, up to 20 seconds. Like every method it
+    /// blocks, so show the letter until it answers. Errors, such as
+    /// [`Error::Offline`], aren't kept: a later call tries again.
+    fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>>;
 
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret>;
 

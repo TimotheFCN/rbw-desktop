@@ -6,7 +6,7 @@ pub struct Preferences {
     /// How long a copied secret stays on the clipboard; `None` to leave it.
     pub clipboard_clear: Option<Duration>,
     /// Whether to show websites' icons, which asks the account's server for
-    /// them.
+    /// them. Turning it off also forgets the icons kept on disk.
     pub website_icons: bool,
 }
 

@@ -64,44 +64,6 @@ pub enum Server {
     SelfHosted(String),
 }
 
-impl Server {
-    /// The address of a website's icon on this server's icon service, for
-    /// a website as an item stores it. `None` when it has no host name.
-    pub fn icon_url(&self, website: &str) -> Option<String> {
-        let host = host(website)?;
-        Some(match self {
-            Self::BitwardenCom => {
-                format!("https://icons.bitwarden.net/{host}/icon.png")
-            }
-            Self::BitwardenEu => {
-                format!("https://icons.bitwarden.eu/{host}/icon.png")
-            }
-            Self::SelfHosted(url) => {
-                format!("{}/icons/{host}/icon.png", url.trim_end_matches('/'))
-            }
-        })
-    }
-}
-
-// The host name of a website as people type it: with or without a scheme,
-// a port, a path or credentials.
-fn host(website: &str) -> Option<&str> {
-    let rest = website.trim();
-    let rest = rest.split_once("://").map_or(rest, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let host_port = authority.rsplit('@').next()?;
-    let host = if host_port.starts_with('[') {
-        host_port.split_inclusive(']').next()?
-    } else {
-        host_port.split(':').next()?
-    };
-    let valid = !host.is_empty()
-        && host
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '[' | ']' | ':'));
-    valid.then_some(host)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockState {
     /// The profile exists but has no signed-in account: it needs
@@ -177,25 +139,5 @@ mod tests {
             "sam-example-com-2"
         );
         assert_eq!(AccountId::for_email("@", taken).profile(), "account");
-    }
-
-    #[test]
-    fn icon_urls() {
-        let com = Server::BitwardenCom;
-        assert_eq!(
-            com.icon_url("https://github.com/login").as_deref(),
-            Some("https://icons.bitwarden.net/github.com/icon.png")
-        );
-        assert_eq!(
-            com.icon_url("user:pw@example.org:8443").as_deref(),
-            Some("https://icons.bitwarden.net/example.org/icon.png")
-        );
-        let own = Server::SelfHosted("https://vault.example.com/".into());
-        assert_eq!(
-            own.icon_url("example.com").as_deref(),
-            Some("https://vault.example.com/icons/example.com/icon.png")
-        );
-        assert_eq!(com.icon_url(""), None);
-        assert_eq!(com.icon_url("androidapp://com.example app"), None);
     }
 }

@@ -16,7 +16,7 @@ main thread. Errors are `Error` values, never text to parse.
 | --- | --- |
 | Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `register_device`, `remove_account` |
 | Locking | `unlock`, `unlock_with_touch_id`, `lock` |
-| Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code` |
+| Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code`, `website_icon` |
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
@@ -63,6 +63,17 @@ Account settings (lock timeout, Touch ID, SSH confirmation) are rbw's, per
 profile; changing them doesn't lock. Preferences (clipboard clearing, website
 icons) are the app's, in `preferences.json` in its configuration folder.
 
+`website_icon` gives a login's website icon, to show instead of its letter.
+It picks the website as the official clients do (the first one, when it is a
+web address, never a `.onion` or `.i2p` site) and asks the icon service of
+the account's server through `rbw icon`, which sends the host name and
+nothing about the account. Icons are kept in the app's cache folder for 30
+days, sites without one for 3 days, and the oldest go past 20 MB, so after
+the first time an icon comes from the disk. With the website icons
+preference off it returns `None` without asking anything, and turning the
+preference off forgets the icons. The fake backend makes up an icon for most
+websites, as SVG.
+
 ## How it maps to rbw
 
 Each call runs `rbw` once, with `RBW_PROFILE` set for the account,
@@ -89,6 +100,7 @@ the same user can read, since `rbw` reads it from there.
 | `set_favorite`, `move_item` | `rbw item favorite ID true\|false`, `rbw item move ID [FOLDER]` |
 | `folders`, `create_folder` | `rbw folder list`, `rbw folder create NAME` |
 | `verification_code` | `rbw item code ID` |
+| `website_icon` | `rbw icon HOST`, then the cache |
 | `generate` | `rbw generate LENGTH [--no-symbols\|--only-numbers\|--nonconfusables\|--diceware]` |
 | `account_settings`, `set_account_settings` | `rbw config show`, `rbw config set` |
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |

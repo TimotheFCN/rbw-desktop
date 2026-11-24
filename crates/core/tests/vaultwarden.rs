@@ -226,12 +226,34 @@ fn against_vaultwarden() {
     backend.set_account_settings(&id, &settings).unwrap();
     assert_eq!(backend.account_settings(&id).unwrap(), settings);
     assert_eq!(backend.account(&id).unwrap().state, LockState::Unlocked);
+    // icons, which the server finds or not depending on its access to the
+    // internet, and keeps on disk either way
+    let github = backend
+        .items(&id)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == created.id)
+        .unwrap();
+    let icon = backend.website_icon(&id, &github).unwrap();
+    let cache = std::path::PathBuf::from(env("XDG_CACHE_HOME")).join("rbw-desktop/icons");
+    let kept = if icon.is_some() {
+        "github.com.icon"
+    } else {
+        "github.com.miss"
+    };
+    assert!(cache.join(kept).exists());
+    assert_eq!(backend.website_icon(&id, &github).unwrap(), icon);
+    assert_eq!(backend.website_icon(&id, &saved_key).unwrap(), None);
+
     let preferences = Preferences {
         clipboard_clear: None,
         website_icons: false,
     };
     backend.set_preferences(&preferences).unwrap();
     assert_eq!(backend.preferences().unwrap(), preferences);
+    assert!(!cache.exists());
+    assert_eq!(backend.website_icon(&id, &github).unwrap(), None);
+    assert!(!cache.exists());
 
     // locking
     let synced = backend.account(&id).unwrap().last_sync;

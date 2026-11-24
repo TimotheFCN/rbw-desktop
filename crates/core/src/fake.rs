@@ -15,9 +15,9 @@ use rand::seq::IndexedRandom as _;
 
 use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses,
-    TwoStepMethod, VerificationCode,
+    GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
+    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
+    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon,
 };
 
 pub struct FakeBackend {
@@ -390,6 +390,38 @@ fn totp(secret: &str, now: SystemTime) -> VerificationCode {
     }
 }
 
+// A made-up icon for a host, a coloured tile with a white shape, so that
+// the interface shows icons without a server. One host in five has none.
+fn demo_icon(host: &str) -> Option<WebsiteIcon> {
+    const COLOURS: &[&str] = &[
+        "#24292f", "#e24329", "#0080ff", "#2496ed", "#4285f4", "#003087", "#ff9900", "#1db954",
+    ];
+    const SHAPES: &[&str] = &[
+        r##"<circle cx="16" cy="16" r="7" fill="#fff"/>"##,
+        r##"<path d="M16 8l8 15H8z" fill="#fff"/>"##,
+        r##"<rect x="9" y="9" width="14" height="14" rx="3" fill="#fff"/>"##,
+        r##"<path d="M9 9h14v4H13v10H9z" fill="#fff"/>"##,
+    ];
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in host.bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    if hash.is_multiple_of(5) {
+        return None;
+    }
+    let pick =
+        |list: &[&'static str], salt: u64| list[((hash / salt) % list.len() as u64) as usize];
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="{}"/>{}</svg>"#,
+        pick(COLOURS, 5),
+        pick(SHAPES, 41),
+    );
+    Some(WebsiteIcon {
+        format: IconFormat::Svg,
+        bytes: svg.into_bytes().into(),
+    })
+}
+
 fn generate(options: &GeneratorOptions) -> Result<Secret> {
     const SYMBOLS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
     const DIGITS: &str = "0123456789";
@@ -694,6 +726,15 @@ impl Backend for FakeBackend {
             }
             _ => Err(Error::NotFound),
         }
+    }
+
+    fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>> {
+        let mut state = self.online()?;
+        state.account_mut(account)?;
+        if !state.preferences.website_icons {
+            return Ok(None);
+        }
+        Ok(icon::icon_host(item).and_then(|host| demo_icon(&host)))
     }
 
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
@@ -1077,6 +1118,36 @@ mod tests {
             .generate(&GeneratorOptions::Passphrase { words: 5 })
             .unwrap();
         assert_eq!(phrase.expose().split(' ').count(), 5);
+    }
+
+    #[test]
+    fn made_up_icons() {
+        let fake = unlocked();
+        let id = personal();
+        let logins: Vec<_> = fake
+            .items(&id)
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind == ItemKind::Login)
+            .collect();
+        let icons: Vec<_> = logins
+            .iter()
+            .map(|item| fake.website_icon(&id, item).unwrap())
+            .collect();
+        assert!(icons.iter().flatten().count() > logins.len() / 2);
+        assert!(icons.iter().any(Option::is_none));
+        let icon = icons.into_iter().flatten().next().unwrap();
+        assert_eq!(IconFormat::of(&icon.bytes), Some(IconFormat::Svg));
+        fake.set_preferences(&Preferences {
+            website_icons: false,
+            ..Preferences::default()
+        })
+        .unwrap();
+        assert!(
+            logins
+                .iter()
+                .all(|item| fake.website_icon(&id, item).unwrap().is_none())
+        );
     }
 
     #[test]
