@@ -5,10 +5,10 @@
 //! line or the lock timeout, show here too.
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
-    FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
-    size,
+    AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle,
+    Focusable as _, FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, Styled as _, Subscription, Task, Window, actions, div, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
 use rbw_desktop_ui::{
@@ -40,7 +40,7 @@ const RBW_NG: &str = "https://github.com/TimotheFCN/rbw-ng";
 /// Opens the main window. `missing` says why there is no backend, such as
 /// rbw not being installed; the window then says so and offers to look
 /// again.
-pub fn open(missing: Option<Error>, cx: &mut App) {
+pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, Entity<MainWindow>)> {
     let options = chrome::window_options(
         "Vault",
         size(px(880.), px(580.)),
@@ -51,13 +51,17 @@ pub fn open(missing: Option<Error>, cx: &mut App) {
     let window = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| MainWindow::new(missing, window, cx))
     });
-    if let Err(error) = window {
-        log::error!("opening the window: {error:#}");
+    match window {
+        Ok((handle, main)) => Some((handle, main)),
+        Err(error) => {
+            log::error!("opening the window: {error:#}");
+            None
+        }
     }
 }
 
 /// Brings the main window forward and runs `then` on it, opening it first
-/// if it was closed.
+/// if it was closed, as it is while the app waits in the menu bar.
 pub fn with_main_window(
     cx: &mut App,
     then: impl FnOnce(&mut MainWindow, &mut Window, &mut Context<MainWindow>) + 'static,
@@ -80,7 +84,16 @@ pub fn with_main_window(
         .ok();
         return;
     }
-    open(None, cx);
+    if let Some((handle, main)) = open(None, cx) {
+        // Once the window has its view.
+        cx.defer(move |cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    main.update(cx, |main, cx| then(main, window, cx))
+                })
+                .ok();
+        });
+    }
 }
 
 /// Set once the main window said the rbw command line needs updating.
@@ -139,6 +152,9 @@ pub struct MainWindow {
     show_next: bool,
     /// Whether the screen saying the backend is missing is looking again.
     retrying: bool,
+    /// An item to show once its account's vault shows, such as one the
+    /// menu bar panel opened while the account was locked.
+    reveal: Option<(AccountId, ItemId)>,
     _screen_events: Option<Subscription>,
     _accounts_events: Option<Subscription>,
     leave_task: Task<()>,
@@ -162,6 +178,7 @@ impl MainWindow {
             focus,
             show_next: false,
             retrying: false,
+            reveal: None,
             _screen_events: None,
             _accounts_events: None,
             leave_task: Task::ready(()),
@@ -321,7 +338,14 @@ impl MainWindow {
                 Screen::Lock(view)
             }
             LockState::Unlocked => {
+                let reveal = self
+                    .reveal
+                    .take_if(|(id, _)| *id == account.id)
+                    .map(|(_, item)| item);
                 let view = cx.new(|cx| VaultView::new(account, accounts, window, cx));
+                if let Some(item) = reveal {
+                    view.update(cx, |vault, cx| vault.reveal(item, window, cx));
+                }
                 self.listen(&view, window, cx);
                 Screen::Vault(view)
             }
@@ -380,9 +404,11 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reveal = Some((account.clone(), item));
         self.show_account(account.clone(), window, cx);
         if let Screen::Vault(vault) = &self.screen
             && vault.read(cx).account() == &account
+            && let Some((_, item)) = self.reveal.take()
         {
             vault.update(cx, |vault, cx| vault.reveal(item, window, cx));
         }
