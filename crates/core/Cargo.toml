@@ -1,0 +1,12 @@
+[package]
+name = "rbw-desktop-core"
+description = "The backend of rbw-desktop: accounts, vault, generator and SSH agent through rbw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = "0.9.2"
+thiserror = "2.0.17"
+zeroize = "1.8.2"
