@@ -8,6 +8,11 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/TimotheFCN/rbw-desktop"
 
+[workspace.dependencies]
+# GPUI, its gpui-base behaviour layer and their pinned platform crates. The
+# name `gpui` is what GPUI's macros expand to.
+gpui = { package = "gpui-kit", version = "=0.11.0", default-features = false, features = ["x11"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

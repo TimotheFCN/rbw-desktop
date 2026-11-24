@@ -1,0 +1,286 @@
+//! Choice controls: the segmented control, the switch and the slider.
+
+use gpui::base::{
+    Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, Switch as BaseSwitch, motion,
+    slider::SliderState,
+};
+use gpui::{
+    App, BoxShadow, ClickEvent, ElementId, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder as _, px, relative, white,
+};
+
+use crate::motion as m;
+use crate::theme::{ActiveTheme, Look};
+
+type SelectHandler = Box<dyn Fn(usize, &mut Window, &mut App)>;
+
+/// A row of mutually exclusive choices, with the selection sliding between
+/// them.
+#[derive(IntoElement)]
+pub struct SegmentedControl {
+    id: ElementId,
+    labels: Vec<SharedString>,
+    selected: usize,
+    on_select: Option<SelectHandler>,
+}
+
+pub fn segmented_control(
+    id: impl Into<ElementId>,
+    labels: impl IntoIterator<Item = impl Into<SharedString>>,
+    selected: usize,
+) -> SegmentedControl {
+    SegmentedControl {
+        id: id.into(),
+        labels: labels.into_iter().map(Into::into).collect(),
+        selected,
+        on_select: None,
+    }
+}
+
+impl SegmentedControl {
+    pub fn on_select(mut self, handler: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_select = Some(Box::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for SegmentedControl {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let count = self.labels.len().max(1) as f32;
+        let position = motion::spring(
+            (self.id.clone(), "thumb"),
+            self.selected as f32,
+            m::SELECTION.with_epsilon(0.002),
+            window,
+            cx,
+        );
+        let theme = cx.theme();
+        let colors = &theme.colors;
+        let macos = theme.look == Look::MacOs;
+        let on_select = self.on_select.map(std::rc::Rc::new);
+
+        div()
+            .id(self.id)
+            .role(gpui::Role::RadioGroup)
+            .flex()
+            .p(px(2.))
+            .rounded(if macos { px(9.) } else { px(8.) })
+            .bg(colors.fill)
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(relative(position / count))
+                            .w(relative(1. / count))
+                            .rounded(if macos { px(7.) } else { px(6.) })
+                            .bg(colors.segment_selected)
+                            .shadow(vec![
+                                BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.16))
+                                    .blur_radius(px(3.)),
+                            ]),
+                    )
+                    .children(self.labels.into_iter().enumerate().map(|(index, label)| {
+                        let selected = index == self.selected;
+                        let on_select = on_select.clone();
+                        div()
+                            .id(index)
+                            .role(gpui::Role::RadioButton)
+                            .aria_label(label.clone())
+                            .aria_toggled(if selected {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .relative()
+                            .flex_1()
+                            .flex()
+                            .justify_center()
+                            .py(px(4.5))
+                            .text_size(px(12.5))
+                            .when(selected, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            .when_some(on_select, |d, on_select| {
+                                d.on_click(move |_: &ClickEvent, window, cx| {
+                                    on_select(index, window, cx)
+                                })
+                            })
+                            .child(label)
+                    })),
+            )
+    }
+}
+
+type ToggleHandler = Box<dyn Fn(bool, &mut Window, &mut App)>;
+
+#[derive(IntoElement)]
+pub struct Switch {
+    id: ElementId,
+    on: bool,
+    label: SharedString,
+    on_change: Option<ToggleHandler>,
+}
+
+/// A switch. `label` names it for assistive technologies; the visible label
+/// is the row it sits in.
+pub fn switch(id: impl Into<ElementId>, on: bool, label: impl Into<SharedString>) -> Switch {
+    Switch {
+        id: id.into(),
+        on,
+        label: label.into(),
+        on_change: None,
+    }
+}
+
+impl Switch {
+    pub fn on_change(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_change = Some(Box::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for Switch {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let travel = motion::spring(
+            (self.id.clone(), "thumb"),
+            if self.on { 1. } else { 0. },
+            m::SELECTION.with_epsilon(0.002),
+            window,
+            cx,
+        );
+        let colors = &cx.theme().colors;
+        let track = colors
+            .fill
+            .blend(colors.accent.opacity(travel.clamp(0., 1.)));
+        let (width, height, thumb, inset) = (px(36.), px(21.), px(17.), px(2.));
+
+        BaseSwitch::new(self.id)
+            .checked(self.on)
+            .accessibility_label(self.label)
+            .when_some(self.on_change, |s, handler| {
+                s.on_change(move |on, _, window, cx| handler(on, window, cx))
+            })
+            .relative()
+            .flex_none()
+            .w(width)
+            .h(height)
+            .rounded_full()
+            .bg(track)
+            .child(
+                div()
+                    .absolute()
+                    .top(inset)
+                    .left(inset + (width - thumb - inset * 2.) * travel)
+                    .size(thumb)
+                    .rounded_full()
+                    .bg(white())
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.25))
+                            .blur_radius(px(3.)),
+                    ]),
+            )
+    }
+}
+
+/// A horizontal slider over a [`SliderState`] the caller owns and observes.
+#[derive(IntoElement)]
+pub struct Slider {
+    state: Entity<SliderState>,
+    label: SharedString,
+}
+
+pub fn slider(state: &Entity<SliderState>, label: impl Into<SharedString>) -> Slider {
+    Slider {
+        state: state.clone(),
+        label: label.into(),
+    }
+}
+
+impl RenderOnce for Slider {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let colors = &cx.theme().colors;
+        BaseSlider::new(&self.state)
+            .accessibility_label(self.label)
+            .flex_1()
+            .h(px(20.))
+            .flex()
+            .items_center()
+            .child(
+                SliderTrack::new(&self.state)
+                    .relative()
+                    .w_full()
+                    .h(px(4.))
+                    .rounded(px(2.))
+                    .bg(colors.fill)
+                    .child(
+                        SliderIndicator::new(&self.state)
+                            .h_full()
+                            .rounded(px(2.))
+                            .bg(colors.accent),
+                    )
+                    .child(
+                        SliderThumb::new(&self.state)
+                            .top(px(-8.))
+                            .size(px(20.))
+                            .rounded_full()
+                            .bg(white())
+                            .shadow(vec![
+                                BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.3))
+                                    .blur_radius(px(4.)),
+                                BoxShadow::new(px(0.), px(0.), gpui::black().opacity(0.08))
+                                    .spread_radius(px(0.5)),
+                            ]),
+                    ),
+            )
+    }
+}
+
+/// A small ring that empties as time runs out, such as a verification code's
+/// remaining validity. `fraction` is what remains, 0 to 1.
+pub fn progress_ring(fraction: f32, cx: &App) -> impl IntoElement {
+    let colors = &cx.theme().colors;
+    let (track, fill) = (colors.fill, colors.accent);
+    let fraction = fraction.clamp(0., 1.);
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = px(2.4);
+            let radius = bounds.size.width.min(bounds.size.height) / 2. - width / 2.;
+            let center = bounds.center();
+            let at = |turn: f32| {
+                let angle = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+                gpui::point(
+                    center.x + radius * angle.cos(),
+                    center.y + radius * angle.sin(),
+                )
+            };
+            let arc = |from: f32, to: f32| {
+                let mut path = gpui::PathBuilder::stroke(width);
+                path.move_to(at(from));
+                // Arcs of at most half a turn keep the large-arc flag simple.
+                let mut start = from;
+                while start < to {
+                    let end = (start + 0.5).min(to);
+                    path.arc_to(gpui::point(radius, radius), px(0.), false, true, at(end));
+                    start = end;
+                }
+                path.build().ok()
+            };
+            if let Some(path) = arc(0., 0.9999) {
+                window.paint_path(path, track);
+            }
+            if fraction > 0.
+                && let Some(path) = arc(1. - fraction, 1.)
+            {
+                window.paint_path(path, fill);
+            }
+        },
+    )
+    .size(px(16.))
+    .flex_none()
+}
