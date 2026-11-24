@@ -6,11 +6,12 @@ use gpui::base::input::{Input, InputEvent, InputState};
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
-    Styled as _, Task, WeakEntity, Window, actions, div, prelude::FluentBuilder as _, px, relative,
+    Styled as _, Subscription, Task, WeakEntity, Window, actions, div, prelude::FluentBuilder as _,
+    px, relative,
 };
 use rbw_desktop_core::{
-    AccountId, Card, Folder, FolderId, GeneratorOptions, Identity, Item, ItemContent, ItemData,
-    ItemId, ItemKind, Secret, Website,
+    AccountId, Card, Error, Folder, FolderId, GeneratorOptions, Identity, Item, ItemContent,
+    ItemData, ItemId, ItemKind, Secret, Website,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Popover, button, card, form_row, icon, menu_item,
@@ -19,6 +20,7 @@ use rbw_desktop_ui::{
 
 use super::VaultView;
 use crate::backend;
+use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
 
 actions!(item_editor, [Cancel, Save, CancelNewFolder]);
@@ -74,6 +76,10 @@ pub struct ItemEditor {
     /// Whether the password is still the generated one.
     generated: bool,
     problem: Option<&'static str>,
+    /// Asks for the master password, when the item asks for it again
+    /// before it is saved.
+    reprompt: Option<Entity<Reprompt>>,
+    _reprompt_events: Option<Subscription>,
     saving: bool,
     vault: WeakEntity<VaultView>,
     focus_handle: FocusHandle,
@@ -195,6 +201,8 @@ impl ItemEditor {
             favorite: false,
             generated: false,
             problem: None,
+            reprompt: None,
+            _reprompt_events: None,
             saving: false,
             vault,
             focus_handle: cx.focus_handle(),
@@ -353,11 +361,30 @@ impl ItemEditor {
                 this.saving = false;
                 match result {
                     Ok(id) => this.close(Some(id), window, cx),
+                    Err(Error::RepromptRequired) => this.ask_password(window, cx),
                     Err(error) => this.problem = Some(backend::describe(&error)),
                 }
                 cx.notify();
             },
         );
+    }
+
+    /// The item locked again since it was opened: its master password,
+    /// then the save again.
+    fn ask_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = &self.editing else { return };
+        let (account, id) = (self.account.clone(), item.id.clone());
+        let reprompt = cx.new(|cx| Reprompt::new(account, id, window, cx));
+        reprompt.update(cx, |reprompt, cx| reprompt.focus(window, cx));
+        self._reprompt_events =
+            Some(
+                cx.subscribe_in(&reprompt, window, |this, _, _: &Unlocked, window, cx| {
+                    this.reprompt = None;
+                    this.focus(window, cx);
+                    this.save(&Save, window, cx);
+                }),
+            );
+        self.reprompt = Some(reprompt);
     }
 
     fn folder_name(&self) -> String {
@@ -686,6 +713,23 @@ impl Render for ItemEditor {
                         }),
                     ))),
             )
+            .when_some(self.reprompt.clone(), |d, reprompt| {
+                d.child(
+                    div()
+                        .mt(px(14.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .mx(px(13.))
+                                .text_size(px(12.))
+                                .text_color(dim)
+                                .child("Enter your master password to save this item."),
+                        )
+                        .child(reprompt),
+                )
+            })
             .child(
                 div()
                     .flex()
