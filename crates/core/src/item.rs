@@ -74,7 +74,18 @@ pub struct ItemData {
     pub notes: Secret,
     pub fields: Vec<CustomField>,
     pub content: ItemContent,
+    /// The version of the item on the server that this data was read from,
+    /// as [`Backend::item`](crate::Backend::item) gives it. Edit a copy of
+    /// [`Item::data`]: [`Backend::edit_item`](crate::Backend::edit_item)
+    /// then fails with [`Error::Conflict`](crate::Error::Conflict) if the
+    /// item changed on the server since it was read. Without one, the edit
+    /// is checked against the last sync only.
+    pub revision: Option<Revision>,
 }
+
+/// An item's version on the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Revision(pub(crate) String);
 
 impl ItemData {
     /// An empty item of a kind, to fill in before creating it.
@@ -92,6 +103,7 @@ impl ItemData {
             notes: Secret::default(),
             fields: vec![],
             content,
+            revision: None,
         }
     }
 }

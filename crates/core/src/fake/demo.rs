@@ -93,6 +93,7 @@ impl Vault {
                 notes: Secret::default(),
                 fields: vec![],
                 content,
+                revision: None,
             },
             organization: None,
             favorite: false,

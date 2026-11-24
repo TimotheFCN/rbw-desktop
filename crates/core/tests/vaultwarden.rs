@@ -25,6 +25,14 @@ fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set; run tests/vaultwarden.sh"))
 }
 
+// what the item holds, without the version it was read at
+fn content(data: ItemData) -> ItemData {
+    ItemData {
+        revision: None,
+        ..data
+    }
+}
+
 fn login(name: &str, password: &str) -> ItemData {
     let mut data = ItemData::new(ItemKind::Login);
     data.name = name.to_string();
@@ -95,7 +103,9 @@ fn against_vaultwarden() {
     assert_eq!(created.subtitle.as_deref(), Some("octo"));
     assert!(created.has_code && created.editable);
     assert_eq!(created.folder, Some(folder.id.clone()));
-    assert_eq!(backend.item(&id, &created.id).unwrap().data, github);
+    let read = backend.item(&id, &created.id).unwrap();
+    assert!(read.data.revision.is_some());
+    assert_eq!(content(read.data.clone()), github);
 
     let code = backend.verification_code(&id, &created.id).unwrap();
     assert_eq!(code.code.expose().len(), 6);
@@ -109,10 +119,18 @@ fn against_vaultwarden() {
         }),
         other => other,
     };
+    // the server takes a copy up to a second older than the item as current
+    std::thread::sleep(Duration::from_secs(2));
+    github.revision = read.data.revision.clone();
     backend.edit_item(&id, &created.id, &github).unwrap();
+    // a second edit of the same read: the item changed since
+    assert_eq!(
+        backend.edit_item(&id, &created.id, &github),
+        Err(Error::Conflict)
+    );
     backend.set_favorite(&id, &created.id, true).unwrap();
     let edited = backend.item(&id, &created.id).unwrap();
-    assert_eq!(edited.data, github);
+    assert_eq!(content(edited.data), content(github));
     assert!(edited.favorite);
     backend.move_item(&id, &created.id, None).unwrap();
     let moved = backend.item(&id, &created.id).unwrap();
@@ -138,7 +156,7 @@ fn against_vaultwarden() {
     });
     let saved = backend.create_item(&id, &card).unwrap();
     assert_eq!(saved.subtitle.as_deref(), Some("Visa"));
-    assert_eq!(backend.item(&id, &saved.id).unwrap().data, card);
+    assert_eq!(content(backend.item(&id, &saved.id).unwrap().data), card);
 
     let mut identity = ItemData::new(ItemKind::Identity);
     identity.name = "Me".into();
@@ -150,7 +168,10 @@ fn against_vaultwarden() {
     });
     let saved = backend.create_item(&id, &identity).unwrap();
     assert_eq!(saved.subtitle.as_deref(), Some("Alex Martin"));
-    assert_eq!(backend.item(&id, &saved.id).unwrap().data, identity);
+    assert_eq!(
+        content(backend.item(&id, &saved.id).unwrap().data),
+        identity
+    );
 
     let mut key = ItemData::new(ItemKind::SshKey);
     key.name = "Laptop".into();

@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
-    ItemKind, ItemSummary, Login, Secret, Server, SshKey, SshKeySummary, UriMatch,
+    ItemKind, ItemSummary, Login, Revision, Secret, Server, SshKey, SshKeySummary, UriMatch,
     VerificationCode, Website, ssh,
 };
 
@@ -48,6 +48,8 @@ pub struct ItemJson {
     ssh_key: Option<SshKeyJson>,
     #[serde(default)]
     fields: Vec<FieldJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision_date: Option<String>,
 }
 
 fn yes() -> bool {
@@ -339,6 +341,7 @@ impl ItemJson {
                 notes: secret(self.notes),
                 fields,
                 content,
+                revision: self.revision_date.map(Revision),
             },
             organization: self.organization_id,
             favorite: self.favorite.unwrap_or(false),
@@ -362,6 +365,7 @@ impl ItemJson {
             folder_id: data.folder.as_ref().map(|folder| folder.0.clone()),
             edit: true,
             fields: data.fields.iter().map(field_json).collect(),
+            revision_date: data.revision.as_ref().map(|revision| revision.0.clone()),
             ..Self::default()
         };
         match &data.content {
@@ -652,7 +656,7 @@ mod tests {
         let text = std::str::from_utf8(&json).unwrap();
         assert!(text.contains(r#""totp":null"#), "{text}");
         assert!(
-            !text.contains("favorite") && !text.contains("\"id\""),
+            !text.contains("favorite") && !text.contains("\"id\"") && !text.contains("revision"),
             "{text}"
         );
         let mut back: ItemJson = serde_json::from_slice(&json).unwrap();
@@ -660,6 +664,17 @@ mod tests {
         let item = back.item().unwrap();
         assert_eq!(item.id, ItemId("a".into()));
         assert_eq!(item.data, data);
+
+        // an edit sends back the revision the item was read at
+        data.revision = Some(Revision("2026-11-24T10:00:00.123456Z".into()));
+        let json = to_stdin(&ItemJson::from_data(&data)).unwrap();
+        let text = std::str::from_utf8(&json).unwrap();
+        assert!(
+            text.contains(r#""revisionDate":"2026-11-24T10:00:00.123456Z""#),
+            "{text}"
+        );
+        let back: ItemJson = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back.item().unwrap().data, data);
 
         for kind in [ItemKind::Card, ItemKind::Identity, ItemKind::SecureNote] {
             let mut data = ItemData::new(kind);

@@ -64,6 +64,11 @@ marked favourite and moved between folders, which change only what belongs to
 the account and send no secrets. Item kinds this version doesn't know are
 left out of the list.
 
+To edit an item, change a copy of its `Item::data`: it carries the version
+of the item it was read at (`ItemData::revision`), and `edit_item` fails with
+`Conflict` when the item changed on the server since, for example on another
+device, instead of overwriting that change.
+
 `account` is cheap (a few milliseconds): poll it every second or two to notice
 locking, unlocking, and syncs through `last_sync`. `Account::touch_id_ready`
 says when `unlock_with_touch_id` can work: once Touch ID unlock is on and the

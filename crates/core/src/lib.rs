@@ -28,7 +28,7 @@ pub use generator::{Characters, GeneratorOptions};
 pub use icon::{IconFormat, WebsiteIcon};
 pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
-    ItemKind, ItemSummary, Login, SshKey, UriMatch, VerificationCode, Website,
+    ItemKind, ItemSummary, Login, Revision, SshKey, UriMatch, VerificationCode, Website,
 };
 pub use rbw::{OutdatedRbw, RBW_ENV, REQUIRED_RBW, RbwBackend};
 pub use secret::Secret;
@@ -112,7 +112,8 @@ pub trait Backend: Send + Sync {
     fn create_item(&self, account: &AccountId, data: &ItemData) -> Result<ItemSummary>;
 
     /// Replaces the item's data. Fails with [`Error::Conflict`] if the item
-    /// changed on the server since the last sync.
+    /// changed on the server since `data` was read ([`ItemData::revision`]),
+    /// or since the last sync for data without a revision.
     fn edit_item(&self, account: &AccountId, item: &ItemId, data: &ItemData)
     -> Result<ItemSummary>;
 
