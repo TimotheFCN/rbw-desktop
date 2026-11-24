@@ -453,7 +453,7 @@ impl SignIn {
             ),
             Step::Account => (
                 "Add an Account".into(),
-                line("Sign in to another Bitwarden or Vaultwarden account.".into()),
+                line("Sign in to another Bitwarden account.".into()),
             ),
             Step::Password if self.existing.is_some() => {
                 ("Sign In".into(), Some(self.render_who(email, cx)))
@@ -756,7 +756,7 @@ impl Render for SignIn {
         let content = div()
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::back))
-            .w(px(300.))
+            .w(px(320.))
             .h(px(340.))
             .flex()
             .flex_col()
