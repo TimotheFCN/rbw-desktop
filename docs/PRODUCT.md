@@ -66,9 +66,11 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 ### Generator
 
 * Passwords, passphrases and PINs, using rbw's generator: length (or word
-  count), symbols, and "easy to read" (lower-case letters and digits that
-  can't be mistaken for each other). rbw offers no letters-only password,
-  so there is no "numbers" switch.
+  count); for a password, numbers, symbols, and "easy to read" (lower-case
+  letters and digits that can't be mistaken for each other), and a
+  password always holds what its switches promise; for a passphrase,
+  capitals, a number, and what goes between the words (a hyphen, a space
+  or nothing).
 * The result is large, its digits and symbols coloured; Copy is the main
   action, with another value next to it. A password or passphrase says
   whether it is weak, fair or strong, from the randomness its options hold;

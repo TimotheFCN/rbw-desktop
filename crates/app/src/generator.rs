@@ -13,7 +13,7 @@ use gpui::{
     Pixels, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
-use rbw_desktop_core::{Characters, GeneratorOptions, Secret, Strength};
+use rbw_desktop_core::{CharacterClasses, Characters, GeneratorOptions, Secret, Strength};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, button, card, motion, password_text,
     segmented_control, slider, switch, toggle_row,
@@ -72,16 +72,25 @@ impl Kind {
     }
 }
 
+/// What goes between a passphrase's words, in the order of its choice.
+const SEPARATORS: [(Option<char>, &str); 3] =
+    [(Some('-'), "Hyphen"), (Some(' '), "Space"), (None, "None")];
+
 /// The generator's choices. Each kind keeps its own length while another
 /// kind is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Choices {
     kind: Kind,
     lengths: [usize; 3],
+    numbers: bool,
     symbols: bool,
     /// Letters and digits that can't be mistaken for each other; rbw makes
     /// them without capitals or symbols.
     easy: bool,
+    separator: Option<char>,
+    capitalize: bool,
+    /// A digit after one of a passphrase's words.
+    number: bool,
 }
 
 impl Choices {
@@ -89,27 +98,50 @@ impl Choices {
         let mut choices = Self {
             kind: Kind::Password,
             lengths: KINDS.map(|(kind, _)| kind.lengths().2),
+            numbers: true,
             symbols: true,
             easy: false,
+            separator: SEPARATORS[0].0,
+            capitalize: false,
+            number: false,
         };
         let (kind, length) = match options {
-            GeneratorOptions::Password {
-                length,
-                characters: Characters::DigitsOnly,
-            } => (Kind::Pin, length),
             GeneratorOptions::Password { length, characters } => {
-                choices.symbols = characters == Characters::All;
-                choices.easy = characters == Characters::Unambiguous;
+                match characters {
+                    Characters::DigitsOnly => return choices.with(Kind::Pin, length),
+                    Characters::All => {}
+                    Characters::NoSymbols => choices.symbols = false,
+                    Characters::Unambiguous => choices.easy = true,
+                    // Letters are always in; the switches are the others.
+                    Characters::Classes(classes) => {
+                        choices.numbers = classes.digits;
+                        choices.symbols = classes.symbols;
+                    }
+                }
                 (Kind::Password, length)
             }
-            GeneratorOptions::Passphrase { words } => (Kind::Passphrase, words),
+            GeneratorOptions::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            } => {
+                choices.separator = separator;
+                choices.capitalize = capitalize;
+                choices.number = number;
+                (Kind::Passphrase, words)
+            }
         };
-        let (min, max, _) = kind.lengths();
-        choices.kind = kind;
-        choices.lengths[kind.index()] = length.clamp(min, max);
-        choices
+        choices.with(kind, length)
     }
 
+    /// These choices for `kind`, of `length`, within what it offers.
+    fn with(mut self, kind: Kind, length: usize) -> Self {
+        let (min, max, _) = kind.lengths();
+        self.kind = kind;
+        self.lengths[kind.index()] = length.clamp(min, max);
+        self
+    }
     fn length(&self) -> usize {
         self.lengths[self.kind.index()]
     }
@@ -119,13 +151,25 @@ impl Choices {
         match self.kind {
             Kind::Password => GeneratorOptions::Password {
                 length,
-                characters: match (self.easy, self.symbols) {
-                    (true, _) => Characters::Unambiguous,
-                    (false, true) => Characters::All,
-                    (false, false) => Characters::NoSymbols,
+                characters: if self.easy {
+                    Characters::Unambiguous
+                } else {
+                    // Each class switched on is in the password, always.
+                    Characters::Classes(CharacterClasses {
+                        uppercase: true,
+                        lowercase: true,
+                        digits: self.numbers,
+                        symbols: self.symbols,
+                        each_class: true,
+                    })
                 },
             },
-            Kind::Passphrase => GeneratorOptions::Passphrase { words: length },
+            Kind::Passphrase => GeneratorOptions::Passphrase {
+                words: length,
+                separator: self.separator,
+                capitalize: self.capitalize,
+                number: self.number,
+            },
             Kind::Pin => GeneratorOptions::Password {
                 length,
                 characters: Characters::DigitsOnly,
@@ -140,7 +184,11 @@ impl Choices {
     fn widest(&self) -> String {
         match self.kind {
             Kind::Password | Kind::Pin => "0".repeat(self.length()),
-            Kind::Passphrase => vec!["mmmmmmmmm"; self.length()].join(" "),
+            Kind::Passphrase => {
+                let separator = self.separator.map(String::from).unwrap_or_default();
+                let words = vec!["mmmmmmmmm"; self.length()].join(&separator);
+                if self.number { words + "0" } else { words }
+            }
         }
     }
 }
@@ -419,38 +467,73 @@ impl Generator {
             div().p(px(6.)).child(kinds).into_any_element(),
             length.into_any_element(),
         ];
-        if self.choices.kind == Kind::Password {
-            let this = cx.entity().downgrade();
-            rows.push(toggle_row(
-                "Symbols",
-                switch(
-                    "symbols",
-                    self.choices.symbols && !self.choices.easy,
-                    "Symbols",
-                )
-                .on_change(move |on, _, cx| {
-                    this.update(cx, |this, cx| {
-                        this.change(
-                            |choices| {
-                                choices.symbols = on;
-                                choices.easy &= !on;
-                            },
-                            cx,
-                        )
-                    })
-                    .ok();
+        let choices = self.choices;
+        match choices.kind {
+            // Easy to read takes its own digits and no symbols.
+            Kind::Password => rows.extend([
+                self.toggle("Numbers", choices.numbers || choices.easy, cx, |c, on| {
+                    c.numbers = on;
+                    c.easy &= on;
                 }),
-            ));
-            let this = cx.entity().downgrade();
-            rows.push(toggle_row(
-                "Easy to read",
-                switch("easy", self.choices.easy, "Easy to read").on_change(move |on, _, cx| {
-                    this.update(cx, |this, cx| this.change(|choices| choices.easy = on, cx))
-                        .ok();
+                self.toggle("Symbols", choices.symbols && !choices.easy, cx, |c, on| {
+                    c.symbols = on;
+                    c.easy &= !on;
                 }),
-            ));
+                self.toggle("Easy to read", choices.easy, cx, |c, on| c.easy = on),
+            ]),
+            Kind::Passphrase => rows.extend([
+                self.toggle("Capitalize", choices.capitalize, cx, |c, on| {
+                    c.capitalize = on
+                }),
+                self.toggle("Include a number", choices.number, cx, |c, on| {
+                    c.number = on
+                }),
+                self.render_separator(cx),
+            ]),
+            Kind::Pin => {}
         }
         card().on_surface().rows(rows).into_any_element()
+    }
+
+    /// A switch for one choice.
+    fn toggle(
+        &self,
+        label: &'static str,
+        on: bool,
+        cx: &mut Context<Self>,
+        change: fn(&mut Choices, bool),
+    ) -> AnyElement {
+        let this = cx.entity().downgrade();
+        toggle_row(
+            label,
+            switch(label, on, label).on_change(move |on, _, cx| {
+                this.update(cx, |this, cx| {
+                    this.change(|choices| change(choices, on), cx)
+                })
+                .ok();
+            }),
+        )
+    }
+
+    /// What goes between a passphrase's words.
+    fn render_separator(&self, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let selected = SEPARATORS
+            .iter()
+            .position(|(separator, _)| *separator == self.choices.separator)
+            .unwrap_or(0);
+        toggle_row(
+            "Separator",
+            div().w(px(184.)).child(
+                segmented_control("separator", SEPARATORS.map(|(_, label)| label), selected)
+                    .on_select(move |index, _, cx| {
+                        this.update(cx, |this, cx| {
+                            this.change(|choices| choices.separator = SEPARATORS[index].0, cx)
+                        })
+                        .ok();
+                    }),
+            ),
+        )
     }
 }
 
@@ -519,11 +602,32 @@ impl Render for Generator {
 mod tests {
     use super::*;
 
+    fn password(length: usize, numbers: bool, symbols: bool) -> GeneratorOptions {
+        GeneratorOptions::Password {
+            length,
+            characters: Characters::Classes(CharacterClasses {
+                uppercase: true,
+                lowercase: true,
+                digits: numbers,
+                symbols,
+                each_class: true,
+            }),
+        }
+    }
+
     #[test]
     fn choices_round_trip_and_clamp() {
         for options in [
-            GeneratorOptions::default(),
-            GeneratorOptions::Passphrase { words: 6 },
+            password(20, true, true),
+            password(16, false, true),
+            password(30, true, false),
+            password(12, false, false),
+            GeneratorOptions::Passphrase {
+                words: 6,
+                separator: None,
+                capitalize: true,
+                number: true,
+            },
             GeneratorOptions::Password {
                 length: 6,
                 characters: Characters::DigitsOnly,
@@ -532,23 +636,65 @@ mod tests {
                 length: 12,
                 characters: Characters::Unambiguous,
             },
-            GeneratorOptions::Password {
-                length: 30,
-                characters: Characters::NoSymbols,
-            },
         ] {
             assert_eq!(Choices::from_options(options).options(), options);
         }
-        let long = Choices::from_options(GeneratorOptions::Passphrase { words: 99 });
-        assert_eq!(long.options(), GeneratorOptions::Passphrase { words: 10 });
+        let long = Choices::from_options(GeneratorOptions::passphrase(99));
+        assert_eq!(
+            long.options(),
+            GeneratorOptions::Passphrase {
+                words: 10,
+                separator: Some(' '),
+                capitalize: false,
+                number: false,
+            }
+        );
+    }
+
+    #[test]
+    fn older_options_keep_their_characters_and_hold_each() {
+        let all = GeneratorOptions::Password {
+            length: 20,
+            characters: Characters::All,
+        };
+        assert_eq!(
+            Choices::from_options(all).options(),
+            password(20, true, true)
+        );
+        let no_symbols = GeneratorOptions::Password {
+            length: 20,
+            characters: Characters::NoSymbols,
+        };
+        assert_eq!(
+            Choices::from_options(no_symbols).options(),
+            password(20, true, false)
+        );
+    }
+
+    #[test]
+    fn every_choice_makes_something() {
+        for numbers in [false, true] {
+            for symbols in [false, true] {
+                for easy in [false, true] {
+                    let (min, max, _) = Kind::Password.lengths();
+                    for length in [min, max] {
+                        let mut choices = Choices::from_options(password(length, numbers, symbols));
+                        choices.easy = easy;
+                        assert!(choices.options().makes_anything(), "{choices:?}");
+                    }
+                }
+            }
+        }
+        for (separator, _) in SEPARATORS {
+            let mut choices = Choices::from_options(GeneratorOptions::passphrase(3));
+            choices.separator = separator;
+            assert!(choices.options().makes_anything());
+        }
     }
 
     #[test]
     fn each_kind_keeps_its_length() {
-        let mut choices = Choices::from_options(GeneratorOptions::Password {
-            length: 32,
-            characters: Characters::All,
-        });
+        let mut choices = Choices::from_options(password(32, true, true));
         choices.kind = Kind::Passphrase;
         assert_eq!(choices.length(), 5);
         choices.kind = Kind::Password;

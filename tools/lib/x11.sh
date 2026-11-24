@@ -151,11 +151,11 @@ x11_click() {
 	xdotool mousemove --window "$window" $((($1 + frame) * scale)) $((($2 + frame) * scale)) click 1
 }
 
-# Rests the pointer on the empty bottom-right of the window: X11 without a
-# window manager doesn't tell the app when the pointer leaves it, so a
-# pointer outside the window would leave a hover highlight behind.
+# Rests the pointer in the window's invisible frame border, off its content:
+# X11 without a window manager doesn't tell the app when the pointer leaves
+# the window, so a pointer outside it would leave a hover highlight behind.
 x11_rest_pointer() {
-	xdotool mousemove --window "$window" $((win_w - 40 * scale)) $((win_h - 40 * scale))
+	xdotool mousemove --window "$window" $((win_w - frame * scale / 2)) $((win_h / 2))
 }
 
 # Screenshots the window with a margin of wallpaper around it.

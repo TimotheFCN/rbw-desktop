@@ -49,7 +49,7 @@ actions!(
 const CONTEXT: &str = "QuickPanel";
 const PASSWORDS: &str = "PanelPasswords";
 /// The panel's size, without the frame Linux draws around it.
-const SIZE: gpui::Size<Pixels> = size(px(306.), px(400.));
+const SIZE: gpui::Size<Pixels> = size(px(306.), px(488.));
 /// How many of the items used last it lists.
 const RECENT: usize = 10;
 /// A click on the menu bar item that closed the panel, by taking the
