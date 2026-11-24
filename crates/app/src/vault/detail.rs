@@ -197,11 +197,12 @@ impl ItemDetail {
     }
 
     /// The selected item's latest summary, after the list reloaded. An
-    /// item selected before the list knew it, such as one just created,
-    /// shows now.
+    /// item selected before the list knew it, such as one just created or
+    /// one shown from the menu bar panel as the vault opened, shows now,
+    /// its master password taking the keyboard if it was clicked.
     pub fn set_summary(&mut self, item: ItemSummary, cx: &mut Context<Self>) {
         if self.selected_id() != Some(&item.id) {
-            self.show(Some(item), false, cx);
+            self.show(Some(item), self.focus_reprompt, cx);
         } else if self.selected.as_ref() != Some(&item) {
             self.selected = Some(item);
             cx.notify();

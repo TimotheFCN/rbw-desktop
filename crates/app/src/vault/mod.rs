@@ -431,7 +431,9 @@ impl VaultView {
     }
 
     /// Lists the items the sidebar and the search admit, keeping the
-    /// selection if it is among them, else selecting the first.
+    /// selection if it is among them, else selecting the first. Until the
+    /// items are known, the selection stays as it is, such as an item
+    /// shown from the menu bar panel as the vault opens.
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
         let order = Prefs::global(cx).read(cx).get().sort;
@@ -440,7 +442,8 @@ impl VaultView {
             Load::Ready(items) => {
                 visible(items, &self.filter, self.only, &query, order, &self.recent)
             }
-            Load::Loading | Load::Failed(_) => vec![],
+            Load::Loading => return,
+            Load::Failed(_) => vec![],
         };
         self.prefetched = 0..0;
         self.highlight_jumps = true;
@@ -647,15 +650,21 @@ impl VaultView {
     }
 
     /// Shows an item from elsewhere, such as the menu bar panel, as if it
-    /// was clicked: whatever the search and the sidebar showed.
+    /// was clicked, in the middle of the list: whatever the search, the
+    /// sidebar and the list's menu showed, and whether the items have
+    /// arrived yet or not.
     pub(crate) fn reveal(&mut self, item: ItemId, window: &mut Window, cx: &mut Context<Self>) {
         self.search
             .update(cx, |search, cx| search.set_value("", window, cx));
-        self.set_filter(Filter::All, cx);
+        self.filter = Filter::All;
         self.only = Only::default();
         window.focus(&self.list_focus, cx);
         self.select_by(Some(item), true, cx);
         self.refilter(cx);
+        if let Some(index) = self.selected_index() {
+            self.list_scroll
+                .scroll_to_item(index, ScrollStrategy::Center);
+        }
     }
 
     fn sync(&mut self, _: &Sync, _: &mut Window, cx: &mut Context<Self>) {
