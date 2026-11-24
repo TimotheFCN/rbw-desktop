@@ -52,6 +52,7 @@ impl VaultView {
 
         let body = match &self.items {
             Load::Failed(error) => message(backend::describe(error), dim),
+            Load::Ready(items) if items.is_empty() => message("No Items", dim),
             Load::Ready(_) if self.visible.is_empty() => message("No Results", dim),
             Load::Loading | Load::Ready(_) => uniform_list(
                 "items",
