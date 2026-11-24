@@ -13,6 +13,7 @@ use rbw_desktop_ui::{
 
 use super::store::Store;
 use crate::accounts::{self, Accounts};
+use crate::alerts;
 use crate::backend;
 use crate::window;
 
@@ -86,7 +87,7 @@ impl AccountsPage {
                     .accessibility_label(format!("Sign out of {name}"))
                     .on_click(move |_, window, cx| {
                         accounts::sign_out(&removed, window, cx, |error, window, cx| {
-                            window::toast(backend::describe(&error), window, cx);
+                            alerts::toast(backend::describe(&error), window, cx);
                         });
                     }),
             );

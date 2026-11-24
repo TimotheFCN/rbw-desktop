@@ -11,13 +11,12 @@ use gpui::{
 };
 use rbw_desktop_core::{Account, AccountId, Error, LoginCode, Secret, Server, TwoStepMethod};
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, field_error, motion,
-    segmented_control, text_field,
+    ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, chrome, field_error,
+    motion, segmented_control, text_field,
 };
 
 use crate::accounts::{self, AccountMenu, Request};
 use crate::backend;
-use crate::window::plain_screen;
 
 actions!(sign_in, [Back]);
 
@@ -803,6 +802,6 @@ impl Render for SignIn {
             .items_center()
             .child(app_icon(cx))
             .child(div().mt(px(16.)).w_full().child(step));
-        plain_screen("sign-in", content, window, cx)
+        chrome::plain_screen("sign-in", content, window, cx)
     }
 }

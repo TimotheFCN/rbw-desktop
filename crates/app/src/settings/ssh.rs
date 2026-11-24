@@ -20,9 +20,9 @@ use rbw_desktop_ui::{
 use super::note;
 use super::store::Store;
 use crate::accounts::{self, Accounts};
+use crate::alerts;
 use crate::backend::{self, Load};
 use crate::clipboard;
-use crate::window;
 
 /// What was copied from the page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,7 +223,7 @@ impl SshPage {
             destructive: true,
         };
         let this = cx.entity().downgrade();
-        window::confirm(confirmation, window, cx, move |_, cx| {
+        alerts::confirm(confirmation, window, cx, move |_, cx| {
             this.update(cx, |this, cx| {
                 let Some(account) = this.account.clone() else {
                     return;

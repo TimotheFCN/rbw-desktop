@@ -15,9 +15,9 @@ use rbw_desktop_ui::{
     Confirmation, IconName, Opening, Popover, avatar, menu_item, menu_separator, popover,
 };
 
+use crate::alerts;
 use crate::backend::{self, Load};
 use crate::clipboard;
-use crate::window;
 
 /// How often the accounts are asked whether they locked, unlocked or synced
 /// while a window shows them.
@@ -200,7 +200,7 @@ pub fn sign_out(
         destructive: true,
     };
     let id = account.id.clone();
-    window::confirm(confirmation, window, cx, move |window, cx| {
+    alerts::confirm(confirmation, window, cx, move |window, cx| {
         let removed = backend::call(cx, move |backend| backend.remove_account(&id));
         window
             .spawn(cx, async move |cx| {

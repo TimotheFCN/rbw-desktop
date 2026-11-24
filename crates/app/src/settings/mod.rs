@@ -22,10 +22,10 @@ use rbw_desktop_ui::{
 };
 
 use crate::CloseWindow;
+use crate::alerts::{self, Alerts};
 use crate::backend;
 use crate::preferences::{self, Prefs};
 use crate::secondary;
-use crate::window::{self, Alerts, HasAlerts};
 use about::AboutPage;
 use accounts::AccountsPage;
 use general::GeneralPage;
@@ -123,7 +123,7 @@ pub struct SettingsWindow {
     accounts: Entity<AccountsPage>,
     ssh: Entity<SshPage>,
     about: Entity<AboutPage>,
-    alerts: Alerts,
+    alerts: Entity<Alerts>,
     focus: FocusHandle,
 }
 
@@ -143,14 +143,14 @@ impl SettingsWindow {
         .detach();
         let store = cx.new(Store::new);
         cx.subscribe_in(&store, window, |_, _, SaveFailed(error), window, cx| {
-            window::toast(backend::describe(error), window, cx);
+            alerts::toast(backend::describe(error), window, cx);
         })
         .detach();
         cx.subscribe_in(
             &Prefs::global(cx),
             window,
             |_, _, preferences::SaveFailed(error), window, cx| {
-                window::toast(backend::describe(error), window, cx);
+                alerts::toast(backend::describe(error), window, cx);
             },
         )
         .detach();
@@ -166,7 +166,7 @@ impl SettingsWindow {
             accounts: cx.new(|cx| AccountsPage::new(store, cx)),
             ssh,
             about: cx.new(AboutPage::new),
-            alerts: Alerts::new(),
+            alerts: Alerts::new(window, cx),
             focus,
         }
     }
@@ -341,12 +341,6 @@ impl SettingsWindow {
     }
 }
 
-impl HasAlerts for SettingsWindow {
-    fn alerts(&mut self) -> &mut Alerts {
-        &mut self.alerts
-    }
-}
-
 impl Focusable for SettingsWindow {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -359,7 +353,6 @@ impl Render for SettingsWindow {
             Look::MacOs => self.render_macos(window, cx),
             Look::Gnome => self.render_gnome(window, cx),
         };
-        let alerts = self.alerts.render(window, cx);
         let content = div()
             .id("settings")
             .key_context(CONTEXT)
@@ -369,7 +362,7 @@ impl Render for SettingsWindow {
             .relative()
             .size_full()
             .child(layout)
-            .children(alerts.into_iter().flatten());
+            .child(self.alerts.clone());
         chrome::window_frame(content, window, cx)
     }
 }

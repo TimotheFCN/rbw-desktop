@@ -916,8 +916,8 @@ impl Render for QuickPanel {
         });
         // Locked or signed out, the Passwords tab's own button opens the
         // vault: the footer would say it twice.
-        let footer = (self.tab == Tab::Generator || self.loaded.is_some())
-            .then(|| self.render_footer(cx));
+        let footer =
+            (self.tab == Tab::Generator || self.loaded.is_some()).then(|| self.render_footer(cx));
         let toast = self.toast.render(window, cx);
         let content = div()
             .id("quick-panel")

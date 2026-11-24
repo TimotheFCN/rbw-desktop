@@ -8,13 +8,12 @@ use gpui::{
 };
 use rbw_desktop_core::{Account, AccountId, Error, LockState, Secret};
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, field_error, motion,
-    text_field,
+    ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, chrome, field_error,
+    motion, text_field,
 };
 
 use crate::accounts::{self, AccountMenu, Request};
 use crate::backend;
-use crate::window::plain_screen;
 
 pub struct LockScreen {
     account: Account,
@@ -272,6 +271,6 @@ impl Render for LockScreen {
                     .children(self.problem.map(|problem| field_error(problem, cx))),
             )
             .children(touch_id);
-        plain_screen("lock", content, window, cx)
+        chrome::plain_screen("lock", content, window, cx)
     }
 }

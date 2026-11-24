@@ -6,21 +6,18 @@
 
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle,
-    Focusable as _, FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Styled as _, Subscription, Task, Window, actions, div, point,
-    prelude::FluentBuilder as _, px, size,
+    FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    size,
 };
 use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
-use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, ConfirmDialog, ConfirmEvent, Confirmation, Look, SheetSlot,
-    Theme, ToastSlot, app_icon, button, chrome, motion,
-};
+use rbw_desktop_ui::{ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion};
 
 use crate::CloseWindow;
 use crate::accounts::{self, Accounts, Refreshed, Request};
+use crate::alerts::{self, Alerts};
 use crate::backend;
 use crate::lock::LockScreen;
-use crate::settings::SettingsWindow;
 use crate::sign_in::SignIn;
 use crate::vault::VaultView;
 
@@ -144,7 +141,7 @@ pub struct MainWindow {
     /// The screen being replaced, which fades out before the new one fades
     /// in.
     leaving: Option<AnyView>,
-    alerts: Alerts,
+    alerts: Entity<Alerts>,
     /// The window's own focus, so that its shortcuts work while no screen
     /// has the keyboard.
     focus: FocusHandle,
@@ -175,7 +172,7 @@ impl MainWindow {
             screen: Screen::Loading,
             generation: 0,
             leaving: None,
-            alerts: Alerts::new(),
+            alerts: Alerts::new(window, cx),
             focus,
             show_next: false,
             retrying: false,
@@ -219,7 +216,7 @@ impl MainWindow {
             |backend| Ok(backend.outdated_rbw()),
             |_, result, window, cx| {
                 if let Ok(Some(_)) = result {
-                    toast(
+                    alerts::toast(
                         "The rbw command line needs an update. See Settings › About.",
                         window,
                         cx,
@@ -381,7 +378,7 @@ impl MainWindow {
                     return;
                 };
                 accounts::sign_out(&account, window, cx, |error, window, cx| {
-                    toast(backend::describe(&error), window, cx);
+                    alerts::toast(backend::describe(&error), window, cx);
                 });
             }
         }
@@ -435,7 +432,7 @@ impl MainWindow {
         self.leaving = old.view();
         self.generation += 1;
         // Nothing of a vault stays behind it once it has gone.
-        self.alerts.slot.dismiss();
+        self.alerts.update(cx, |alerts, cx| alerts.dismiss(cx));
         self.leave_task = cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(motion::STANDARD).await;
             this.update(cx, |this, cx| {
@@ -543,191 +540,8 @@ impl MainWindow {
                         )
                     }),
             );
-        plain_screen("unavailable", content, window, cx)
+        chrome::plain_screen("unavailable", content, window, cx)
     }
-}
-
-impl HasAlerts for MainWindow {
-    fn alerts(&mut self) -> &mut Alerts {
-        &mut self.alerts
-    }
-}
-
-/// What a window keeps to ask before something that can't be undone, and
-/// to say that something in the background failed.
-pub struct Alerts {
-    slot: SheetSlot,
-    /// Where the keyboard was before the alert, to go back there after.
-    focus_return: Option<FocusHandle>,
-    toast: ToastSlot,
-}
-
-/// A window view with [`Alerts`].
-pub trait HasAlerts: Sized + 'static {
-    fn alerts(&mut self) -> &mut Alerts;
-}
-
-impl Alerts {
-    pub fn new() -> Self {
-        Self {
-            slot: SheetSlot::alert(),
-            focus_return: None,
-            toast: ToastSlot::default(),
-        }
-    }
-
-    /// The alert and the toast, while they are on screen, as the window's
-    /// last children.
-    pub fn render(&mut self, window: &mut Window, cx: &mut App) -> [Option<AnyElement>; 2] {
-        [
-            self.slot.render(px(300.), window, cx),
-            self.toast.render(window, cx),
-        ]
-    }
-}
-
-/// Asks before doing something that can't be undone; `then` runs once
-/// confirmed, after the alert has started to leave.
-fn confirm_in<V: HasAlerts>(
-    view: &mut V,
-    confirmation: Confirmation,
-    window: &mut Window,
-    cx: &mut Context<V>,
-    then: impl FnOnce(&mut Window, &mut App) + 'static,
-) {
-    let dialog = cx.new(|cx| ConfirmDialog::new(confirmation, cx));
-    let mut then = Some(then);
-    cx.subscribe_in(
-        &dialog,
-        window,
-        move |this: &mut V, _, event, window, cx| {
-            let alerts = this.alerts();
-            alerts.slot.dismiss();
-            if let Some(focus) = alerts.focus_return.take() {
-                window.focus(&focus, cx);
-            }
-            if *event == ConfirmEvent::Confirmed
-                && let Some(then) = then.take()
-            {
-                window.defer(cx, then);
-            }
-            cx.notify();
-        },
-    )
-    .detach();
-    let alerts = view.alerts();
-    alerts.focus_return = window.focused(cx);
-    window.focus(&dialog.read(cx).focus_handle(cx), cx);
-    alerts.slot.present(dialog);
-    cx.notify();
-}
-
-fn toast_slot<V: HasAlerts>(view: &mut V) -> &mut ToastSlot {
-    &mut view.alerts().toast
-}
-
-/// The window's view, found from anywhere in it.
-fn root_view(window: &Window, cx: &App) -> Option<AnyView> {
-    let root = window.root::<gpui::base::Root>().flatten()?;
-    Some(root.read(cx).view().clone())
-}
-
-/// Calls `f` with the alerts of the window's view, whichever window it is.
-macro_rules! with_alerts {
-    ($window:expr, $cx:expr, |$view:ident, $w:ident, $c:ident| $body:expr) => {
-        if let Some(root) = root_view($window, $cx) {
-            if let Ok(entity) = root.clone().downcast::<MainWindow>() {
-                entity.update($cx, |$view, $c| {
-                    let $w = &mut *$window;
-                    $body
-                });
-            } else if let Ok(entity) = root.downcast::<SettingsWindow>() {
-                entity.update($cx, |$view, $c| {
-                    let $w = &mut *$window;
-                    $body
-                });
-            }
-        }
-    };
-}
-
-/// Asks before doing something that can't be undone, from any view in a
-/// window; `then` runs once confirmed. The alert opens once the view that
-/// asks is done updating, which may be the window's own view.
-pub fn confirm(
-    confirmation: Confirmation,
-    window: &mut Window,
-    cx: &mut App,
-    then: impl FnOnce(&mut Window, &mut App) + 'static,
-) {
-    window.defer(cx, move |window, cx| {
-        let mut then = Some(then);
-        with_alerts!(window, cx, |view, window, cx| {
-            if let Some(then) = then.take() {
-                confirm_in(view, confirmation, window, cx, then)
-            }
-        });
-    });
-}
-
-/// Says briefly at the bottom of the window that something happened, such
-/// as a failure in the background, from any view in a window.
-pub fn toast(message: &'static str, window: &mut Window, cx: &mut App) {
-    window.defer(cx, move |window, cx| {
-        with_alerts!(window, cx, |view, _window, cx| {
-            view.alerts().toast.show(message, toast_slot, cx)
-        });
-    });
-}
-
-/// A screen of its own in the window, such as the lock screen: the window's
-/// material, a bar to drag the window by with its buttons, and `content` in
-/// the middle.
-pub fn plain_screen(
-    id: &'static str,
-    content: impl IntoElement,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
-    let theme = cx.theme();
-    let look = theme.look;
-    let fill = match look {
-        Look::MacOs => theme.colors.sidebar,
-        Look::Gnome => theme.colors.window.into(),
-    };
-    let height = theme.metrics.toolbar_height;
-    let corner = chrome::corner_radius(window, cx);
-    let bar = chrome::drag_region(
-        (gpui::ElementId::from(id), "bar"),
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .h(height)
-            .flex()
-            .items_center()
-            .px(px(8.))
-            .children(chrome::traffic_lights(cx))
-            .children(chrome::window_buttons(chrome::Side::Start, window, cx))
-            .child(div().flex_1())
-            .children(chrome::window_buttons(chrome::Side::End, window, cx)),
-        window,
-        cx,
-    );
-    div()
-        .id(id)
-        .relative()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        // On macOS the window's own blurred material shows.
-        .when(!cfg!(target_os = "macos"), |d| d.bg(fill))
-        .rounded(corner)
-        .child(bar)
-        .child(content)
-        .into_any_element()
 }
 
 impl Render for MainWindow {
@@ -741,7 +555,6 @@ impl Render for MainWindow {
             screen => screen.view().map(|view| view.into_any_element()),
         };
         let leaving = self.leaving.clone();
-        let alerts = self.alerts.render(window, cx);
         let content = div()
             .key_context(CONTEXT)
             // Screens hold the keyboard themselves; a click on an empty
@@ -767,7 +580,7 @@ impl Render for MainWindow {
                     point(px(0.), px(6.)),
                 )
             }))
-            .children(alerts.into_iter().flatten());
+            .child(self.alerts.clone());
         chrome::window_frame(content, window, cx)
     }
 }

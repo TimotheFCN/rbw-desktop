@@ -1,4 +1,5 @@
 mod accounts;
+mod alerts;
 mod backend;
 mod clipboard;
 mod demo;

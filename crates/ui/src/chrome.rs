@@ -364,3 +364,53 @@ pub fn traffic_lights(cx: &App) -> Option<AnyElement> {
             .into_any_element(),
     )
 }
+
+/// A screen of its own in the window, such as the lock screen: the window's
+/// material, a bar to drag the window by with its buttons, and `content` in
+/// the middle.
+pub fn plain_screen(
+    id: &'static str,
+    content: impl IntoElement,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let look = theme.look;
+    let fill = match look {
+        Look::MacOs => theme.colors.sidebar,
+        Look::Gnome => theme.colors.window.into(),
+    };
+    let height = theme.metrics.toolbar_height;
+    let corner = corner_radius(window, cx);
+    let bar = drag_region(
+        (ElementId::from(id), "bar"),
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(height)
+            .flex()
+            .items_center()
+            .px(px(8.))
+            .children(traffic_lights(cx))
+            .children(window_buttons(Side::Start, window, cx))
+            .child(div().flex_1())
+            .children(window_buttons(Side::End, window, cx)),
+        window,
+        cx,
+    );
+    div()
+        .id(id)
+        .relative()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        // On macOS the window's own blurred material shows.
+        .when(!cfg!(target_os = "macos"), |d| d.bg(fill))
+        .rounded(corner)
+        .child(bar)
+        .child(content)
+        .into_any_element()
+}

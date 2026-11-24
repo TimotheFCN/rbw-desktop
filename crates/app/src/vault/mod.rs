@@ -494,7 +494,7 @@ impl VaultView {
             destructive: true,
         };
         let vault = cx.entity().downgrade();
-        crate::window::confirm(confirmation, window, cx, move |window, cx| {
+        crate::alerts::confirm(confirmation, window, cx, move |window, cx| {
             vault
                 .update(cx, |vault, cx| vault.delete_confirmed(id, window, cx))
                 .ok();
