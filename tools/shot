@@ -21,6 +21,7 @@ states, in the vault:
   accounts       the account menu
   sign-out       asking before signing out
   add-account    adding another account
+  main-menu      GNOME's primary menu, in the sidebar's header bar
   item-menu      the selected item's context menu (Shift-F10)
   move-menu      its folders, to move the item to one
   reprompt       an item that asks for the master password again
@@ -51,6 +52,7 @@ settings, in their own window:
   settings           General
   settings-lock      General, the lock timeout's menu open
   settings-accounts  Accounts
+  settings-touch-id  Accounts, with Touch ID to turn on or off
   settings-ssh       SSH Agent, set up and used by ssh
   ssh-off            SSH Agent, not set up
   ssh-setting-up     setting it up
@@ -121,7 +123,7 @@ ssh-fails) state_demo=unlocked,ssh-off,ssh-fails ;;
 ssh-elsewhere) state_demo=unlocked,ssh-elsewhere ;;
 ssh-unsupported) state_demo=unlocked,ssh-unsupported ;;
 lock-busy) state_demo=slow ;;
-lock-touch-id) state_demo=touch-id ;;
+lock-touch-id | settings-touch-id) state_demo=touch-id ;;
 first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new-device | api-key)
 	state_demo=first-run
 	;;
@@ -162,12 +164,21 @@ gnome-*) toolbar=46 sidebar=196 inset=0 sidebar_top=46 nav=32 ;;
 esac
 click() { x11_click "$@"; }
 # Shows the settings page at this index, with the keyboard: Tab from the
-# window reaches the list of pages.
+# window reaches the list of pages. Then `into_page N` moves the keyboard to
+# the page's Nth control, past the other pages and, on GNOME, the header
+# bar's window buttons.
 settings_page() {
+	page=$1
 	local tabs=()
 	for _ in $(seq 0 "$1"); do tabs+=(Tab); done
 	xdotool key "${tabs[@]}" Return
 	sleep 0.5
+}
+into_page() {
+	local count=$((3 - page + $1)) tabs=()
+	[[ $theme == gnome-* ]] && count=$((count + 3))
+	for _ in $(seq "$count"); do tabs+=(Tab); done
+	xdotool key "${tabs[@]}"
 }
 act() {
 	# The window's size in points, without the frame.
@@ -176,6 +187,7 @@ act() {
 	local footer_x=$((inset + 60)) footer_y=$((height - inset - 7 - 19))
 	case $state in
 	vault | gallery | lock | lock-touch-id | first-run | signed-out | no-rbw | old-rbw | no-icons) ;;
+	main-menu) click $((sidebar - 24)) $((toolbar / 2)) ;;
 	# The Menu key: under Xvfb, xdotool's Shift-F10 arrives with Alt.
 	item-menu) xdotool key Down Down Down Menu ;;
 	# Copy Username, Copy Password, Add to Favorites, then Move to Folder.
@@ -189,17 +201,14 @@ act() {
 			xdotool sleep 0.4 type --delay 40 nope && xdotool key Return sleep 0.6
 		;;
 	# Tab goes through the pages, then each page's controls.
-	settings | ssh-off | ssh-elsewhere | ssh-unsupported) settings_page 0 ;;
-	settings-lock) settings_page 0 && xdotool key Tab Tab Tab Tab Return ;;
-	settings-accounts) settings_page 1 ;;
-	settings-ssh) settings_page 2 ;;
-	ssh-setting-up | ssh-fails)
-		settings_page 2
-		# About, the account chooser, then the button.
-		xdotool key Tab Tab Tab Return
-		;;
-	ssh-other) settings_page 2 && xdotool key Tab Tab Return sleep 0.4 key Down Down Return ;;
-	ssh-remove) settings_page 2 && xdotool key Tab Tab Tab Return ;;
+	settings) settings_page 0 ;;
+	settings-lock) settings_page 0 && into_page 1 && xdotool key Return ;;
+	settings-accounts | settings-touch-id) settings_page 1 ;;
+	settings-ssh | ssh-off | ssh-elsewhere | ssh-unsupported) settings_page 2 ;;
+	# The account chooser, then the button.
+	ssh-setting-up | ssh-fails) settings_page 2 && into_page 2 && xdotool key Return ;;
+	ssh-other) settings_page 2 && into_page 1 && xdotool key Return sleep 0.4 key Down Down Return ;;
+	ssh-remove) settings_page 2 && into_page 2 && xdotool key Return ;;
 	settings-about) settings_page 3 ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.

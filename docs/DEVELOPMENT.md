@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, glass, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. `window.rs` is the window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `accounts.rs` the account menu the screens share; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -15,13 +15,18 @@ reduced motion). Nothing from the styled `gpui-component` layer is used. The
 workspace names the dependency `gpui`, because GPUI's macros expand to
 `gpui::…` paths.
 
-The app runs on `FakeBackend` until it switches to `RbwBackend`.
-`RBW_DESKTOP_DEMO` sets the demo up (`demo.rs`): without it both demo
-accounts start locked; `first-run`, `unlocked`, `signed-out`, `touch-id`,
-`slow` and `offline`, comma-separated, reach the other states. The demo's
-master password is `demo` and its codes `123456`; an email with `+device@`
-asks for a new device code and one with `+apikey@` for the API key
-`user.d3m0` / `demo-secret`.
+The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, next to the
+app, or on `PATH`. When it is missing or too old the main window says so
+and offers to look again (`backend::connect`, `crate::start`).
+
+`RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
+(`demo.rs`): without words both demo accounts start locked; `first-run`,
+`unlocked`, `signed-out`, `touch-id`, `slow`, `offline`, `no-rbw`,
+`old-rbw`, `no-icons` and the `ssh-*` words, comma-separated, reach the
+other states (`demo.rs` lists them). The demo's master password is `demo`
+and its codes `123456`; an email with `+device@` asks for a new device code
+and one with `+apikey@` for the API key `user.d3m0` / `demo-secret`. The
+Bank login and the Visa card ask for the master password again.
 
 ## Build and run
 
@@ -50,6 +55,7 @@ tools/shot --size 680x470 vault out.png           # the mockups' window size
 tools/shot --then 'type "Netflix"' --then 'key ctrl+Return' sheet out.png
 tools/shot --record 0.9 sheet out.png             # also out-frames/NNN.png at 30 fps, to check motion
 tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
+tools/shot --theme gnome-dark ssh-other out.png   # settings states shoot the Settings window
 ```
 
 Each state starts the demo it needs. It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
@@ -60,16 +66,79 @@ on Linux includes a 12-point invisible frame border. Without a window manager
 GPUI does not see the pointer leave, so the script rests it on an empty spot
 before capturing.
 
+The shared X11 setup lives in `tools/lib/x11.sh`, which `tools/shot` and
+`tools/e2e` source.
+
+## The real backend, end to end
+
+```sh
+RBW_NG=~/src/rbw-ng tools/e2e            # builds rbw-ng into target/rbw-ng
+RBW_NG=~/src/rbw-ng tools/e2e --no-build
+```
+
+`tools/e2e` starts a throwaway Vaultwarden in Docker on 127.0.0.1, makes two
+accounts with rbw-ng's `tools/scripting-check` helpers (the first with
+shared items, some protected), runs the app on rbw with a private `HOME`,
+`XDG_RUNTIME_DIR` and no `SSH_AUTH_SOCK`, and drives it with keys and
+clicks: add an account on a self-hosted server, open, copy (pasted back
+into the search to check the clipboard), create, edit, favourite, move,
+delete, a protected item, lock, unlock, a second account, switch, the lock
+timeout, the SSH agent set up and removed, sign out. Each step is checked
+with the `rbw` command line in the same `HOME` and screenshotted to
+`target/shots/e2e/NN-step.png`. A stand-in `systemctl` first on `PATH`
+records what rbw asks of systemd and refuses `start`, so nothing of this
+machine's user services changes; rbw then starts its agent itself. Run it
+after any change to how the app calls the backend.
+
 ## Patterns
 
-**The window** (`MainWindow`) shows the screen the current account's state
-calls for, asks the backend for the accounts every two seconds and fades a
-new screen in over the old one (`motion::screen_enter`). Screens don't poll:
-the window passes them the account's latest state (`set_account`). A screen
-asks the window for things by emitting a `Request` (show an account, add
-one, sign out, look again now). The window also holds the alert slot:
-`window::confirm(Confirmation { … }, window, cx, |window, cx| …)` asks
-before something that can't be undone, from any view in the window.
+**Accounts** are one shared entity (`accounts::Accounts`), which asks the
+backend every two seconds and emits `Refreshed` after each answer. Every
+window follows it, so a lock or sign-out anywhere shows everywhere at once;
+after changing an account, call `accounts::refresh(cx)` rather than waiting
+for the poll.
+
+**The main window** (`MainWindow`) shows the screen the current account's
+state calls for and fades a new screen in over the old one
+(`motion::screen_enter`). Screens don't poll: the window passes them the
+account's latest state (`set_account`). A screen asks the window for things
+by emitting a `Request` (show an account, add one, sign out).
+`window::with_main_window` reaches it from another window, such as
+Settings' Add Account.
+
+**Alerts and toasts.** Each window view keeps an `Alerts` and implements
+`HasAlerts`. `window::confirm(Confirmation { … }, window, cx, |window, cx| …)`
+asks before something that can't be undone and `window::toast` says
+something happened, from any view in any window. Both wait until the
+current update is over, so the window's own view can call them.
+
+**Settings** (`settings/`) is its own window, opened with `secondary-,`, the
+app menu's Settings… on macOS and the sidebar's primary menu on GNOME, and
+laid out per look: a glass sidebar on macOS, a view switcher in the header
+bar on GNOME. Each page is an entity. Rows are `settings_group` and
+`setting_row` from the design system, choices a `Select` (an entity that
+emits `Selected`). Each account's `AccountSettings` live in one
+`settings::store::Store`, written back at once; a failed save puts the
+setting back and says so. Preferences apply at once too: the
+`clipboard::ClearAfter` global and `Icons::set_enabled`.
+
+**Protected items.** When `item`, `verification_code` or `edit_item` fail
+with `Error::RepromptRequired`, show a `reprompt::Reprompt` (the lock
+screen's field, for one item); it emits `Unlocked` once `unlock_item` took
+the password, then try again. The detail pane shows it in place of the
+fields, the editor above its buttons.
+
+**Website icons.** `icons::icon(account, summary, cx)` gives the icon once
+it has arrived and asks for it the first time; views observe
+`Icons::global(cx)` to redraw. Icons are decoded off the main thread, SVG at
+the size they are shown (GPUI's `img` draws an `Image` SVG at its own size,
+blurred at 2x), and kept for the session. `tile(name).icon(id, icon)`
+cross-fades from the letter.
+
+**Context menus**: `popover(…).opening(Opening::At(position))`, opened on a
+right-click and from the keyboard with Shift-F10 or the Menu key (the
+vault's list does both). A menu that swaps its items, like Move to Folder,
+moves the keyboard to the menu itself: the item that had it is gone.
 
 **A screen** is a view entity holding its state, `impl Render`, and methods
 for its actions; long renders split into `render_*` methods in submodules
@@ -155,6 +224,12 @@ reduced-motion setting.
   selection name, so `tools/shot` advertises one on the root window.
 - `gpui-pre-apple`'s build script checks the host OS, so checking for macOS
   from Linux needs the empty shader file `tools/check-macos` creates.
+- An element that had the keyboard and goes away takes it with it: nothing
+  in the window has focus and key bindings stop working. Move the focus
+  before removing it (the protected item's prompt, a menu swapping items).
+- `role()` on a `div` needs an `id()` first.
+- Under Xvfb, `xdotool key shift+F10` arrives as Alt-Shift-F10; shots use the
+  Menu key.
 
 ## macOS
 
@@ -169,6 +244,9 @@ The macOS-only code is small and type-checked from Linux by
 - Fonts: `.SystemUIFont` and Menlo.
 - `app/src/window.rs`: the lock and sign-in screens paint no background
   there, so the window's blurred material shows through them.
+- The Settings window's title bar and traffic lights over its sidebar, the
+  app menu's About and Settings… items, Touch ID's switch on the Accounts
+  page, and the SSH page's advice to add `IdentityAgent` to `~/.ssh/config`.
 
 Everything else, the macOS look included, is the code Linux runs and is
 checked with `RBW_DESKTOP_THEME=macos-light` / `macos-dark` screenshots.

@@ -98,6 +98,16 @@ preference off it returns `None` without asking anything, and turning the
 preference off forgets the icons. The fake backend makes up an icon for most
 websites, as SVG.
 
+`ssh_agent` lists the keys the agent serves with their type ("Ed25519",
+"RSA", "ECDSA"), from the public key. Installing the agent's service stops
+the `rbw-agent` that was running, so the account is locked afterwards.
+
+The fake backend has knobs for the interface's states: `set_latency` and
+`set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
+until `succeed`, `set_offline`, `set_touch_id`, `sign_out_now` and
+`unlock_now` an account, and `set_ssh_supported` and `set_ssh_uses` for the
+SSH agent's states.
+
 ## How it maps to rbw
 
 Each call runs `rbw` once, with `RBW_PROFILE` set for the account,
