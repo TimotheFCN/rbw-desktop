@@ -23,7 +23,10 @@ use crate::clipboard;
 pub struct ItemDetail {
     account: AccountId,
     vault: WeakEntity<VaultView>,
-    shown: Option<(ItemId, Load<Item>)>,
+    selected: Option<ItemId>,
+    /// The last item that arrived. While another one loads it stays on
+    /// screen, so changing the selection never blanks the pane.
+    loaded: Option<Load<Item>>,
     revealed: Vec<SharedString>,
     copied: Option<SharedString>,
     code: Option<VerificationCode>,
@@ -69,7 +72,8 @@ impl ItemDetail {
         Self {
             account,
             vault,
-            shown: None,
+            selected: None,
+            loaded: None,
             revealed: vec![],
             copied: None,
             code: None,
@@ -79,34 +83,49 @@ impl ItemDetail {
         }
     }
 
+    /// The selected item, once it has arrived.
     pub fn item(&self) -> Option<&Item> {
-        self.shown.as_ref()?.1.ready()
+        let item = self.loaded.as_ref()?.ready()?;
+        (Some(&item.id) == self.selected.as_ref()).then_some(item)
     }
 
     pub fn show(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
+        self.selected = item;
+        if self.selected.is_none() {
+            self.loaded = None;
+            self.forget_item_state();
+        }
+        self.reload(cx);
+    }
+
+    fn forget_item_state(&mut self) {
         self.revealed.clear();
         self.copied = None;
         self.code = None;
         self.code_task = Task::ready(());
-        self.shown = item.map(|id| (id, Load::Loading));
-        self.reload(cx);
     }
 
-    /// Fetches the shown item again, after it may have changed.
+    /// Fetches the selected item again, after it may have changed.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let Some((id, _)) = &self.shown else {
+        let Some(id) = self.selected.clone() else {
             cx.notify();
             return;
         };
-        let (account, id) = (self.account.clone(), id.clone());
+        let (account, requested) = (self.account.clone(), id.clone());
         self.load_task = backend::request(
             cx,
-            move |backend| backend.item(&account, &id),
-            |this, result, cx| {
-                let has_code = matches!(&result, Ok(item) if has_code(item));
-                if let Some((_, load)) = &mut this.shown {
-                    *load = result.into();
+            move |backend| backend.item(&account, &requested),
+            move |this, result, cx| {
+                let previous = this
+                    .loaded
+                    .as_ref()
+                    .and_then(Load::ready)
+                    .map(|item| &item.id);
+                if previous != Some(&id) {
+                    this.forget_item_state();
                 }
+                let has_code = matches!(&result, Ok(item) if has_code(item));
+                this.loaded = Some(result.into());
                 if has_code {
                     this.fetch_code(cx);
                 }
@@ -116,7 +135,7 @@ impl ItemDetail {
     }
 
     fn fetch_code(&mut self, cx: &mut Context<Self>) {
-        let Some((id, _)) = &self.shown else { return };
+        let Some(id) = &self.selected else { return };
         let (account, id) = (self.account.clone(), id.clone());
         self.code_task = backend::request(
             cx,
@@ -538,8 +557,8 @@ impl Render for ItemDetail {
         let dim = theme.colors.text_secondary;
         let toolbar = self.render_toolbar(window, cx);
         let corner = chrome::corner_radius(window, cx);
-        let body: Option<AnyElement> = match &self.shown {
-            Some((_, Load::Ready(item))) => {
+        let body: Option<AnyElement> = match &self.loaded {
+            Some(Load::Ready(item)) => {
                 let item = item.clone();
                 let code = self.render_code(cx);
                 let mut cards = cards(&item);
@@ -595,7 +614,7 @@ impl Render for ItemDetail {
                     .into_any_element(),
                 )
             }
-            Some((_, Load::Failed(error))) => Some(
+            Some(Load::Failed(error)) => Some(
                 div()
                     .flex_1()
                     .flex()
@@ -605,7 +624,7 @@ impl Render for ItemDetail {
                     .child(backend::describe(error))
                     .into_any_element(),
             ),
-            Some((_, Load::Loading)) | None => None,
+            Some(Load::Loading) | None => None,
         };
         div()
             .flex_1()

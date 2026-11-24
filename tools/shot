@@ -122,6 +122,8 @@ geometry() {
 }
 geometry
 xdotool windowmove "$window" $(((screen_w - win_w) / 2)) $(((screen_h - win_h) / 2))
+# Without a window manager, keyboard focus follows the pointer unless set.
+xdotool windowfocus --sync "$window"
 sleep 1.5
 
 # Pointer positions in points from the window's top-left corner. The frame

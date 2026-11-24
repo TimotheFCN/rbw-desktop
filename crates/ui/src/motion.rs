@@ -81,8 +81,10 @@ pub fn presence(
 }
 
 /// Content arriving in place of other content, like the detail pane showing
-/// another item: it fades in while rising a few points. A new `id` restarts
-/// it, so pass one that names the content.
+/// another item: it settles into place from a few points lower while fading
+/// up. It starts partly visible, so stepping quickly through a list never
+/// shows an empty pane. A new `id` restarts it, so pass one that names the
+/// content.
 pub fn content_enter<E: IntoElement + Styled + 'static>(
     id: impl Into<ElementId>,
     element: E,
@@ -91,6 +93,6 @@ pub fn content_enter<E: IntoElement + Styled + 'static>(
     element.with_animation(
         id,
         Animation::new(STANDARD).with_easing(move |t| easing.sample(t)),
-        |element, t| element.opacity(t).mt(px(6.) * (1. - t)),
+        |element, t| element.opacity(0.4 + 0.6 * t).mt(px(4.) * (1. - t)),
     )
 }
