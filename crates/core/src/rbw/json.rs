@@ -502,8 +502,7 @@ pub struct StatusJson {
     pub user_email: Option<String>,
     #[serde(default)]
     pub last_sync: Option<String>,
-    // rbw-ng versions without it lack what rbw-desktop needs
-    pub touch_id: Option<bool>,
+    pub touch_id: bool,
 }
 
 #[derive(serde::Deserialize)]

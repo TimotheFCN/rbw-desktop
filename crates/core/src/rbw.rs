@@ -24,49 +24,46 @@ use crate::{
 /// The rbw-ng release with everything this backend uses.
 pub const REQUIRED_RBW: &str = "1.19.0";
 
+/// An rbw on `PATH` older than the one the backend uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutdatedRbw {
+    pub path: PathBuf,
+    /// Its `--version`: a number for rbw-ng, the whole text for another
+    /// program, such as the original rbw.
+    pub version: String,
+}
+
 pub struct RbwBackend {
     rbw: Rbw,
+    outdated: Option<OutdatedRbw>,
     preferences: PathBuf,
     icons: IconCache,
 }
 
 impl RbwBackend {
-    /// Finds `rbw` (see [`RBW_ENV`]) and checks that it is recent enough.
+    /// Finds an `rbw` that is [`REQUIRED_RBW`] or later: the one in
+    /// [`RBW_ENV`], else the one on `PATH`, else the one next to this
+    /// program.
     pub fn new() -> Result<Self> {
-        Self::with_rbw(Rbw::find()?)
+        let (rbw, outdated) = Rbw::find()?;
+        Self::with_rbw(rbw, outdated)
     }
 
     /// Uses the `rbw` at this path, and the `rbw-agent` next to it if there
     /// is one.
     pub fn at(rbw: PathBuf) -> Result<Self> {
-        Self::with_rbw(Rbw::at(rbw))
+        Self::with_rbw(Rbw::checked(rbw)?, None)
     }
 
-    fn with_rbw(rbw: Rbw) -> Result<Self> {
+    fn with_rbw(rbw: Rbw, outdated: Option<OutdatedRbw>) -> Result<Self> {
         let dirs = directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw-desktop")
             .ok_or_else(|| Error::Other("this system has no home folder".into()))?;
-        let backend = Self {
+        Ok(Self {
             rbw,
+            outdated,
             preferences: dirs.config_dir().join("preferences.json"),
             icons: IconCache::new(dirs.cache_dir().join("icons")),
-        };
-        backend.check_version()?;
-        Ok(backend)
-    }
-
-    // A development build may still carry the last release's number, so
-    // the check is on what rbw-desktop uses: the fields of the status.
-    fn check_version(&self) -> Result<()> {
-        let status: StatusJson = self
-            .rbw
-            .json(None, &["status", "--json"], None, Wait::Local)?;
-        if status.touch_id.is_none() {
-            return Err(Error::RbwTooOld {
-                found: self.rbw_version()?,
-                required: REQUIRED_RBW.to_string(),
-            });
-        }
-        Ok(())
+        })
     }
 
     fn run(&self, account: &AccountId, args: &[&str], wait: Wait) -> Result<()> {
@@ -172,7 +169,7 @@ impl Backend for RbwBackend {
                 "locked" => LockState::Locked,
                 _ => LockState::SignedOut,
             },
-            touch_id_ready: status.touch_id.unwrap_or(false),
+            touch_id_ready: status.touch_id,
             last_sync: status.last_sync.as_deref().and_then(json::parse_time),
         })
     }
@@ -560,13 +557,10 @@ impl Backend for RbwBackend {
     }
 
     fn rbw_version(&self) -> Result<String> {
-        let output = self.rbw.run(None, &["--version"], None, Wait::Local)?;
-        let text = String::from_utf8_lossy(&output);
-        Ok(text
-            .trim()
-            .rsplit(' ')
-            .next()
-            .unwrap_or_default()
-            .to_string())
+        Ok(self.rbw.version()?.text)
+    }
+
+    fn outdated_rbw(&self) -> Option<OutdatedRbw> {
+        self.outdated.clone()
     }
 }

@@ -106,11 +106,21 @@ the same user can read, since `rbw` reads it from there.
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |
 | `install_ssh_agent`, `uninstall_ssh_agent` | `rbw ssh-agent install`, `rbw ssh-agent uninstall` |
 
-`RbwBackend::new` looks for `rbw` in `RBW_DESKTOP_RBW`, then next to the app's
-executable, then on `PATH`, and uses the `rbw-agent` next to it when there is
-one. It needs rbw-ng 1.19 or later, which it recognizes by the fields of
-`rbw status --json`, so that development builds work too. Local calls time out
-after 30 seconds, calls that reach the server after 120.
+`RbwBackend::new` needs rbw-ng 1.19.0 or later (`REQUIRED_RBW`), as
+`rbw --version` says; another program called `rbw`, such as the original
+rbw, doesn't count. It uses the `rbw` in `RBW_DESKTOP_RBW` when that is set.
+Otherwise it prefers the one on `PATH`, which the command line runs too, and
+falls back to the one bundled next to the app's executable only when there is
+none on `PATH` or it is too old. It uses the `rbw-agent` next to the `rbw` it
+picked, when there is one.
+
+The reason is the agent: each profile has one `rbw-agent`, and `rbw` restarts
+an agent of another version, which locks the vault. An app and a command line
+of different versions would each lock the account whenever the other used it.
+When the app has to use its bundled `rbw` while an older one is on `PATH`,
+`Backend::outdated_rbw` returns that one (`OutdatedRbw`, with its path and
+version), so that the interface can ask the person to update it. Local calls
+time out after 30 seconds, calls that reach the server after 120.
 
 With 300 items, `rbw status --json` takes about 2 ms, `rbw item list` 5 ms and
 `rbw item get` 2 ms.

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
-use crate::{AccountId, Error, Result, TwoStepMethod};
+use crate::{AccountId, Error, OutdatedRbw, REQUIRED_RBW, Result, TwoStepMethod};
 
 /// Overrides where to find `rbw`: the path of the binary.
 pub const RBW_ENV: &str = "RBW_DESKTOP_RBW";
@@ -39,28 +39,46 @@ pub struct Rbw {
 }
 
 impl Rbw {
-    /// Finds `rbw`: the path in `RBW_DESKTOP_RBW`, the one next to this
-    /// program, then the one on `PATH`.
-    pub fn find() -> Result<Self> {
-        let path = std::env::var_os(RBW_ENV)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                let exe = std::env::current_exe().ok()?;
-                Some(exe.with_file_name("rbw")).filter(|path| path.is_file())
-            })
-            .or_else(|| {
-                std::env::split_paths(&std::env::var_os("PATH")?)
-                    .map(|dir| dir.join("rbw"))
-                    .find(|path| path.is_file())
-            })
-            .ok_or(Error::RbwNotFound)?;
-        Ok(Self::at(path))
+    /// Finds an `rbw` that is recent enough: the one in `RBW_DESKTOP_RBW`,
+    /// else the one on `PATH`, which the command line runs too, else the
+    /// one next to this program. With the last, it also returns the older
+    /// one on `PATH`, which would restart the account's agent.
+    pub fn find() -> Result<(Self, Option<OutdatedRbw>)> {
+        if let Some(path) = std::env::var_os(RBW_ENV).filter(|path| !path.is_empty()) {
+            return Ok((Self::checked(PathBuf::from(path))?, None));
+        }
+        let installed = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("rbw"))
+                .find(|path| path.is_file())
+        });
+        let bundled = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name("rbw"))
+            .filter(|path| path.is_file());
+        choose(
+            installed.map(Self::at),
+            bundled.map(Self::at),
+            Self::version,
+        )
     }
 
-    pub fn at(path: PathBuf) -> Self {
+    /// The `rbw` at this path, if it is recent enough.
+    pub fn checked(path: PathBuf) -> Result<Self> {
+        let rbw = Self::at(path);
+        let version = rbw.version()?;
+        enough(rbw, version)
+    }
+
+    fn at(path: PathBuf) -> Self {
         let agent = Some(path.with_file_name("rbw-agent")).filter(|agent| agent.is_file());
         Self { path, agent }
+    }
+
+    /// The version `rbw --version` prints.
+    pub fn version(&self) -> Result<Version> {
+        let output = self.run(None, &["--version"], None, Wait::Local)?;
+        Ok(Version::of(&String::from_utf8_lossy(&output)))
     }
 
     /// Runs `rbw` for a profile and returns its output, or how it failed.
@@ -171,6 +189,89 @@ fn read_in_background(
         }
         output
     })
+}
+
+// The rbw on PATH when it is recent enough, else the bundled one, with the
+// older one on PATH.
+fn choose(
+    installed: Option<Rbw>,
+    bundled: Option<Rbw>,
+    version: impl Fn(&Rbw) -> Result<Version>,
+) -> Result<(Rbw, Option<OutdatedRbw>)> {
+    let Some(installed) = installed else {
+        let bundled = bundled.ok_or(Error::RbwNotFound)?;
+        let version = version(&bundled)?;
+        return Ok((enough(bundled, version)?, None));
+    };
+    let outdated = match version(&installed) {
+        Ok(found) if found.is_enough() => return Ok((installed, None)),
+        Ok(found) => Ok(OutdatedRbw {
+            path: installed.path,
+            version: found.text,
+        }),
+        Err(error) => Err(error),
+    };
+    match (bundled, outdated) {
+        // an rbw that can't say its version can't run an agent either
+        (Some(bundled), outdated) => {
+            let found = version(&bundled)?;
+            Ok((enough(bundled, found)?, outdated.ok()))
+        }
+        (None, Ok(outdated)) => Err(Error::RbwTooOld {
+            found: outdated.version,
+            required: REQUIRED_RBW.to_string(),
+        }),
+        (None, Err(error)) => Err(error),
+    }
+}
+
+fn enough(rbw: Rbw, version: Version) -> Result<Rbw> {
+    if version.is_enough() {
+        Ok(rbw)
+    } else {
+        Err(Error::RbwTooOld {
+            found: version.text,
+            required: REQUIRED_RBW.to_string(),
+        })
+    }
+}
+
+/// An `rbw --version`.
+pub struct Version {
+    /// rbw-ng's version number, or the whole text for another program, such
+    /// as the original rbw.
+    pub text: String,
+    // None for another program than rbw-ng
+    numbers: Option<[u64; 3]>,
+}
+
+impl Version {
+    fn of(output: &str) -> Self {
+        let line = output.trim();
+        let numbers = line
+            .strip_prefix("rbw-ng ")
+            .and_then(|version| numbers(version.trim()));
+        Self {
+            text: match numbers {
+                Some(_) => line["rbw-ng ".len()..].trim().to_string(),
+                None => line.to_string(),
+            },
+            numbers,
+        }
+    }
+
+    fn is_enough(&self) -> bool {
+        self.numbers
+            .is_some_and(|numbers| Some(numbers) >= self::numbers(REQUIRED_RBW))
+    }
+}
+
+// The major, minor and patch numbers, without a pre-release or build part.
+fn numbers(version: &str) -> Option<[u64; 3]> {
+    let core = version.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|part| part.parse().ok());
+    let numbers = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some(numbers)
 }
 
 /// How a call failed: the error, and rbw's code for it when it gave one.
@@ -302,6 +403,76 @@ mod tests {
             error_from("error: unexpected argument\n"),
             Error::Other("error: unexpected argument".into())
         );
+    }
+
+    #[test]
+    fn versions_count_for_rbw_ng_only() {
+        let enough = |output: &str| Version::of(output).is_enough();
+        assert!(enough("rbw-ng 1.19.0\n"));
+        assert!(enough("rbw-ng 1.20.3"));
+        assert!(enough("rbw-ng 2.0.0-dev"));
+        assert!(!enough("rbw-ng 1.18.1\n"));
+        assert!(!enough("rbw 1.19.0"));
+        assert!(!enough("rbw 1.13.2"));
+        assert!(!enough("rbw-ng 1.19"));
+        assert!(!enough(""));
+        assert_eq!(Version::of("rbw-ng 1.18.1\n").text, "1.18.1");
+        assert_eq!(Version::of("rbw 1.13.2\n").text, "rbw 1.13.2");
+    }
+
+    #[test]
+    fn prefers_the_rbw_on_path_and_says_when_it_is_too_old() {
+        let installed = || Some(Rbw::at(PathBuf::from("/usr/bin/rbw")));
+        let bundled = || Some(Rbw::at(PathBuf::from("/opt/rbw-desktop/rbw")));
+        let versions = |on_path: &'static str, next_to_app: &'static str| {
+            move |rbw: &Rbw| match rbw.path.starts_with("/usr") {
+                true if on_path.is_empty() => Err(Error::Other("broken".into())),
+                true => Ok(Version::of(on_path)),
+                false => Ok(Version::of(next_to_app)),
+            }
+        };
+        let chosen = |installed, bundled, on_path, next_to_app| {
+            choose(installed, bundled, versions(on_path, next_to_app))
+                .map(|(rbw, outdated)| (rbw.path, outdated.map(|rbw| rbw.version)))
+        };
+        let usr = PathBuf::from("/usr/bin/rbw");
+        let opt = PathBuf::from("/opt/rbw-desktop/rbw");
+
+        assert_eq!(
+            chosen(installed(), bundled(), "rbw-ng 1.19.0", "rbw-ng 1.20.0"),
+            Ok((usr.clone(), None))
+        );
+        assert_eq!(
+            chosen(installed(), bundled(), "rbw-ng 1.18.1", "rbw-ng 1.19.0"),
+            Ok((opt.clone(), Some("1.18.1".to_string())))
+        );
+        assert_eq!(
+            chosen(installed(), bundled(), "rbw 1.13.2", "rbw-ng 1.19.0"),
+            Ok((opt.clone(), Some("rbw 1.13.2".to_string())))
+        );
+        assert_eq!(
+            chosen(installed(), bundled(), "", "rbw-ng 1.19.0"),
+            Ok((opt.clone(), None))
+        );
+        assert_eq!(
+            chosen(None, bundled(), "", "rbw-ng 1.19.0"),
+            Ok((opt, None))
+        );
+        assert_eq!(
+            chosen(installed(), None, "rbw-ng 1.18.1", ""),
+            Err(Error::RbwTooOld {
+                found: "1.18.1".into(),
+                required: REQUIRED_RBW.into()
+            })
+        );
+        assert_eq!(
+            chosen(None, bundled(), "", "rbw-ng 1.18.1"),
+            Err(Error::RbwTooOld {
+                found: "1.18.1".into(),
+                required: REQUIRED_RBW.into()
+            })
+        );
+        assert_eq!(chosen(None, None, "", ""), Err(Error::RbwNotFound));
     }
 
     #[test]
