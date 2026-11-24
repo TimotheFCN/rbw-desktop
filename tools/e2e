@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+# Drives rbw-desktop on the real backend, rbw-ng's command line, against a
+# throwaway Vaultwarden, with real keys and clicks on a private headless
+# display, and checks each step with the rbw command line. See
+# docs/DEVELOPMENT.md.
+#
+#     RBW_NG=~/src/rbw-ng tools/e2e
+#
+# It builds rbw-ng's binaries into target/rbw-ng (the checkout is only
+# read), starts Vaultwarden in Docker on 127.0.0.1, makes two accounts (the
+# first with items shared through an organization, among them some that ask
+# for the master password again), and runs the app with a private HOME, so
+# that no profile, ssh or systemd setup of yours is touched: a stand-in
+# `systemctl` records what rbw asks of systemd. Screenshots of each step go
+# to target/shots/e2e. Everything it started goes away at the end.
+set -euo pipefail
+
+usage() {
+	echo "usage: RBW_NG=path/to/rbw-ng tools/e2e [--no-build]" >&2
+	exit 2
+}
+
+# The backend is the same whatever the look; the clicks are the macOS
+# look's.
+theme=macos-light scale=2 build=1
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	--no-build) build=0; shift ;;
+	*) usage ;;
+	esac
+done
+: "${RBW_NG:?set RBW_NG to an rbw-ng checkout}"
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+shots=$root/target/shots/e2e
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+if ((build)); then
+	CARGO_TARGET_DIR=$root/target/rbw-ng cargo build --quiet --locked --release --bins \
+		--manifest-path "$RBW_NG/Cargo.toml"
+	cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
+fi
+rbw=$root/target/rbw-ng/release/rbw
+
+# shellcheck source=tools/lib/x11.sh
+source "$root/tools/lib/x11.sh"
+x11_start
+container=rbw-desktop-e2e-$$
+port=$((20000 + $$ % 20000))
+# short, for the agents' sockets
+home=$(mktemp -d /tmp/rbwe.XXXXXX)
+stop() {
+	local status=$?
+	if ((status != 0)) && [[ -s $work/app.log ]]; then
+		echo "the app's log:" >&2
+		tail -20 "$work/app.log" >&2
+	fi
+	docker rm -f "$container" >/dev/null 2>&1 || true
+	for pidfile in "$home"/run/rbw*/pidfile; do
+		[[ -f $pidfile ]] && kill "$(cat "$pidfile")" 2>/dev/null || true
+	done
+	x11_stop
+	rm -rf "$home"
+}
+trap stop EXIT
+
+docker run -d --name "$container" -p "127.0.0.1:$port:80" \
+	-e SIGNUPS_ALLOWED=true -e I_REALLY_WANT_VOLATILE_STORAGE=true \
+	-e LOGIN_RATELIMIT_MAX_BURST=1000 -e LOGIN_RATELIMIT_SECONDS=1 \
+	-e UNAUTHENTICATED_RATELIMIT_MAX_BURST=1000 -e UNAUTHENTICATED_RATELIMIT_SECONDS=1 \
+	vaultwarden/server:latest >/dev/null
+server=http://127.0.0.1:$port
+for try in $(seq 60); do
+	curl -sf "$server/alive" >/dev/null && break
+	((try < 60)) || { echo "Vaultwarden didn't start" >&2; exit 1; }
+	sleep 1
+done
+
+password="correct horse battery staple"
+suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+first=e2e-$suffix@example.com second=e2e-second-$suffix@example.com
+PYTHONDONTWRITEBYTECODE=1 python3 - "$RBW_NG/tools/scripting-check" "$server" "$first" "$second" "$password" <<'PY'
+import importlib.machinery, importlib.util, sys
+path, server, first, second, password = sys.argv[1:]
+loader = importlib.machinery.SourceFileLoader("scripting_check", path)
+check = importlib.util.module_from_spec(importlib.util.spec_from_loader("scripting_check", loader))
+loader.exec_module(check)
+public_key = check.register(server, first, password)
+# shared items, some of which ask for the master password again
+check.share_login(server, first, password, public_key)
+check.register(server, second, password)
+PY
+
+# The app's world: a private HOME, no SSH agent of this machine, and a
+# systemctl that only records what it is asked.
+mkdir -m 700 "$home/run" "$home/bin"
+cat >"$home/bin/systemctl" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$HOME/systemctl.log"
+# Starting units is refused, so that rbw starts its agent itself.
+case " $* " in *" start "*) echo "start refused in this test" >&2; exit 1 ;; esac
+exit 0
+EOF
+chmod +x "$home/bin/systemctl"
+export HOME=$home XDG_RUNTIME_DIR=$home/run XDG_CONFIG_HOME=$home/.config \
+	XDG_CACHE_HOME=$home/.cache XDG_DATA_HOME=$home/.local/share \
+	PATH=$home/bin:$PATH RBW_DESKTOP_RBW=$rbw
+unset SSH_AUTH_SOCK RBW_DESKTOP_DEMO RBW_PROFILE
+
+# The command line, for one profile, to check what the app did.
+cli() {
+	local profile=$1
+	shift
+	RBW_PROFILE=$profile RBW_NONINTERACTIVE=1 "$rbw" "$@"
+}
+# A field of the JSON a command prints, with a Python expression on `j`.
+query() {
+	local expression=$1
+	shift
+	cli "$@" | python3 -I -c "import json, sys; j = json.load(sys.stdin); print($expression)"
+}
+
+steps=0 failed=0
+rm -rf "$shots" && mkdir -p "$shots"
+# Takes the step's screenshot and checks it: `step NAME 'shell condition'`.
+step() {
+	steps=$((steps + 1))
+	local name=$1 condition=${2:-true} shot
+	shot=$(printf '%s/%02d-%s.png' "$shots" "$steps" "$name")
+	sleep 1.2
+	x11_rest_pointer
+	x11_capture "$shot"
+	if eval "$condition"; then
+		echo "ok   $name"
+	else
+		echo "FAIL $name: $condition" >&2
+		failed=$((failed + 1))
+	fi
+}
+# Waits up to ten seconds for a shell condition.
+until_true() {
+	for _ in $(seq 50); do eval "$1" && return 0; sleep 0.2; done
+	return 1
+}
+type_text() { xdotool type --delay 30 "$1"; }
+keys() { xdotool key --delay 80 "$@"; }
+
+toolbar=50 sidebar=186 inset=7
+# The account button at the bottom of the sidebar.
+account_menu() {
+	x11_geometry
+	x11_click $((inset + 60)) $((win_h / scale - 2 * frame - inset - 26))
+	sleep 0.5
+}
+
+# A page of the Settings window, by its row in the sidebar, which then has
+# the keyboard.
+settings_page() {
+	x11_click 60 $((inset + 42 + $1 * 31 + 15))
+	sleep 0.5
+}
+# Brings the main window forward and puts the settings aside, or back.
+to_main() {
+	settings=$window
+	xdotool windowmove "$settings" "$screen_w" 0
+	window=$main
+	xdotool windowfocus --sync "$window"
+}
+to_settings() {
+	x11_window '^(Settings|Preferences)$' 10
+}
+
+RUST_BACKTRACE=1 x11_launch "$root/target/debug/rbw-desktop"
+x11_window '^Vault$'
+sleep 1.5
+
+# Adding the first account, on a self-hosted server.
+step first-run "[[ \$(cli '' status --json) == *unauthenticated* ]] || true"
+keys shift+Tab Return
+type_text "$server"
+keys Tab
+type_text "$first"
+keys Return
+sleep 0.5
+step password
+type_text "$password"
+keys Return
+until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
+step signed-in "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+
+# Items: open one, copy its username, and paste it into the search.
+keys Down
+step item-open
+x11_click $((sidebar + 236 + 100)) $((toolbar + 2 + 56 + 4 + 10 + 20))
+step copied
+keys ctrl+f ctrl+v
+step pasted-username
+keys ctrl+a BackSpace Escape
+
+# Creating, editing, marking a favourite, moving and deleting.
+keys ctrl+n
+sleep 0.5
+type_text "E2E login"
+keys Tab
+type_text "e2e-user"
+step new-item
+keys ctrl+Return
+until_true "query 'any(i[\"name\"] == \"E2E login\" for i in j)' '' item list | grep -qx True" || true
+step created "query 'any(i[\"name\"] == \"E2E login\" for i in j)' '' item list | grep -qx True"
+keys ctrl+e
+sleep 0.5
+keys ctrl+a
+type_text "E2E renamed"
+step editing
+keys ctrl+Return
+until_true "query 'any(i[\"name\"] == \"E2E renamed\" for i in j)' '' item list | grep -qx True" || true
+step edited "query 'any(i[\"name\"] == \"E2E renamed\" for i in j)' '' item list | grep -qx True"
+# The list keeps the selection; its menu: Copy Username, Copy Password,
+# then Add to Favorites.
+x11_click $((sidebar + 236 + 100)) $((toolbar + 300))
+cli '' folder create "E2E folder" >/dev/null
+keys ctrl+f
+type_text "E2E renamed"
+keys Return Menu
+sleep 0.4
+step item-menu
+keys Down Down Down Return
+until_true "query '[i[\"favorite\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx True" || true
+step favorite "query '[i[\"favorite\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx True"
+# Move to Folder, then the folder after No Folder.
+keys Menu
+sleep 0.4
+keys Down Down Down Down Return
+sleep 0.4
+keys Down Down Down Return
+folder=$(query '[f["id"] for f in j if f["name"] == "E2E folder"][0]' '' folder list)
+until_true "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx $folder" || true
+step moved "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx $folder"
+keys ctrl+BackSpace
+step delete-asks
+keys Return
+until_true "query 'all(i[\"name\"] != \"E2E renamed\" for i in j)' '' item list | grep -qx True" || true
+step deleted "query 'all(i[\"name\"] != \"E2E renamed\" for i in j)' '' item list | grep -qx True"
+
+# An item that asks for the master password again.
+keys ctrl+f ctrl+a
+type_text "Bank"
+keys Return
+step reprompt
+x11_click $((sidebar + 120)) $((toolbar + 25))
+type_text "$password"
+keys Return
+step reprompt-unlocked
+keys ctrl+f ctrl+a BackSpace Escape
+
+# Locking and unlocking.
+keys ctrl+l
+until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
+step locked "query 'j[\"status\"]' '' status --json | grep -qx locked"
+type_text "$password"
+keys Return
+until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
+step unlocked "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+
+# A second account, then switching back to the first.
+account_menu
+step account-menu
+keys Up Up Return
+sleep 0.5
+keys shift+Tab Return
+type_text "$server"
+keys Tab
+type_text "$second"
+keys Return
+sleep 0.5
+type_text "$password"
+keys Return
+until_true "[[ -n \$(query '[p[\"profile\"] for p in j if p[\"profile\"]][0]' '' profiles --json 2>/dev/null) ]]" || true
+profile=$(query '[p["profile"] for p in j if p["profile"]][0]' '' profiles --json)
+until_true "query 'j[\"status\"]' '$profile' status --json | grep -qx unlocked" || true
+step second-account "query 'j[\"status\"]' '$profile' status --json | grep -qx unlocked"
+account_menu
+keys Down Return
+step switched
+
+# Settings: the lock timeout, then the SSH agent set up and removed.
+keys ctrl+comma
+main=$window
+x11_window '^(Settings|Preferences)$' 10
+sleep 1
+step settings
+# The first account's lock timeout; its menu: 1, 5, then 15 minutes.
+settings_page 0
+keys Tab Tab Tab Tab Return
+sleep 0.4
+keys Down Down Down Return
+until_true "query 'j[\"lock_timeout\"]' '' config show | grep -qx 900" || true
+step lock-timeout "query 'j[\"lock_timeout\"]' '' config show | grep -qx 900"
+settings_page 1
+step accounts-page
+settings_page 2
+units=$XDG_CONFIG_HOME/systemd/user
+step ssh-page "[[ ! -e $units/rbw-agent.service ]]"
+# About, the account chooser, then the button.
+keys Tab Tab Tab Return
+until_true "[[ -e $units/rbw-agent.service ]]" || true
+step ssh-set-up "[[ -e $units/rbw-agent.service ]] && grep -q 'enable --now' $HOME/systemctl.log"
+# rbw stopped the agent that held the vault: unlock it again.
+to_main
+until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
+step locked-by-ssh-setup "query 'j[\"status\"]' '' status --json | grep -qx locked"
+type_text "$password"
+keys Return
+until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
+to_settings
+step ssh-unlocked "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+settings_page 2
+keys Tab Tab Tab Return
+sleep 0.4
+step ssh-remove-asks
+keys Return
+until_true "[[ ! -e $units/rbw-agent.service ]]" || true
+step ssh-removed "[[ ! -e $units/rbw-agent.service ]] && grep -q disable $HOME/systemctl.log"
+keys ctrl+w
+window=$main
+xdotool windowfocus --sync "$window"
+
+# Signing out of the account shown, the first: the account menu's last item.
+account_menu
+keys Up Return
+sleep 0.4
+step sign-out-asks
+keys Return
+until_true "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]" || true
+step signed-out "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]"
+
+echo "$((steps - failed)) of $steps steps passed; screenshots in $shots"
+((failed == 0))
