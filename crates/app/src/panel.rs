@@ -21,7 +21,7 @@ use rbw_desktop_core::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, ToastSlot, button, chrome, icon, list_row, motion,
-    search_field, section_label, segmented_control,
+    scroll_area, scrollbar, search_field, section_label, segmented_control,
 };
 
 use crate::CloseWindow;
@@ -637,19 +637,26 @@ impl QuickPanel {
                     .child(message)
                     .into_any_element(),
                 // Only the rows on screen are built, however many match.
-                None => uniform_list(
-                    "panel-rows",
-                    self.shown.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .filter_map(|position| this.render_row(position, cx))
-                            .collect()
-                    }),
-                )
-                .track_scroll(&self.scroll)
-                .flex_1()
-                .min_h_0()
-                .into_any_element(),
+                None => div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        uniform_list(
+                            "panel-rows",
+                            self.shown.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .filter_map(|position| this.render_row(position, cx))
+                                    .collect()
+                            }),
+                        )
+                        .track_scroll(&self.scroll)
+                        .flex_1(),
+                    )
+                    .child(scrollbar("panel-rows-bar", &self.scroll, cx))
+                    .into_any_element(),
             })
             .into_any_element()
     }
@@ -895,13 +902,11 @@ impl Render for QuickPanel {
             Tab::Passwords => self.render_passwords(cx),
             // Room at the sides for the buttons' shadows, which the
             // scrolling would clip.
-            Tab::Generator => div()
-                .id("panel-generator")
+            Tab::Generator => scroll_area("panel-generator")
                 .flex_1()
                 .min_h_0()
                 .mx(px(-8.))
                 .px(px(8.))
-                .overflow_y_scroll()
                 .children(self.generator.clone())
                 .into_any_element(),
         };

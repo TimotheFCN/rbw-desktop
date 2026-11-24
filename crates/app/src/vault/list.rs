@@ -6,7 +6,7 @@ use gpui::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, motion,
-    popover, search_field,
+    popover, scrollbar, search_field,
 };
 
 use super::{NewItem, ShowGenerator, VaultView};
@@ -114,11 +114,18 @@ impl VaultView {
             .flex_1()
             .into_any_element(),
         };
+        let bar = scrollbar("items-bar", &self.list_scroll, cx);
         // Another choice in the sidebar shows other items: they fade up in
         // place. Typing a search changes them without it.
         let body = motion::refresh(
             ElementId::Name(format!("items-{:?}", self.filter).into()),
-            div().flex_1().min_h_0().flex().flex_col().child(body),
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(body)
+                .child(bar),
         );
 
         div()

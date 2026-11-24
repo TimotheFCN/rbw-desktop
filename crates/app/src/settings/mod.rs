@@ -18,7 +18,8 @@ use gpui::{
 };
 use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
-    ActiveTheme as _, IconName, Look, Theme, chrome, icon, motion, nav_row, row_focus_ring, sidebar,
+    ActiveTheme as _, IconName, Look, Theme, chrome, icon, motion, nav_row, row_focus_ring,
+    scroll_area, sidebar,
 };
 
 use crate::CloseWindow;
@@ -205,11 +206,9 @@ impl SettingsWindow {
 
     /// The page, scrolling, and fading in when it replaces another.
     fn render_body(&self, max_width: Option<gpui::Pixels>) -> AnyElement {
-        div()
-            .id("settings-body")
+        scroll_area("settings-body")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
             .child(
                 div()
                     .flex()

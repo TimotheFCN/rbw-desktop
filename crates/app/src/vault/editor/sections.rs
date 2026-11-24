@@ -6,13 +6,13 @@ use gpui::base::FocusTrapElement as _;
 use gpui::base::input::{Input, Textarea};
 use gpui::{
     AnyElement, App, Context, FocusHandle, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px, relative,
+    ParentElement as _, SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    relative,
 };
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, Popover, button, card, field_error, form_row,
-    icon, menu_item, menu_separator, motion, password_text, popover, row_focus_ring,
+    icon, menu_item, menu_separator, motion, password_text, popover, row_focus_ring, scroll_area,
     segmented_control, sheet_title, switch, toggle_row,
 };
 
@@ -604,12 +604,10 @@ impl ItemEditor {
                 )
             })
             .child(
-                div()
-                    .id("editor-fields")
+                scroll_area("editor-fields")
+                    .track_scroll(&self.scroll)
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
                     .gap(px(10.))

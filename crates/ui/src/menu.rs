@@ -21,6 +21,7 @@ use smallvec::SmallVec;
 
 use crate::icon::{IconName, icon};
 use crate::motion as m;
+use crate::scroll::scroll_area;
 use crate::sheet::surface;
 use crate::theme::ActiveTheme;
 
@@ -124,6 +125,7 @@ impl RenderOnce for Popover {
         }
         let p = presence.progress;
         let gap = px(4.);
+        let max_height = window.viewport_size().height - px(16.);
         // It moves in from a few points towards the control it belongs to.
         let shift = px(6.) * (1. - p);
         let mut window_position = None;
@@ -206,7 +208,15 @@ impl RenderOnce for Popover {
                                 .rounded(px(10.))
                         }
                     })
-                    .children(self.children),
+                    // A menu taller than the window scrolls.
+                    .max_h(max_height)
+                    .child(
+                        scroll_area((self.id.clone(), "items"))
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .children(self.children),
+                    ),
             )
             .focus_trap((self.id, "trap"), &focus);
         place

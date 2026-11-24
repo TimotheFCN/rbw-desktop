@@ -8,7 +8,7 @@ use gpui::{
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Opening, avatar, button, chrome, menu_item,
-    menu_separator, nav_row, popover, row_focus_ring, section_label, sidebar,
+    menu_separator, nav_row, popover, row_focus_ring, scroll_area, section_label, sidebar,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -253,11 +253,9 @@ impl VaultView {
         sidebar("sidebar")
             .child(header)
             .child(
-                div()
-                    .id("sidebar-rows")
+                scroll_area("sidebar-rows")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .gap(px(1.))

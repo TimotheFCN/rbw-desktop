@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 
 use gpui::{
     AnyElement, AppContext as _, Context, ElementId, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{
     AccountId, Error, FieldValue, Item, ItemContent, ItemId, ItemKind, ItemSummary, Secret,
@@ -14,7 +14,7 @@ use rbw_desktop_core::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, button, card, chrome, field_row, icon, motion,
-    password_text, progress_ring, tile,
+    password_text, progress_ring, scroll_area, tile,
 };
 
 use super::{EditItem, Part, VaultView};
@@ -946,13 +946,11 @@ impl Render for ItemDetail {
             .rounded_r(corner)
             .child(toolbar)
             .child(
-                div()
-                    .id("detail-body")
+                scroll_area("detail-body")
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .overflow_y_scroll()
                     .children(body),
             )
     }

@@ -11,8 +11,8 @@
 use std::time::Duration;
 
 use gpui::base::{
-    Easing, Keyframe, Keyframes, Presence, PresenceSample, ReducedMotion, Spring, Timing,
-    Transition, animate_keyframes,
+    Easing, Keyframe, Keyframes, Presence, PresenceSample, ReducedMotion, ScrollbarMotion, Spring,
+    Timing, Transition, animate_keyframes,
 };
 use gpui::{
     Animation, AnimationElement, AnimationExt as _, App, ElementId, IntoElement, Pixels, Point,
@@ -48,6 +48,21 @@ pub fn ease_in() -> Easing {
         x2: 1.0,
         y2: 1.0,
     }
+}
+
+/// How long a scroll bar stays after the scrolling stops, or the pointer
+/// leaves it.
+const SCROLLBAR_HOLD: Duration = Duration::from_millis(900);
+
+/// Scroll bars: in quickly while scrolling, held a moment after it, then
+/// faded out slowly; widening under the pointer as quickly as hover
+/// feedback. Reduced motion shows and hides them at once.
+pub fn scrollbar() -> ScrollbarMotion {
+    ScrollbarMotion::default()
+        .with_idle(SCROLLBAR_HOLD)
+        .with_enter(QUICK)
+        .with_exit(PRESENT)
+        .with_expand(QUICK)
 }
 
 /// A selection highlight following the pointer between rows: critically

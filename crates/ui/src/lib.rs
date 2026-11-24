@@ -18,6 +18,7 @@ mod menu;
 pub mod motion;
 mod platform;
 mod rows;
+mod scroll;
 mod select;
 mod sheet;
 mod sidebar;
@@ -40,6 +41,7 @@ pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
 pub use rows::{
     ListRow, NavRow, ROW_HEIGHT, Tile, app_icon, avatar, list_row, nav_row, section_label, tile,
 };
+pub use scroll::{ScrollArea, scroll_area, scrollbar};
 pub use select::{Select, Selected};
 pub use sheet::{SheetSlot, Surface, surface};
 pub use sidebar::{Sidebar, sidebar};
@@ -74,4 +76,5 @@ fn sync_base_theme(cx: &mut App) {
     colors.background = theme.colors.window;
     colors.surface = gpui::transparent_black();
     colors.border = theme.colors.separator;
+    base.scrollbar = scroll::style(&theme);
 }
