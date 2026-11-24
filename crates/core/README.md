@@ -46,7 +46,17 @@ password, which `rbw-agent` checks. The item then stays unlocked until it
 goes unread for two minutes or the account locks; each read, such as
 refreshing its code, keeps it unlocked. The official clients likewise ask
 each time such an item is opened and not again while it stays open. The
-list (`items`) never needs it.
+list (`items`) never needs it: it shows only what the official clients show
+of such an item, its name and subtitle, and everything else stays closed,
+for every kind of item.
+
+The re-prompt guards against someone at an unlocked computer, as in the
+official clients; it isn't more encryption. `rbw-agent` keeps the values
+closed whatever program asks, but a program that runs as the same user can
+still read every other item while the account is unlocked, read the item
+while it is unlocked, turn the re-prompt off on the server with the token
+rbw keeps on disk, or ask the person for the master password itself.
+rbw-ng's `docs/scripting.md` says more.
 
 `ItemSummary::editable` and `Item::editable` say whether an item can be
 edited and deleted: items in read-only collections can't. Every item can be
