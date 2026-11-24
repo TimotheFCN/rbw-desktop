@@ -1,14 +1,13 @@
 //! An item's menu in the list, from a right-click or from the keyboard
 //! (Shift-F10 or the Menu key): copy its username, password or code, make
-//! it a favourite, move it to a folder, edit or delete it. Moving lists the
-//! folders in the same menu, with a way back, as GNOME's menus do.
+//! it a favourite, move it to a folder, from a submenu, edit or delete it.
 
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement as _, Pixels, Point, Styled as _, Window, div,
-    point, px,
+    point, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result};
-use rbw_desktop_ui::{IconName, Opening, ROW_HEIGHT, menu_item, menu_separator, popover};
+use rbw_desktop_ui::{Opening, ROW_HEIGHT, menu_item, menu_separator, popover};
 
 use super::list::ROW_GAP;
 use super::{OpenContextMenu, Part, VaultView};
@@ -20,8 +19,6 @@ pub(super) struct ContextMenu {
     item: ItemSummary,
     position: Point<Pixels>,
     open: bool,
-    /// Whether it lists the folders to move the item to.
-    folders: bool,
 }
 
 impl VaultView {
@@ -40,7 +37,6 @@ impl VaultView {
             item,
             position,
             open: true,
-            folders: false,
         });
         window.focus(&self.context_menu_focus, cx);
         cx.notify();
@@ -227,17 +223,6 @@ impl VaultView {
         self.delete_item(id, name, window, cx);
     }
 
-    /// Swaps the menu's items for the folders, or back. The item that had
-    /// the keyboard goes, so the menu takes it, and the arrow keys start
-    /// from its top again.
-    fn show_folders(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(menu) = &mut self.context_menu {
-            menu.folders = show;
-            window.focus(&self.context_menu_focus, cx);
-            cx.notify();
-        }
-    }
-
     pub(super) fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
         let item = &menu.item;
@@ -253,23 +238,15 @@ impl VaultView {
             this.update(cx, |this, cx| this.close_context_menu(window, cx))
                 .ok();
         });
-        let rows: Vec<AnyElement> =
-            if menu.folders {
-                let folders = std::iter::once((None, "No Folder".to_string())).chain(
+        let folders: Vec<AnyElement> =
+            std::iter::once((None, "No Folder".to_string()))
+                .chain(
                     self.folders
                         .iter()
                         .map(|folder| (Some(folder.id.clone()), folder.name.clone())),
-                );
-                let mut rows = vec![
-                    menu_item("back", "Move to Folder")
-                        .icon(IconName::Back)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.show_folders(false, window, cx)),
-                        )
-                        .into_any_element(),
-                    menu_separator(cx).into_any_element(),
-                ];
-                rows.extend(folders.enumerate().map(|(index, (id, name))| {
+                )
+                .enumerate()
+                .map(|(index, (id, name))| {
                     let checked = item.folder == id;
                     menu_item(("folder", index), name)
                         .checked(checked)
@@ -277,90 +254,57 @@ impl VaultView {
                             this.move_to(id.clone(), window, cx)
                         }))
                         .into_any_element()
-                }));
-                rows
-            } else {
-                let login = item.kind == ItemKind::Login;
-                let mut rows = vec![];
-                if login && item.subtitle.is_some() {
-                    rows.push(
-                        menu_item("copy-username", "Copy Username")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy(Part::Username, window, cx)
-                            }))
-                            .into_any_element(),
-                    );
-                }
-                if login {
-                    rows.push(
-                        menu_item("copy-password", "Copy Password")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy(Part::Password, window, cx)
-                            }))
-                            .into_any_element(),
-                    );
-                }
-                if item.has_code {
-                    rows.push(
-                        menu_item("copy-code", "Copy Verification Code")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.copy(Part::Code, window, cx)
-                                }),
-                            )
-                            .into_any_element(),
-                    );
-                }
-                if !rows.is_empty() {
-                    rows.push(menu_separator(cx).into_any_element());
-                }
-                rows.push(
-                    menu_item(
-                        "favorite",
-                        if item.favorite {
-                            "Remove from Favorites"
-                        } else {
-                            "Add to Favorites"
-                        },
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_favorite(window, cx)))
-                    .into_any_element(),
-                );
-                rows.push(
-                    menu_item("move", "Move to Folder")
-                        .submenu()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.show_folders(true, window, cx)),
-                        )
-                        .into_any_element(),
-                );
-                if item.editable {
-                    rows.push(menu_separator(cx).into_any_element());
-                    rows.push(
-                        menu_item("edit", "Edit")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.edit_from_menu(window, cx)),
-                            )
-                            .into_any_element(),
-                    );
-                    rows.push(
-                        menu_item("delete", "Delete…")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.delete_from_menu(window, cx)
-                                }),
-                            )
-                            .into_any_element(),
-                    );
-                }
-                rows
-            };
+                })
+                .collect();
+        let login = item.kind == ItemKind::Login;
+        let mut copies = vec![];
+        if login && item.subtitle.is_some() {
+            copies.push(menu_item("copy-username", "Copy Username").on_click(
+                cx.listener(|this, _, window, cx| this.copy(Part::Username, window, cx)),
+            ));
+        }
+        if login {
+            copies.push(menu_item("copy-password", "Copy Password").on_click(
+                cx.listener(|this, _, window, cx| this.copy(Part::Password, window, cx)),
+            ));
+        }
+        if item.has_code {
+            copies
+                .push(menu_item("copy-code", "Copy Verification Code").on_click(
+                    cx.listener(|this, _, window, cx| this.copy(Part::Code, window, cx)),
+                ));
+        }
+        let has_copies = !copies.is_empty();
+        let popover = popover
+            .children(copies)
+            .when(has_copies, |menu| menu.child(menu_separator(cx)))
+            .child(
+                menu_item(
+                    "favorite",
+                    if item.favorite {
+                        "Remove from Favorites"
+                    } else {
+                        "Add to Favorites"
+                    },
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_favorite(window, cx))),
+            )
+            .submenu(menu_item("move", "Move to Folder"), folders)
+            .when(item.editable, |menu| {
+                menu.child(menu_separator(cx))
+                    .child(menu_item("edit", "Edit").on_click(
+                        cx.listener(|this, _, window, cx| this.edit_from_menu(window, cx)),
+                    ))
+                    .child(menu_item("delete", "Delete…").on_click(
+                        cx.listener(|this, _, window, cx| this.delete_from_menu(window, cx)),
+                    ))
+            });
         Some(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
-                .child(popover.children(rows))
+                .child(popover)
                 .into_any_element(),
         )
     }

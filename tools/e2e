@@ -282,12 +282,13 @@ step item-menu
 keys Down Down Down Return
 until_true "query '[i[\"favorite\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx True" || true
 step favorite "query '[i[\"favorite\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx True"
-# Move to Folder, then the folder after No Folder.
+# Move to Folder, whose submenu opens on its first folder, No Folder;
+# then the folder after it.
 keys Menu
 sleep 0.4
 keys Down Down Down Down Return
 sleep 0.4
-keys Down Down Down Return
+keys Down Return
 folder=$(query '[f["id"] for f in j if f["name"] == "E2E folder"][0]' '' folder list)
 until_true "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx $folder" || true
 step moved "query '[i[\"folderId\"] for i in j if i[\"name\"] == \"E2E renamed\"][0]' '' item list | grep -qx $folder"
