@@ -68,6 +68,7 @@ impl VaultView {
                             let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
                             let item = items[this.visible[position]].clone();
                             let selected = this.selected.as_ref() == Some(&item.id);
+                            let copied = this.copied.as_ref() == Some(&item.id);
                             let icon = icons::icon(&account, &item, cx);
                             let (id, menu_id) = (item.id.clone(), item.id.clone());
                             div()
@@ -92,6 +93,7 @@ impl VaultView {
                                         selected,
                                     )
                                     .icon(icon)
+                                    .copied(copied)
                                     .on_click(cx.listener(
                                         move |this, _, window, cx| {
                                             window.focus(&this.list_focus, cx);

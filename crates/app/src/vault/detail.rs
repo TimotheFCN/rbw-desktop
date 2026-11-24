@@ -256,7 +256,11 @@ impl ItemDetail {
     }
 
     fn copy(&mut self, key: SharedString, value: &Secret, secret: bool, cx: &mut Context<Self>) {
-        clipboard::copy(value, secret, cx);
+        if secret {
+            clipboard::copy_secret(value, Some(&self.account), cx);
+        } else {
+            clipboard::copy_text(value.expose(), cx);
+        }
         if let Some(item) = self.selected_id() {
             recent::used(&self.account, item, cx);
         }

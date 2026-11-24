@@ -114,6 +114,10 @@ pub struct VaultView {
     list_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     context_menu: Option<ContextMenu>,
+    /// The item something was copied of from its context menu, whose row
+    /// says so for a moment.
+    copied: Option<ItemId>,
+    copied_timer: Task<()>,
     context_menu_focus: FocusHandle,
     /// The generator's popover, kept while it leaves.
     generator: Option<Entity<Generator>>,
@@ -169,6 +173,8 @@ impl VaultView {
             list_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
             context_menu: None,
+            copied: None,
+            copied_timer: Task::ready(()),
             context_menu_focus: cx.focus_handle(),
             generator: None,
             generator_open: false,

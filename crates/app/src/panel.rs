@@ -18,8 +18,8 @@ use rbw_desktop_core::{
     Account, AccountId, Error, ItemContent, ItemId, ItemKind, ItemSummary, LockState, Secret,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, ToastSlot, button, chrome, copied_badge, icon,
-    list_row, motion, search_field, section_label, segmented_control,
+    ActiveTheme as _, ButtonStyle, IconName, ToastSlot, button, chrome, icon, list_row, motion,
+    search_field, section_label, segmented_control,
 };
 
 use crate::CloseWindow;
@@ -426,9 +426,14 @@ impl QuickPanel {
     }
 
     fn copied(&mut self, item: ItemId, value: &Secret, secret: bool, cx: &mut Context<Self>) {
-        clipboard::copy(value, secret, cx);
-        if let Some(account) = &self.account {
-            recent::used(&account.id, &item, cx);
+        let account = self.account_id();
+        if secret {
+            clipboard::copy_secret(value, account.as_ref(), cx);
+        } else {
+            clipboard::copy_text(value.expose(), cx);
+        }
+        if let Some(account) = &account {
+            recent::used(account, &item, cx);
         }
         self.copied = Some(item);
         self.copied_timer = cx.spawn(async move |this, cx| {
@@ -648,13 +653,8 @@ impl QuickPanel {
         let selected = position == self.selected;
         let login = item.kind == ItemKind::Login;
         let icon = icons::icon(&account, &item, cx);
-        let trailing = if self.copied.as_ref() == Some(&item.id) {
-            Some(copied_badge(cx).into_any_element())
-        } else if selected {
-            Some(self.render_row_actions(&item, cx))
-        } else {
-            None
-        };
+        let copied = self.copied.as_ref() == Some(&item.id);
+        let actions = selected.then(|| self.render_row_actions(&item, cx));
         let clicked = item.clone();
         Some(
             div()
@@ -678,7 +678,8 @@ impl QuickPanel {
                         item.name,
                         if login { "copy password" } else { "open" }
                     ))
-                    .trailing(div().flex().items_center().gap(px(4.)).children(trailing))
+                    .copied(copied)
+                    .trailing(div().flex().items_center().gap(px(4.)).children(actions))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.copy(clicked.clone(), Part::Password, cx)
                     })),

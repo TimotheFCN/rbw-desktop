@@ -259,7 +259,7 @@ impl SshPage {
     }
 
     fn copy_line(&mut self, line: SharedString, cx: &mut Context<Self>) {
-        clipboard::copy(&Secret::new(line.to_string()), false, cx);
+        clipboard::copy_text(&line, cx);
         self.copied = true;
         self.copied_timer = cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -483,7 +483,7 @@ fn key_row(
             .size(px(26.))
             .accessibility_label(format!("Copy the fingerprint of {}", key.name))
             .on_click(move |_, window, cx| {
-                clipboard::copy(&fingerprint, false, cx);
+                clipboard::copy_text(fingerprint.expose(), cx);
                 window::toast("Fingerprint copied", window, cx);
             }),
         cx,

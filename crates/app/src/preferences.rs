@@ -7,7 +7,7 @@ use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 use rbw_desktop_core::{Error, Preferences};
 
 use crate::backend;
-use crate::clipboard::ClearAfter;
+use crate::clipboard;
 use crate::icons::Icons;
 
 pub struct Prefs {
@@ -97,7 +97,7 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut Preferences)) {
 
 /// Makes the rest of the app follow the preferences.
 fn apply(preferences: &Preferences, cx: &mut App) {
-    cx.set_global(ClearAfter(preferences.clipboard_clear));
+    clipboard::set_clear_after(preferences.clipboard_clear, cx);
     let website_icons = preferences.website_icons;
     Icons::global(cx).update(cx, |icons, cx| icons.set_enabled(website_icons, cx));
 }

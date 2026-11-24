@@ -298,7 +298,7 @@ impl Generator {
 
     fn copy(&mut self, cx: &mut Context<Self>) {
         let Some(value) = &self.value else { return };
-        clipboard::copy(value, true, cx);
+        clipboard::copy_secret(value, None, cx);
         self.copied = true;
         self.copied_timer = cx.spawn(async move |this, cx| {
             cx.background_executor()

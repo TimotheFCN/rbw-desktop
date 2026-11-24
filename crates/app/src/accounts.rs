@@ -16,6 +16,7 @@ use rbw_desktop_ui::{
 };
 
 use crate::backend::{self, Load};
+use crate::clipboard;
 use crate::window;
 
 /// How often the accounts are asked whether they locked, unlocked or synced
@@ -133,6 +134,22 @@ impl Accounts {
                 match result {
                     Ok(accounts) => {
                         if this.list.ready() != Some(&accounts) {
+                            // A secret copied from an account that locked
+                            // or signed out goes with it.
+                            let closed: Vec<AccountId> = this
+                                .list()
+                                .iter()
+                                .filter(|before| {
+                                    before.state == LockState::Unlocked
+                                        && !accounts.iter().any(|now| {
+                                            now.id == before.id && now.state == LockState::Unlocked
+                                        })
+                                })
+                                .map(|account| account.id.clone())
+                                .collect();
+                            for account in &closed {
+                                clipboard::account_closed(account, cx);
+                            }
                             this.list = Load::Ready(accounts);
                             cx.notify();
                         }

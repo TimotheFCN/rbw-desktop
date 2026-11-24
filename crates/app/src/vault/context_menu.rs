@@ -7,9 +7,7 @@ use gpui::{
     AnyElement, Context, IntoElement, ParentElement as _, Pixels, Point, Styled as _, Window, div,
     point, px,
 };
-use rbw_desktop_core::{
-    Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result, Secret,
-};
+use rbw_desktop_core::{Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result};
 use rbw_desktop_ui::{IconName, Opening, menu_item, menu_separator, popover};
 
 use super::{OpenContextMenu, VaultView};
@@ -129,7 +127,10 @@ impl VaultView {
                 cx,
                 move |backend| backend.verification_code(&account, &requested),
                 move |this, result, cx| match result {
-                    Ok(code) => this.copied(&id, &code.code, "Verification code copied", cx),
+                    Ok(code) => {
+                        clipboard::copy_secret(&code.code, Some(&this.account.id), cx);
+                        this.copied(&id, cx);
+                    }
                     Err(Error::RepromptRequired) => this.ask_password_for(id, cx),
                     Err(error) => this.show_error(&error, cx),
                 },
@@ -142,29 +143,34 @@ impl VaultView {
                 return;
             };
             match what {
-                Copy::Username => this.copied(
-                    &item.id,
-                    &Secret::new(login.username.clone()),
-                    "Username copied",
-                    cx,
-                ),
-                Copy::Password => this.copied(&item.id, &login.password, "Password copied", cx),
+                Copy::Username => {
+                    clipboard::copy_text(&login.username, cx);
+                    this.copied(&item.id, cx);
+                }
+                Copy::Password => {
+                    clipboard::copy_secret(&login.password, Some(&this.account.id), cx);
+                    this.copied(&item.id, cx);
+                }
                 Copy::Code => {}
             }
         });
     }
 
-    fn copied(
-        &mut self,
-        item: &ItemId,
-        value: &Secret,
-        message: &'static str,
-        cx: &mut Context<Self>,
-    ) {
-        clipboard::copy(value, true, cx);
+    /// Something of an item was copied: its row says so for a moment.
+    pub(super) fn copied(&mut self, item: &ItemId, cx: &mut Context<Self>) {
         recent::used(&self.account.id, item, cx);
-        self.toast
-            .show(message, |this: &mut Self| &mut this.toast, cx);
+        self.copied = Some(item.clone());
+        self.copied_timer = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(rbw_desktop_ui::motion::CONFIRMATION_HOLD)
+                .await;
+            this.update(cx, |this, cx| {
+                this.copied = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        cx.notify();
     }
 
     fn toggle_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
