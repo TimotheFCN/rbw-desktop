@@ -70,7 +70,7 @@ stop() {
 	fi
 	docker rm -f "$container" >/dev/null 2>&1 || true
 	for pidfile in "$home"/run/rbw*/pidfile; do
-		[[ -f $pidfile ]] && kill "$(cat "$pidfile")" 2>/dev/null || true
+		if [[ -f $pidfile ]]; then kill "$(cat "$pidfile")" 2>/dev/null || true; fi
 	done
 	x11_stop
 	rm -rf "$home"

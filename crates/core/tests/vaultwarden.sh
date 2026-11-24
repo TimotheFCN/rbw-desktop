@@ -24,7 +24,7 @@ cleanup() {
     docker rm -f "$name" >/dev/null 2>&1 || true
     # agents of a test that stopped halfway
     for pidfile in "$home"/run/rbw*/pidfile; do
-        [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true
+        if [ -f "$pidfile" ]; then kill "$(cat "$pidfile")" 2>/dev/null || true; fi
     done
     rm -rf "$home"
 }
