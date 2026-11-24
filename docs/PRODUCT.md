@@ -59,8 +59,13 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   Passwords and other hidden fields reveal on request. Verification codes
   count down live. Websites open in the browser.
 * Create, edit and delete items; mark favourites; move between folders.
-  New logins get a generated password by default.
-* The clipboard is cleared after a copied secret has sat there for a while.
+  New logins get a generated password by default. Everything the item view
+  shows can be edited, the less common fields behind "Add Field"; saving
+  changes only what was changed.
+* The clipboard is cleared after a copied secret has sat there for a while,
+  when the account it came from locks or signs out, and when the app quits.
+* Copy shortcuts: the password, the username and the verification code of
+  the selected login, in the vault as in the menu bar panel.
 * Sync runs in the background and on request.
 
 ### Generator

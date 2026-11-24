@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, glass, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -22,7 +22,7 @@ and offers to look again (`backend::connect`, `crate::start`).
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `outdated-rbw`, `no-icons`, `panel` and the `ssh-*` words,
+`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel` and the `ssh-*` words,
 comma-separated, reach the other states (`demo.rs` lists them); `panel`
 opens the menu bar panel alone, as a click on the item would. The demo's
 master password is `demo` and its codes `123456`; an email with `+device@`
@@ -62,6 +62,7 @@ tools/shot --record 0.9 sheet out.png             # also out-frames/NNN.png at 3
 tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
 tools/shot --theme gnome-dark ssh-other out.png   # settings states shoot the Settings window
 tools/shot panel-generator out.png                # panel states shoot the panel, opened alone
+tools/shot --keyboard --then 'key Tab Tab' vault out.png   # the keyboard's focus ring
 ```
 
 Each state starts the demo it needs. It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
@@ -82,6 +83,27 @@ as a tray would. Without a window manager GPUI knows no active window, so
 nothing that depends on it, such as the panel closing when it loses the
 keyboard, happens under Xvfb.
 
+`--keyboard` rests the pointer before the input rather than after it: any
+movement of the pointer hides the keyboard's focus ring, as focus-visible
+does on the web.
+
+## Performance
+
+```sh
+tools/perf                     # release build with frame timings, demo `big`
+tools/perf --demo no-icons     # without the website icons' requests
+tools/perf --no-build
+```
+
+`tools/perf` runs a release build with the `frame-stats` feature, which
+prints how long each window took to draw its frames every second it drew
+some, on the demo's `big` vault (5,000 more logins, whose icons take 300 ms
+each). It types, hovers and scrolls through the vault and the menu bar
+panel and sums each up: frames drawn, the slowest, and how many took over
+16 ms; and how long Return takes to copy the panel's first result. Keep
+every frame under 16 ms. A main thread so busy that it can't print its
+timings shows as no frames at all.
+
 ## The real backend, end to end
 
 ```sh
@@ -94,12 +116,15 @@ accounts with rbw-ng's `tools/scripting-check` helpers (the first with
 shared items, some protected), runs the app on rbw with a private `HOME`,
 `XDG_RUNTIME_DIR` and no `SSH_AUTH_SOCK`, and drives it with keys and
 clicks: add an account on a self-hosted server, open, copy (pasted back
-into the search to check the clipboard), create, edit, favourite, move,
-delete, a protected item, lock, unlock, a second account, switch, the menu
+into the search to check the clipboard), create, edit (the name, then
+notes on two lines, another website and a custom field), favourite, move,
+delete, a protected item, a copied password cleared by locking, lock,
+unlock, a second account, switch, the menu
 bar panel from the stand-in tray (a generated password, a login found by
 its search, the same login among the items used last, lock), closing the
 last window and opening it again from the tray, the lock timeout, the SSH
-agent set up and removed, sign out, and Quit from the tray. Each step is
+agent set up and removed with the vault staying unlocked, sign out, and
+Quit from the tray. Each step is
 checked with the `rbw` command line in the same `HOME`, or the clipboard
 with `xclip`, and screenshotted to `target/shots/e2e/NN-step.png`. A stand-in `systemctl` first on `PATH`
 records what rbw asks of systemd and refuses `start`, so nothing of this
@@ -147,24 +172,28 @@ socket in the session folder; the copy listening there brings its main
 window forward and the new one exits. The demo doesn't take part.
 
 **Accounts** are one shared entity (`accounts::Accounts`), which asks the
-backend every two seconds and emits `Refreshed` after each answer. Every
-window follows it, so a lock or sign-out anywhere shows everywhere at once;
-after changing an account, call `accounts::refresh(cx)` rather than waiting
-for the poll.
+backend every two seconds while a window shows, every 30 seconds while
+none does, and emits `Refreshed` after each answer. Every window follows
+it, so a lock or sign-out anywhere shows everywhere at once; after
+changing an account, call `accounts::refresh(cx)` rather than waiting for
+the poll, and call it when a window opens. A screen given the same
+account again redraws nothing.
 
 **The main window** (`MainWindow`) shows the screen the current account's
-state calls for and fades a new screen in over the old one
-(`motion::screen_enter`). Screens don't poll: the window passes them the
+state calls for; on a change the old screen fades out, then the new one
+in (`motion::screen_leave`, `motion::screen_replace`), so the two are never
+seen at once. Screens don't poll: the window passes them the
 account's latest state (`set_account`). A screen asks the window for things
 by emitting a `Request` (show an account, add one, sign out).
 `window::with_main_window` reaches it from another window, such as
-Settings' Add Account.
+Settings' Add Account, opening it first if it is closed.
 
-**Alerts and toasts.** Each window view keeps an `Alerts` and implements
-`HasAlerts`. `window::confirm(Confirmation { … }, window, cx, |window, cx| …)`
-asks before something that can't be undone and `window::toast` says
-something happened, from any view in any window. Both wait until the
-current update is over, so the window's own view can call them.
+**Alerts and toasts.** Each window view keeps the `Entity<Alerts>` that
+`alerts::Alerts::new(window, cx)` makes and draws it as its last child.
+`alerts::confirm(Confirmation { … }, window, cx, |window, cx| …)` asks
+before something that can't be undone and `alerts::toast` says something
+happened, from any view in the window. An alert's default button has the
+keyboard and takes Return: Cancel when confirming removes something.
 
 **Settings** (`settings/`) is its own window, opened with `secondary-,`, the
 app menu's Settings… on macOS and the sidebar's primary menu on GNOME, and
@@ -183,11 +212,14 @@ the password, then try again. The detail pane shows it in place of the
 fields, the editor above its buttons.
 
 **Website icons.** `icons::icon(account, summary, cx)` gives the icon once
-it has arrived and asks for it the first time; views observe
-`Icons::global(cx)` to redraw. Icons are decoded off the main thread, SVG at
-the size they are shown (GPUI's `img` draws an `Image` SVG at its own size,
-blurred at 2x), and kept for the session. `tile(name).icon(id, icon)`
-cross-fades from the letter.
+it has arrived; call it only while drawing the row that shows it, which is
+what asks for it. At most three are asked for at once, on threads of their
+own (`backend::request_on_thread`), so that a first fetch from the network
+never holds up what people wait for; when one arrives the views observing
+`Icons::global(cx)` redraw and the rows still on screen ask for the next.
+Icons are decoded to at most 128 pixels a side, the 400 shown last are
+kept, and SVG is never decoded. `tile(name).icon(id, icon)` cross-fades
+from the letter.
 
 **Context menus**: `popover(…).opening(Opening::At(position))`, opened on a
 right-click and from the keyboard with Shift-F10 or the Menu key (the
@@ -200,6 +232,17 @@ for its actions; long renders split into `render_*` methods in submodules
 the item detail with its live code, is an entity of its own. Declare the
 screen's actions with `actions!`, bind keys under the screen's key context in
 its `init`, and handle them with `.on_action(cx.listener(Self::method))`.
+
+**The clipboard.** `clipboard::copy_text` for what isn't secret, such as a
+username; `clipboard::copy_secret(value, account, cx)` for a secret, which
+goes after the preferences' delay, when its account locks or signs out,
+and when the app quits, unless something else was copied since.
+
+**The item editor** (`vault/editor/`) reads the item into text fields
+through `form::texts` and builds what it saves with `form::apply`, which
+writes back only the fields that changed: an item saved unchanged is the
+same item, and the save sends nothing. `form.rs` is tested without a
+display; keep any new field's round trip there.
 
 **Calling the backend.** Every `Backend` call blocks. Use
 `backend::request(cx, |backend| backend.items(&id), |this, result, cx| …)`:
@@ -216,7 +259,11 @@ on their text.
 **Sheets.** The window view keeps a `SheetSlot` and renders it as one of its
 last children; `present(entity)` shows a sheet and `dismiss()` animates it out
 and then drops it. The sheet view binds `escape` to its own Cancel action and
-calls back into the window view to dismiss (`ItemEditor::close`).
+calls back into the window view to dismiss (`ItemEditor::close`). Draw the
+slot outside the screen's key context, so that none of the screen's
+shortcuts act behind the sheet, and trap Tab with `focus_trap` on the
+sheet's root. A sheet is no taller than its window: put its fields in a
+`flex_1().min_h_0()` column that scrolls, and the buttons after it.
 
 **Popovers and menus**: `popover(id, open, &focus, label)` with
 `menu_item`s, placed inside the element it hangs from, its `Opening` saying
@@ -236,12 +283,24 @@ cancels, Return goes on.
 (`secondary!` is Command on macOS and Control elsewhere), and add
 `MenuItem::action` to `menus()` in `main.rs`.
 
-**Theme and motion.** Colours, sizes and durations come from
-`cx.theme()` and `rbw_desktop_ui::motion`; app code holds none of its own. A
-new colour goes into `Colors` for all four palettes. Motion uses the
-`motion` helpers (`fade`, `presence`, `content_enter`, `screen_enter`,
-`shake`, `spin`, the `SELECTION` spring), which follow the system's
-reduced-motion setting.
+**Theme and motion.** Colours, sizes and the durations of motion come from
+`cx.theme()` and `rbw_desktop_ui::motion`; app code holds none of its own.
+Timings of behaviour, such as how often the accounts are asked or how long
+a selection rests before its item is fetched, are named constants where
+they are used. A new colour goes into `Colors` for all four palettes; text
+that says something reads at 4.5:1 on every surface. Motion uses the
+`motion` helpers (`fade`, `presence`, `content_enter`, `refresh`,
+`screen_enter`, `screen_replace` and `screen_leave`, `shake`, `spin`, the
+`SELECTION` spring), which follow the system's reduced-motion setting and
+never lay out what is around them again.
+
+**Keyboard.** Every focusable control draws the focus ring from
+the design system (`row_focus_ring` for a row the app builds on
+gpui-base's button): outside it on macOS, inside it on GNOME. A list moved through
+with the arrow keys is one stop of Tab (`ListRow::in_focusable_list`), and
+sheets and alerts trap Tab. Copy shortcuts are the panel's in the vault
+too: Cmd/Ctrl-C the password where no text field has the keyboard,
+Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code.
 
 ## GPUI gotchas
 
@@ -289,8 +348,17 @@ reduced-motion setting.
 - A single-line `Input` takes Up and Down and does nothing with them. To
   move through a list from a search field, bind them under
   `"YourContext > Input"`, which the later binding wins at that depth.
-- `motion::content_enter` sets the top margin of what it animates; put the
-  margin on a parent.
+- Moving the pointer hides every focus ring (`focus_visible`), as on the
+  web; screenshots of focus need `tools/shot --keyboard`.
+- A key binding of a context matches before a focused button inside it
+  sees the key: a dialog binding Return confirms even from its Cancel
+  button. Let the focused button take Return instead.
+- A one-line `InputState` drops tabs and line breaks from the value it is
+  given; compare what it holds with what it held, not with the item.
+- A `TextareaState` with `auto_grow` doesn't take Tab, which moves the
+  focus on; Return makes a new line and still emits `PressEnter`.
+- Children of a column that scrolls shrink before it scrolls; give them
+  `flex_none()`.
 - A window's actions need something in it focused: without a focused
   element, keys reach only global handlers. But a click anywhere inside an
   element that tracks a focus handle gives it the keyboard, so a window view
