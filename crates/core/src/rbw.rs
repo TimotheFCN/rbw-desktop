@@ -225,6 +225,29 @@ impl Backend for RbwBackend {
         self.run_with_secret(account, &args, password, Wait::Network)
     }
 
+    fn register_device(
+        &self,
+        account: &AccountId,
+        client_id: &str,
+        client_secret: &Secret,
+    ) -> Result<()> {
+        let env = [
+            ("RBW_CLIENT_ID", client_id),
+            ("RBW_CLIENT_SECRET", client_secret.expose()),
+        ];
+        match self.rbw.run_with_env(
+            Some(account),
+            &["register", "--api-key-env"],
+            None,
+            &env,
+            Wait::Network,
+        ) {
+            Ok(_) => Ok(()),
+            Err(failure) if failure.error == Error::WrongPassword => Err(Error::WrongApiKey),
+            Err(failure) => Err(failure.error),
+        }
+    }
+
     fn send_email_code(&self, account: &AccountId, password: &Secret) -> Result<()> {
         let args = ["login", "--password-stdin", "--method", "1", "--code", ""];
         match self.rbw.run(

@@ -43,6 +43,8 @@ struct FakeAccount {
     state: LockState,
     // set once the account was unlocked with its password
     touch_id_ready: bool,
+    // set once register_device took the API key
+    registered: bool,
     last_use: Instant,
     last_sync: Option<SystemTime>,
     settings: AccountSettings,
@@ -61,8 +63,11 @@ impl FakeBackend {
     pub const PASSWORD: &str = "demo";
     /// The two-step and new device code the demo accepts. Signing in asks
     /// for a two-step code, or a new device code when the email has
-    /// `+device@`.
+    /// `+device@`, or to register the device first when it has `+apikey@`.
     pub const CODE: &str = "123456";
+    /// The API key that registers the device of every demo account.
+    pub const API_KEY_ID: &str = "user.d3m0";
+    pub const API_KEY_SECRET: &str = "demo-secret";
 
     /// Two demo accounts, both locked: a personal one on bitwarden.com
     /// with about forty items, and a work one on a self-hosted server.
@@ -76,6 +81,7 @@ impl FakeBackend {
                 server: demo.server,
                 state: LockState::Locked,
                 touch_id_ready: false,
+                registered: true,
                 last_use: Instant::now(),
                 last_sync: Some(SystemTime::now() - Duration::from_secs(600)),
                 settings: AccountSettings {
@@ -286,7 +292,11 @@ impl FakeAccount {
         if password.expose() != FakeBackend::PASSWORD {
             return Err(Error::WrongPassword);
         }
-        let new_device = self.email.contains("+device@");
+        if self.email.contains("+apikey@") && !self.registered {
+            return Err(Error::RegistrationRequired);
+        }
+        // registering makes the device known
+        let new_device = self.email.contains("+device@") && !self.registered;
         match code {
             None if new_device => return Err(Error::NewDeviceCodeRequired),
             None => {
@@ -454,6 +464,7 @@ impl Backend for FakeBackend {
             server: server.clone(),
             state: LockState::SignedOut,
             touch_id_ready: false,
+            registered: false,
             last_use: Instant::now(),
             last_sync: None,
             settings: AccountSettings {
@@ -475,6 +486,24 @@ impl Backend for FakeBackend {
         code: Option<&LoginCode>,
     ) -> Result<()> {
         self.online()?.account_mut(account)?.sign_in(password, code)
+    }
+
+    fn register_device(
+        &self,
+        account: &AccountId,
+        client_id: &str,
+        client_secret: &Secret,
+    ) -> Result<()> {
+        let mut state = self.online()?;
+        let account = state.account_mut(account)?;
+        if account.state != LockState::SignedOut {
+            return Ok(());
+        }
+        if client_id.trim() != Self::API_KEY_ID || client_secret.expose() != Self::API_KEY_SECRET {
+            return Err(Error::WrongApiKey);
+        }
+        account.registered = true;
+        Ok(())
     }
 
     fn send_email_code(&self, account: &AccountId, password: &Secret) -> Result<()> {
@@ -900,6 +929,28 @@ mod tests {
             fake.add_account(&Server::BitwardenEu, "SAM@example.com"),
             Err(Error::AccountExists(id.clone()))
         );
+
+        let registering = fake
+            .add_account(&Server::BitwardenCom, "sam+apikey@example.com")
+            .unwrap();
+        assert_eq!(
+            fake.sign_in(&registering, &password, None),
+            Err(Error::RegistrationRequired)
+        );
+        assert_eq!(
+            fake.register_device(&registering, FakeBackend::API_KEY_ID, &"nope".into()),
+            Err(Error::WrongApiKey)
+        );
+        fake.register_device(
+            &registering,
+            FakeBackend::API_KEY_ID,
+            &FakeBackend::API_KEY_SECRET.into(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fake.sign_in(&registering, &password, None),
+            Err(Error::TwoStepRequired { .. })
+        ));
         fake.remove_account(&id).unwrap();
         assert_eq!(fake.account(&id), Err(Error::AccountNotFound));
     }

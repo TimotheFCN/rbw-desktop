@@ -14,7 +14,7 @@ main thread. Errors are `Error` values, never text to parse.
 
 | Area | Methods |
 | --- | --- |
-| Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `remove_account` |
+| Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `register_device`, `remove_account` |
 | Locking | `unlock`, `unlock_with_touch_id`, `lock` |
 | Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code` |
 | Generator | `generate` |
@@ -24,7 +24,16 @@ main thread. Errors are `Error` values, never text to parse.
 
 An account is an rbw profile (`RBW_PROFILE`), shared with the command line.
 Adding one creates a signed-out profile; `sign_in` then fails with
-`TwoStepRequired` or `NewDeviceCodeRequired` until it gets the code. The first
+`TwoStepRequired` or `NewDeviceCodeRequired` until it gets the code.
+
+It fails with `RegistrationRequired` when the server wants the device
+registered with the account's personal API key first: Bitwarden servers
+from before mid-2025 did so for an unknown device by asking for a captcha,
+which rbw can't show. Ask for the key (the web vault shows it under Settings,
+Security, Keys), pass it to `register_device` and call `sign_in` again. On
+current servers, which email a new device code instead, registering first
+also spares that code. rbw uses the key for that one request and keeps
+nothing of it. The first
 account takes the default profile, the next ones a profile named after the
 email.
 
@@ -60,8 +69,9 @@ Each call runs `rbw` once, with `RBW_PROFILE` set for the account,
 `RBW_NONINTERACTIVE=1` so that it never prompts, and `RBW_ERROR_FORMAT=json`
 so that its errors come with a code. The vault stays unlocked in the profile's
 `rbw-agent` between calls. Passwords and items with secrets go to `rbw` on
-stdin, never in arguments or the environment, and nothing is written to disk
-or logged.
+stdin, never in arguments, and nothing is written to disk or logged. The API
+key goes in the environment of the one `rbw register` process, which only
+the same user can read, since `rbw` reads it from there.
 
 | Method | Command |
 | --- | --- |
@@ -70,6 +80,7 @@ or logged.
 | `add_account` | `rbw config set email` and `base_url` |
 | `sign_in` | `rbw login --password-stdin [--method ID] [--code CODE]` |
 | `send_email_code` | `rbw login --password-stdin --method 1 --code ""` |
+| `register_device` | `rbw register --api-key-env`, with the key in `RBW_CLIENT_ID` and `RBW_CLIENT_SECRET` |
 | `remove_account` | `rbw purge --all` |
 | `unlock`, `unlock_with_touch_id`, `lock` | `rbw unlock --password-stdin`, `rbw unlock --touch-id`, `rbw lock` |
 | `sync` | `rbw sync` |
@@ -99,8 +110,9 @@ JSON mapping and error codes, with no server.
 
 `RBW_NG=path/to/rbw-ng crates/core/tests/vaultwarden.sh` runs the real backend
 against Vaultwarden in Docker. It builds rbw-ng, starts a server on
-127.0.0.1, makes two accounts (one with two-step login, the other with an
-organization whose login asks for the master password again) with rbw-ng's
-`tools/scripting-check`, runs the tests with a private `HOME`, and removes the
+127.0.0.1, makes three accounts (one with an organization whose login asks for the
+master password again, one with two-step login, which the test completes
+with an authenticator code, and one that registers with its API key) with
+rbw-ng's `tools/scripting-check`, runs the tests with a private `HOME`, and removes the
 server and the `HOME` afterwards. It needs Docker, Python 3.10+ and the
 `cryptography` package.

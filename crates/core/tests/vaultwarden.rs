@@ -270,8 +270,55 @@ fn against_vaultwarden() {
         backend.sign_in(&other, &password, Some(&wrong)),
         Err(Error::WrongCode)
     );
-    assert_eq!(backend.accounts().unwrap().len(), 2);
-    backend.remove_account(&other).unwrap();
-    backend.remove_account(&id).unwrap();
+    // the first account's vault computes the codes: a login with the
+    // authenticator's secret. The server refuses a code twice, and setting
+    // up the authenticator used the current one, so wait for the next.
+    let mut authenticator = ItemData::new(ItemKind::Login);
+    authenticator.name = "Authenticator".into();
+    authenticator.content = ItemContent::Login(Login {
+        totp: env("RBW_DESKTOP_TEST_TOTP_SECRET").into(),
+        ..Login::default()
+    });
+    let authenticator = backend.create_item(&id, &authenticator).unwrap();
+    let current = backend.verification_code(&id, &authenticator.id).unwrap();
+    if let Ok(left) = current.expires_at.duration_since(SystemTime::now()) {
+        std::thread::sleep(left + Duration::from_secs(1));
+    }
+    let code = backend.verification_code(&id, &authenticator.id).unwrap();
+    assert_ne!(code.code, current.code);
+    let right = LoginCode::TwoStep {
+        method: TwoStepMethod::Authenticator,
+        code: code.code.expose().to_string(),
+    };
+    backend.sign_in(&other, &password, Some(&right)).unwrap();
+    let signed_in = backend.account(&other).unwrap();
+    assert_eq!(signed_in.state, LockState::Unlocked);
+    assert!(backend.items(&other).unwrap().is_empty());
+
+    // an account that registers the device with its API key
+    let api_key_email = env("RBW_DESKTOP_TEST_API_KEY_EMAIL");
+    let registering = backend.add_account(&server, &api_key_email).unwrap();
+    let client_id = env("RBW_DESKTOP_TEST_CLIENT_ID");
+    assert_eq!(
+        backend.register_device(&registering, &client_id, &"wrong".into()),
+        Err(Error::WrongApiKey)
+    );
+    backend
+        .register_device(
+            &registering,
+            &client_id,
+            &env("RBW_DESKTOP_TEST_CLIENT_SECRET").into(),
+        )
+        .unwrap();
+    backend.sign_in(&registering, &password, None).unwrap();
+    assert_eq!(
+        backend.account(&registering).unwrap().state,
+        LockState::Unlocked
+    );
+
+    assert_eq!(backend.accounts().unwrap().len(), 3);
+    for account in [registering, other, id] {
+        backend.remove_account(&account).unwrap();
+    }
     assert!(backend.accounts().unwrap().is_empty());
 }

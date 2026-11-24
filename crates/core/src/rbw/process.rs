@@ -71,9 +71,23 @@ impl Rbw {
         stdin: Option<&[u8]>,
         wait: Wait,
     ) -> Result<Zeroizing<Vec<u8>>, Failure> {
+        self.run_with_env(profile, args, stdin, &[], wait)
+    }
+
+    /// Runs `rbw` with more variables in its environment, for secrets that
+    /// it reads from there.
+    pub fn run_with_env<S: AsRef<OsStr>>(
+        &self,
+        profile: Option<&AccountId>,
+        args: &[S],
+        stdin: Option<&[u8]>,
+        env: &[(&str, &str)],
+        wait: Wait,
+    ) -> Result<Zeroizing<Vec<u8>>, Failure> {
         let mut command = Command::new(&self.path);
         command
             .args(args)
+            .envs(env.iter().copied())
             .env("RBW_NONINTERACTIVE", "1")
             .env("RBW_ERROR_FORMAT", "json")
             .env_remove("RBW_SESSION")
@@ -222,6 +236,7 @@ fn error_from(error: JsonError) -> Error {
                 .collect(),
         },
         "new_device_code_required" => Error::NewDeviceCodeRequired,
+        "registration_required" => Error::RegistrationRequired,
         "incorrect_code" => Error::WrongCode,
         "two_step_unsupported" => Error::TwoStepUnsupported,
         "reprompt_required" => Error::RepromptRequired,
@@ -270,6 +285,10 @@ mod tests {
         assert_eq!(
             error_from(r#"{"code":"server","status":500,"message":"rbw sync: 500"}"#),
             Error::Server("rbw sync: 500".into())
+        );
+        assert_eq!(
+            error_from(r#"{"code":"registration_required","message":"m"}"#),
+            Error::RegistrationRequired
         );
         assert_eq!(
             error_from(r#"{"code":"reprompt_required","message":"m"}"#),

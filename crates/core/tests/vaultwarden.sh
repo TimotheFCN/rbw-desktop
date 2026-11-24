@@ -4,12 +4,12 @@
 #
 #     RBW_NG=~/src/rbw-ng crates/core/tests/vaultwarden.sh
 #
-# It starts a throwaway server on 127.0.0.1, makes the accounts and their
-# shared items with the helpers of rbw-ng's tools/scripting-check (which
-# needs Python 3.10+ and the `cryptography` package), and runs the tests
-# with a private HOME, so
-# that no profile of yours is touched. The server and the HOME go away at
-# the end.
+# It starts a throwaway server on 127.0.0.1, makes three accounts (one with
+# two-step login, one with an API key), and items shared through an
+# organization, with the helpers of rbw-ng's tools/scripting-check (which
+# needs Python 3.10+ and the `cryptography` package). It runs the tests with
+# a private HOME, so that no profile of yours is touched. The server and the
+# HOME go away at the end.
 set -eu
 
 : "${RBW_NG:?set RBW_NG to an rbw-ng checkout}"
@@ -50,10 +50,13 @@ password="correct horse battery staple"
 suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 email="core-$suffix@example.com"
 two_step_email="core-2fa-$suffix@example.com"
-PYTHONDONTWRITEBYTECODE=1 python3 - "$RBW_NG/tools/scripting-check" \
-    "$server" "$email" "$two_step_email" "$password" <<'PY'
+api_key_email="core-key-$suffix@example.com"
+# the two-step account's authenticator secret, and the third account's API
+# key, one per line
+setup=$(PYTHONDONTWRITEBYTECODE=1 python3 - "$RBW_NG/tools/scripting-check" \
+    "$server" "$email" "$two_step_email" "$api_key_email" "$password" <<'PY'
 import importlib.machinery, importlib.util, sys
-path, server, email, two_step_email, password = sys.argv[1:]
+path, server, email, two_step_email, api_key_email, password = sys.argv[1:]
 loader = importlib.machinery.SourceFileLoader("scripting_check", path)
 check = importlib.util.module_from_spec(importlib.util.spec_from_loader("scripting_check", loader))
 loader.exec_module(check)
@@ -61,8 +64,12 @@ public_key = check.register(server, email, password)
 # a shared login, and one that asks for the master password again
 check.share_login(server, email, password, public_key)
 check.register(server, two_step_email, password)
-check.enable_authenticator(server, two_step_email, password)
+print(check.enable_authenticator(server, two_step_email, password))
+check.register(server, api_key_email, password)
+print("\n".join(check.api_key(server, api_key_email, password)))
 PY
+)
+line() { printf '%s\n' "$setup" | sed -n "$1p"; }
 
 mkdir -m 700 "$home/run"
 cd "$workspace"
@@ -74,5 +81,9 @@ CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rust
     RBW_DESKTOP_RBW="$RBW_NG/target/debug/rbw" \
     RBW_DESKTOP_TEST_SERVER="$server" RBW_DESKTOP_TEST_EMAIL="$email" \
     RBW_DESKTOP_TEST_TWO_STEP_EMAIL="$two_step_email" \
+    RBW_DESKTOP_TEST_TOTP_SECRET="$(line 1)" \
+    RBW_DESKTOP_TEST_API_KEY_EMAIL="$api_key_email" \
+    RBW_DESKTOP_TEST_CLIENT_ID="$(line 2)" \
+    RBW_DESKTOP_TEST_CLIENT_SECRET="$(line 3)" \
     RBW_DESKTOP_TEST_PASSWORD="$password" \
     cargo test -p rbw-desktop-core --test vaultwarden -- --ignored

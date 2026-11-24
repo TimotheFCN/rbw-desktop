@@ -48,12 +48,28 @@ pub trait Backend: Send + Sync {
 
     /// Signs in with the master password, which also unlocks. Without a
     /// code it can fail with [`Error::TwoStepRequired`] or
-    /// [`Error::NewDeviceCodeRequired`]; call it again with the code.
+    /// [`Error::NewDeviceCodeRequired`]; call it again with the code. It
+    /// fails with [`Error::RegistrationRequired`] when the server wants
+    /// [`Backend::register_device`] first.
     fn sign_in(
         &self,
         account: &AccountId,
         password: &Secret,
         code: Option<&LoginCode>,
+    ) -> Result<()>;
+
+    /// Registers this computer with the server for a signed-out account,
+    /// with the account's personal API key: its client id (`user.` and a
+    /// number) and secret, which the web vault shows under Settings,
+    /// Security, Keys. Some servers ask for it before they accept the master
+    /// password ([`Error::RegistrationRequired`]); on bitwarden.com it also
+    /// spares the emailed new device code. Then call
+    /// [`Backend::sign_in`] again. Fails with [`Error::WrongApiKey`].
+    fn register_device(
+        &self,
+        account: &AccountId,
+        client_id: &str,
+        client_secret: &Secret,
     ) -> Result<()>;
 
     /// Asks the server to email a two-step login code, for an account that

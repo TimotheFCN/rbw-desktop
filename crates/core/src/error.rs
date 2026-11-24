@@ -16,6 +16,14 @@ pub enum Error {
     NewDeviceCodeRequired,
     #[error("the code is incorrect")]
     WrongCode,
+    /// The server wants this computer registered with the account's
+    /// personal API key before it accepts the master password: ask for the
+    /// key, pass it to [`Backend::register_device`](crate::Backend::register_device)
+    /// and sign in again.
+    #[error("the server wants this device registered with the account's API key")]
+    RegistrationRequired,
+    #[error("the API key is incorrect")]
+    WrongApiKey,
     #[error("none of the account's two-step login methods are supported")]
     TwoStepUnsupported,
     #[error("rbw would have to ask for the master password")]
