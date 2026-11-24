@@ -123,7 +123,10 @@ websites, as SVG.
 the account as it is: the `rbw-agent` that runs keeps it unlocked, and
 serves the SSH keys, until it stops, and the service takes over then.
 Removing the service does too on Linux; on macOS it stops the service's
-agent, which locks the account.
+agent, which locks the account. On macOS, installing fails with
+`AppNotInstalled` while the app runs from its disk image or from the
+temporary copy macOS makes of an app opened where it was downloaded: the
+service would run the bundled `rbw-agent` from a path that goes away.
 
 The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`

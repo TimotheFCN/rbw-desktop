@@ -264,6 +264,9 @@ impl SshPage {
                         Error::SshAgentInstalledForOther(_) => {
                             "Another account's SSH agent is set up. Remove it first."
                         }
+                        Error::AppNotInstalled => {
+                            "Move the app to the Applications folder first, then open it from there."
+                        }
                         ref error => describe(error),
                     });
                     this.refresh(cx);

@@ -53,6 +53,10 @@ pub enum Error {
     SshAgentInstalledForOther(AccountId),
     #[error("the SSH agent service isn't supported on this system")]
     SshAgentUnsupported,
+    /// The app runs from where it can't stay, such as its disk image, so a
+    /// service of the rbw-agent it bundles would lose its program.
+    #[error("the app runs from its disk image or a temporary copy; move it to Applications first")]
+    AppNotInstalled,
     #[error("the server can't be reached")]
     Offline,
     /// The server's address leads to something that isn't a Bitwarden

@@ -808,6 +808,9 @@ impl Backend for RbwBackend {
     }
 
     fn install_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
+        if self.rbw.agent_is_transient() {
+            return Err(Error::AppNotInstalled);
+        }
         match self.ssh_agent(account)?.service {
             SshService::Unsupported => return Err(Error::SshAgentUnsupported),
             SshService::InstalledForOther(other) => {

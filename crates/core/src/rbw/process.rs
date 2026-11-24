@@ -84,6 +84,15 @@ impl Rbw {
         enough(rbw, version)
     }
 
+    /// Whether the agent is somewhere that goes away: in an app on a disk
+    /// image, or one that macOS runs from a temporary copy because it was
+    /// opened where it was downloaded (App Translocation). A service set up
+    /// with it would run nothing once the image is ejected or the Mac
+    /// restarts.
+    pub fn agent_is_transient(&self) -> bool {
+        cfg!(target_os = "macos") && self.agent.as_deref().is_some_and(transient)
+    }
+
     fn at(path: PathBuf) -> Self {
         let agent = Some(path.with_file_name("rbw-agent")).filter(|agent| agent.is_file());
         Self { path, agent }
@@ -264,6 +273,13 @@ fn enough(rbw: Rbw, version: Version) -> Result<Rbw> {
             required: REQUIRED_RBW.to_string(),
         })
     }
+}
+
+fn transient(path: &std::path::Path) -> bool {
+    path.starts_with("/Volumes")
+        || path
+            .components()
+            .any(|part| part.as_os_str() == "AppTranslocation")
 }
 
 /// An `rbw --version`.
@@ -508,6 +524,17 @@ mod tests {
             })
         );
         assert_eq!(chosen(None, None, "", ""), Err(Error::RbwNotFound));
+    }
+
+    #[test]
+    fn an_agent_on_a_disk_image_or_translocated_is_transient() {
+        let app = "rbw Desktop.app/Contents/Helpers/rbw-agent";
+        assert!(transient(&PathBuf::from("/Volumes/rbw Desktop").join(app)));
+        assert!(transient(
+            &PathBuf::from("/private/var/folders/x/T/AppTranslocation/1A2B/d").join(app)
+        ));
+        assert!(!transient(&PathBuf::from("/Applications").join(app)));
+        assert!(!transient(&PathBuf::from("/opt/homebrew/bin/rbw-agent")));
     }
 
     #[test]
