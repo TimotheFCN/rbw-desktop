@@ -1,34 +1,36 @@
 //! The sheet that creates an item or edits one. New logins get a generated
 //! password.
 
+use gpui::base::Button as BaseButton;
 use gpui::base::input::{Input, InputEvent, InputState};
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, actions, anchored,
-    deferred, div, prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
+    Styled as _, Task, WeakEntity, Window, actions, div, prelude::FluentBuilder as _, px, relative,
 };
 use rbw_desktop_core::{
     AccountId, Card, Folder, FolderId, GeneratorOptions, Identity, Item, ItemContent, ItemData,
     ItemId, ItemKind, Secret, Website,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Material, button, card, form_row, icon,
-    segmented_control, surface, switch, toggle_row,
+    ActiveTheme as _, ButtonStyle, IconName, Popover, button, card, form_row, icon, menu_item,
+    menu_separator, password_text, popover, segmented_control, switch, toggle_row,
 };
 
 use super::VaultView;
 use crate::backend;
 use crate::secondary;
 
-actions!(item_editor, [Cancel, Save]);
+actions!(item_editor, [Cancel, Save, CancelNewFolder]);
 
 const CONTEXT: &str = "ItemEditor";
+const NEW_FOLDER_CONTEXT: &str = "NewFolder";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, Some(CONTEXT)),
         KeyBinding::new(secondary!("enter"), Save, Some(CONTEXT)),
+        KeyBinding::new("escape", CancelNewFolder, Some(NEW_FOLDER_CONTEXT)),
     ]);
 }
 
@@ -65,6 +67,9 @@ pub struct ItemEditor {
     folders: Vec<Folder>,
     folder: Option<FolderId>,
     folder_menu_open: bool,
+    folder_menu_focus: FocusHandle,
+    /// The name of a folder being created from the folder menu.
+    new_folder: Option<Entity<InputState>>,
     favorite: bool,
     /// Whether the password is still the generated one.
     generated: bool,
@@ -185,6 +190,8 @@ impl ItemEditor {
             folders,
             folder: None,
             folder_menu_open: false,
+            folder_menu_focus: cx.focus_handle(),
+            new_folder: None,
             favorite: false,
             generated: false,
             problem: None,
@@ -216,6 +223,9 @@ impl ItemEditor {
             InputEvent::Change if *input == self.inputs.name => {
                 self.problem = None;
                 cx.notify();
+            }
+            InputEvent::PressEnter { .. } if Some(input) == self.new_folder.as_ref() => {
+                self.create_folder(window, cx)
             }
             InputEvent::PressEnter { .. } => self.save(&Save, window, cx),
             InputEvent::Change | InputEvent::Focus | InputEvent::Blur => {}
@@ -361,7 +371,40 @@ impl ItemEditor {
         form_row(label, div().flex_1().child(Input::new(input)), cx)
     }
 
-    fn render_fields(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The password, its digits and symbols coloured while it isn't being
+    /// edited. The field stays underneath, so it still takes the focus and
+    /// the click.
+    fn render_password(&self, mono: SharedString, window: &Window, cx: &App) -> AnyElement {
+        let input = &self.inputs.password;
+        let editing = input.read(cx).focus_handle(cx).is_focused(window);
+        let value = input.read(cx).value();
+        div()
+            .flex_1()
+            .min_w_0()
+            .relative()
+            .font_family(mono)
+            .text_size(px(12.))
+            .child(
+                div()
+                    .when(!editing, |d| d.text_color(gpui::transparent_black()))
+                    .child(Input::new(input)),
+            )
+            .when(!editing, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(password_text(&value, cx)),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_fields(&self, window: &Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let inputs = &self.inputs;
         let mut rows = vec![self.field("Name", &inputs.name, cx)];
         match self.kind {
@@ -375,14 +418,7 @@ impl ItemEditor {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_family(mono)
-                                .text_size(px(12.))
-                                .child(Input::new(&inputs.password)),
-                        )
+                        .child(self.render_password(mono, window, cx))
                         .child(
                             button("generate")
                                 .icon(IconName::Refresh)
@@ -415,49 +451,153 @@ impl ItemEditor {
         rows
     }
 
-    fn render_folder_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let hover = theme.colors.hover;
-        let options = std::iter::once((None, "None".to_string())).chain(
+    fn render_folder_menu(&self, cx: &mut Context<Self>) -> Popover {
+        let choices = std::iter::once((None, "None".to_string())).chain(
             self.folders
                 .iter()
                 .map(|folder| (Some(folder.id.clone()), folder.name.clone())),
         );
-        deferred(
-            anchored().snap_to_window_with_margin(px(8.)).child(
-                div().mt(px(4.)).occlude().child(
-                    surface("folder-menu", Material::Popover)
-                        .min_w(px(180.))
-                        .p(px(5.))
-                        .rounded(px(10.))
-                        .children(options.enumerate().map(|(index, (id, name))| {
-                            let selected = id == self.folder;
-                            div()
-                                .id(index)
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .h(px(26.))
-                                .px(px(8.))
-                                .rounded(px(6.))
-                                .hover(move |s| s.bg(hover))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.folder = id.clone();
-                                    this.folder_menu_open = false;
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .w(px(15.))
-                                        .when(selected, |d| d.child(icon(IconName::Check))),
-                                )
-                                .child(name)
-                        })),
-                ),
-            ),
+        let this = cx.entity().downgrade();
+        popover(
+            "folder-menu",
+            self.folder_menu_open,
+            &self.folder_menu_focus,
+            "Folder",
         )
-        .with_priority(1)
-        .into_any_element()
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_folder_menu(window, cx))
+                .ok();
+        })
+        .children(choices.enumerate().map(|(index, (id, name))| {
+            let checked = id == self.folder;
+            menu_item(("folder", index), name)
+                .checked(checked)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.folder = id.clone();
+                    this.close_folder_menu(window, cx);
+                }))
+        }))
+        .child(menu_separator(cx))
+        .child(
+            menu_item("new-folder", "New Folder…")
+                .on_click(cx.listener(|this, _, window, cx| this.start_new_folder(window, cx))),
+        )
+    }
+
+    fn toggle_folder_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.folder_menu_open {
+            self.close_folder_menu(window, cx);
+        } else {
+            self.folder_menu_open = true;
+            window.focus(&self.folder_menu_focus, cx);
+            cx.notify();
+        }
+    }
+
+    fn close_folder_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.folder_menu_open = false;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.folder_menu_open = false;
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
+        cx.subscribe_in(&input, window, Self::on_input).detach();
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.new_folder = Some(input);
+        cx.notify();
+    }
+
+    fn cancel_new_folder(
+        &mut self,
+        _: &CancelNewFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_folder = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = &self.new_folder else {
+            return;
+        };
+        let name = self.value(input, cx);
+        if name.is_empty() {
+            return;
+        }
+        let account = self.account.clone();
+        self.task = backend::request_in(
+            window,
+            cx,
+            move |backend| backend.create_folder(&account, &name),
+            |this, result, window, cx| {
+                match result {
+                    Ok(folder) => {
+                        this.folder = Some(folder.id.clone());
+                        this.folders.push(folder);
+                        this.new_folder = None;
+                        window.focus(&this.focus_handle, cx);
+                        // The sidebar lists the new folder at once.
+                        this.vault.update(cx, |vault, cx| vault.reload(cx)).ok();
+                    }
+                    Err(error) => this.problem = Some(backend::describe(&error)),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn render_folder_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let faint = cx.theme().colors.text_tertiary;
+        if let Some(input) = &self.new_folder {
+            return div()
+                .key_context(NEW_FOLDER_CONTEXT)
+                .on_action(cx.listener(Self::cancel_new_folder))
+                .child(form_row(
+                    "Folder",
+                    div().flex_1().child(Input::new(input)),
+                    cx,
+                ))
+                .into_any_element();
+        }
+        let name = self.folder_name();
+        let hover = cx.theme().colors.hover;
+        BaseButton::new("folder")
+            .accessibility_label(format!("Folder, {name}"))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_folder_menu(window, cx)))
+            .w_full()
+            .justify_start()
+            .hover(move |s| s.bg(hover))
+            .child(form_row(
+                "Folder",
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .line_height(relative(1.35))
+                    // The menu opens under the value, like a pop-up button's.
+                    .child(
+                        div()
+                            .flex_1()
+                            .relative()
+                            .child(name)
+                            .child(self.render_folder_menu(cx)),
+                    )
+                    .child(icon(IconName::ChevronsUpDown).text_color(faint)),
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = &self.editing else { return };
+        let (id, name) = (item.id.clone(), item.data.name.clone());
+        self.vault
+            .update(cx, |vault, cx| vault.delete_item(id, name, window, cx))
+            .ok();
     }
 }
 
@@ -468,15 +608,10 @@ impl Focusable for ItemEditor {
 }
 
 impl Render for ItemEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = &theme.colors;
-        let (dim, faint, success, danger) = (
-            colors.text_secondary,
-            colors.text_tertiary,
-            colors.success,
-            colors.danger,
-        );
+        let (dim, success, danger) = (colors.text_secondary, colors.success, colors.danger);
         let title = if self.editing.is_some() {
             "Edit Item"
         } else {
@@ -486,26 +621,9 @@ impl Render for ItemEditor {
             .iter()
             .position(|(kind, _)| *kind == self.kind)
             .unwrap_or_default();
-        let fields = self.render_fields(cx);
-        let menu = self.folder_menu_open.then(|| self.render_folder_menu(cx));
-        let folder_row = div()
-            .id("folder")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.folder_menu_open = !this.folder_menu_open;
-                cx.notify();
-            }))
-            .child(form_row(
-                "Folder",
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    // The menu opens under the value, like a pop-up button's.
-                    .child(div().flex_1().child(self.folder_name()).children(menu))
-                    .child(icon(IconName::ChevronsUpDown).text_color(faint)),
-                cx,
-            ));
-
+        let fields = self.render_fields(window, cx);
+        let folder_row = self.render_folder_row(cx);
+        let deletable = self.editing.as_ref().is_some_and(|item| item.editable);
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -574,6 +692,13 @@ impl Render for ItemEditor {
                     .items_center()
                     .gap(px(8.))
                     .mt(px(14.))
+                    .when(deletable, |d| {
+                        d.child(
+                            button("delete").label("Delete").on_click(
+                                cx.listener(|this, _, window, cx| this.delete(window, cx)),
+                            ),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()

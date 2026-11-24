@@ -13,7 +13,7 @@ use rbw_desktop_core::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, button, card, chrome, field_row, icon, motion,
-    progress_ring, tile,
+    password_text, progress_ring, tile,
 };
 
 use super::{EditItem, VaultView};
@@ -40,6 +40,9 @@ pub struct ItemDetail {
 enum Shown {
     Text,
     Hidden,
+    /// Hidden until revealed, then shown with its digits and symbols
+    /// coloured.
+    Password,
     Link,
     Mono,
 }
@@ -263,9 +266,9 @@ impl ItemDetail {
         let theme = cx.theme();
         let colors = &theme.colors;
         let revealed = self.revealed.contains(&field.key);
-        let hidden = field.shown == Shown::Hidden;
+        let hidden = matches!(field.shown, Shown::Hidden | Shown::Password);
         let value: AnyElement = match field.shown {
-            Shown::Hidden if !revealed => div()
+            Shown::Hidden | Shown::Password if !revealed => div()
                 .text_size(px(15.))
                 .line_height(px(18.))
                 .child("•".repeat(field.value.expose().chars().count().clamp(8, 12)))
@@ -274,6 +277,12 @@ impl ItemDetail {
                 .truncate()
                 .text_color(colors.accent_text)
                 .child(field.value.expose().to_string())
+                .into_any_element(),
+            Shown::Password => div()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(12.))
+                .truncate()
+                .child(password_text(field.value.expose(), cx))
                 .into_any_element(),
             Shown::Mono | Shown::Hidden => div()
                 .font_family(theme.mono_font_family.clone())
@@ -401,7 +410,7 @@ fn cards(item: &Item) -> Vec<Vec<Field>> {
                     "password",
                     "Password",
                     login.password.clone(),
-                    Shown::Hidden,
+                    Shown::Password,
                 ),
             ]));
             cards.push(
