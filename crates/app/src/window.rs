@@ -176,6 +176,8 @@ impl MainWindow {
 
     fn follow_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mention_outdated_rbw(window, cx);
+        // They may have changed while no window asked for them.
+        accounts::refresh(cx);
         let accounts = Accounts::global(cx);
         self._accounts_events = Some(cx.subscribe_in(
             &accounts,

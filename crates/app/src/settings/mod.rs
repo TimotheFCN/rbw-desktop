@@ -155,11 +155,15 @@ impl SettingsWindow {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // They may have changed while no window asked for them.
+        crate::accounts::refresh(cx);
+        let ssh = cx.new(|cx| SshPage::new(store.clone(), window, cx));
+        ssh.update(cx, |ssh, cx| ssh.set_shown(page == Page::SshAgent, cx));
         Self {
             page,
             general: cx.new(|cx| GeneralPage::new(store.clone(), cx)),
-            accounts: cx.new(|cx| AccountsPage::new(store.clone(), cx)),
-            ssh: cx.new(|cx| SshPage::new(store, window, cx)),
+            accounts: cx.new(|cx| AccountsPage::new(store, cx)),
+            ssh,
             about: cx.new(AboutPage::new),
             alerts: Alerts::new(),
             focus,
@@ -169,9 +173,8 @@ impl SettingsWindow {
     fn show(&mut self, page: Page, _: &mut Window, cx: &mut Context<Self>) {
         if self.page != page {
             self.page = page;
-            if page == Page::SshAgent {
-                self.ssh.update(cx, |ssh, cx| ssh.refresh(cx));
-            }
+            self.ssh
+                .update(cx, |ssh, cx| ssh.set_shown(page == Page::SshAgent, cx));
             cx.notify();
         }
     }

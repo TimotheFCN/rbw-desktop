@@ -260,6 +260,7 @@ impl QuickPanel {
             _subscriptions: subscriptions,
         };
         window.focus(&this.focus, cx);
+        accounts::refresh(cx);
         this.follow_accounts(window, cx);
         this
     }

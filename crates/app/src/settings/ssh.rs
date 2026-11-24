@@ -46,6 +46,8 @@ pub struct SshPage {
     /// Whether the account shown was chosen by the person, rather than
     /// guessed: a guess follows the account the agent is set up for.
     chosen: bool,
+    /// Whether Settings shows this page, which only then asks the agent.
+    shown: bool,
     load_task: Task<()>,
     task: Task<()>,
     copied_timer: Task<()>,
@@ -66,7 +68,9 @@ impl SshPage {
             // Unlocking shows the keys, locking hides them.
             cx.observe(&accounts, |this, _, cx| {
                 this.follow_accounts(cx);
-                this.refresh(cx);
+                if this.shown {
+                    this.refresh(cx);
+                }
             }),
             cx.observe(&store, |_, _, cx| cx.notify()),
         ];
@@ -80,14 +84,23 @@ impl SshPage {
             problem: None,
             copied: false,
             chosen: false,
+            shown: false,
             load_task: Task::ready(()),
             task: Task::ready(()),
             copied_timer: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.follow_accounts(cx);
-        this.refresh(cx);
         this
+    }
+
+    /// Settings shows the page, or another: the page asks the agent only
+    /// while it shows.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.shown = shown;
+        if shown {
+            self.refresh(cx);
+        }
     }
 
     /// Lists the accounts in the chooser, and picks one to show if none is:

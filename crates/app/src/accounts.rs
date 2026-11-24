@@ -1,9 +1,10 @@
 //! The accounts on this computer: the list every window shows, asked of
-//! the backend every couple of seconds so that locking and signing in or
-//! out done anywhere, by the command line or the lock timeout too, shows
-//! everywhere at once; and the account menu the screens share.
+//! the backend every couple of seconds while a window is open, so that
+//! locking and signing in or out done anywhere, by the command line or the
+//! lock timeout too, shows everywhere at once; and the account menu the
+//! screens share.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Global, ParentElement as _,
@@ -17,8 +18,14 @@ use rbw_desktop_ui::{
 use crate::backend::{self, Load};
 use crate::window;
 
-/// How often the accounts are asked whether they locked, unlocked or synced.
+/// How often the accounts are asked whether they locked, unlocked or synced
+/// while a window shows them.
 const POLL: Duration = Duration::from_secs(2);
+/// How often while no window shows, such as while the app waits in the menu
+/// bar or its windows are minimised: often enough to clear the clipboard
+/// soon after a lock, and to keep the menu bar item's Lock up to date. A
+/// window that opens asks at once.
+const POLL_HIDDEN: Duration = Duration::from_secs(30);
 
 /// The accounts on this computer and their state, shared by every window.
 pub struct Accounts {
@@ -27,6 +34,7 @@ pub struct Accounts {
     /// follows too.
     chosen: Option<AccountId>,
     refresh_task: Task<()>,
+    asked_at: Instant,
     _poll: Task<()>,
 }
 
@@ -45,10 +53,17 @@ pub fn init(cx: &mut App) {
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
-                if this
-                    .update(cx, |this: &mut Accounts, cx| this.refresh(cx))
-                    .is_err()
-                {
+                let asked = this.update(cx, |this: &mut Accounts, cx| {
+                    let every = if any_window_shows(cx) {
+                        POLL
+                    } else {
+                        POLL_HIDDEN
+                    };
+                    if this.asked_at.elapsed() >= every {
+                        this.refresh(cx);
+                    }
+                });
+                if asked.is_err() {
                     break;
                 }
             }
@@ -57,6 +72,7 @@ pub fn init(cx: &mut App) {
             list: Load::Loading,
             chosen: None,
             refresh_task: Task::ready(()),
+            asked_at: Instant::now(),
             _poll: poll,
         };
         this.refresh(cx);
@@ -109,6 +125,7 @@ impl Accounts {
 
     /// Asks for the accounts again now, such as after unlocking one.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.asked_at = Instant::now();
         self.refresh_task = backend::request(
             cx,
             |backend| backend.accounts(),
@@ -133,6 +150,15 @@ impl Accounts {
             },
         );
     }
+}
+
+/// Whether any of the app's windows is on screen.
+fn any_window_shows(cx: &mut App) -> bool {
+    cx.windows().into_iter().any(|handle| {
+        handle
+            .update(cx, |_, window, _| window.is_visible())
+            .unwrap_or(false)
+    })
 }
 
 /// [`Accounts::refresh`] from anywhere.
