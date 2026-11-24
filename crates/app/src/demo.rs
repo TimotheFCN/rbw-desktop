@@ -12,7 +12,9 @@
 //! * `ssh-off`: no SSH agent set up; `ssh-unsupported`: none can be;
 //!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
 //!   setting it up fails; `ssh-slow`: setting it up takes a while;
-//! * `no-icons`: no website has an icon.
+//! * `no-icons`: no website has an icon;
+//! * `panel`: the menu bar item's panel opens alone, as if the item was
+//!   clicked, for systems without one.
 //!
 //! Without a word, both demo accounts start locked.
 
@@ -25,6 +27,11 @@ use rbw_desktop_core::{
 /// The words of `RBW_DESKTOP_DEMO`, or `None` to run on rbw.
 pub fn words() -> Option<String> {
     std::env::var("RBW_DESKTOP_DEMO").ok()
+}
+
+/// Whether the demo runs and asks for `word`.
+pub fn wants(word: &str) -> bool {
+    words().is_some_and(|words| words.split(',').any(|w| w.trim() == word))
 }
 
 pub fn backend(demo: &str) -> Result<FakeBackend> {

@@ -50,6 +50,16 @@ locking and signing in:
   no-rbw         rbw isn't installed
   old-rbw        rbw is too old
 
+the menu bar panel, opened alone:
+  panel          its passwords: the items used last
+  panel-search   "git" typed into its search
+  panel-copied   the first item's password copied
+  panel-locked   the account locked
+  panel-touch-id locked, with Touch ID ready
+  panel-signed-out nobody signed in
+  panel-generator its generator
+  panel-passphrase the generator making a passphrase
+
 settings, in their own window:
   settings           General
   settings-lock      General, the lock timeout's menu open
@@ -106,6 +116,7 @@ if [[ $state == gallery ]]; then
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop-ui --example gallery
 else
 	binary=$root/target/debug/rbw-desktop title=Vault
+	[[ $state == panel* ]] && title=rbw-desktop
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
 fi
 
@@ -126,6 +137,10 @@ ssh-elsewhere) state_demo=unlocked,ssh-elsewhere ;;
 ssh-unsupported) state_demo=unlocked,ssh-unsupported ;;
 lock-busy) state_demo=slow ;;
 lock-touch-id | settings-touch-id) state_demo=touch-id ;;
+panel | panel-search | panel-copied | panel-generator | panel-passphrase) state_demo=unlocked,panel ;;
+panel-locked) state_demo=panel ;;
+panel-touch-id) state_demo=touch-id,panel ;;
+panel-signed-out) state_demo=first-run,panel ;;
 first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new-device | api-key)
 	state_demo=first-run
 	;;
@@ -189,6 +204,14 @@ act() {
 	local footer_x=$((inset + 60)) footer_y=$((height - inset - 7 - 19))
 	case $state in
 	vault | gallery | lock | lock-touch-id | first-run | signed-out | no-rbw | old-rbw | no-icons) ;;
+	panel | panel-locked | panel-touch-id | panel-signed-out) ;;
+	panel-search) xdotool type --delay 60 git ;;
+	panel-copied) xdotool key Return ;;
+	# The Generator tab comes before the search field; then its Copy
+	# button has the keyboard, and the Passphrase choice comes after it and
+	# Generate Another.
+	panel-generator) xdotool key shift+Tab space ;;
+	panel-passphrase) xdotool key shift+Tab space sleep 0.4 key Tab Tab Tab space ;;
 	main-menu) click $((sidebar - 24)) $((toolbar / 2)) ;;
 	# The Menu key: under Xvfb, xdotool's Shift-F10 arrives with Alt.
 	item-menu) xdotool key Down Down Down Menu ;;

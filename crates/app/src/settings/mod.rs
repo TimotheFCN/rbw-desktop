@@ -20,6 +20,7 @@ use rbw_desktop_ui::{
     ActiveTheme as _, IconName, Look, Material, Theme, chrome, glass, icon, motion, nav_row,
 };
 
+use crate::CloseWindow;
 use crate::backend;
 use crate::preferences::{self, Prefs};
 use crate::secondary;
@@ -44,10 +45,7 @@ actions!(
 const CONTEXT: &str = "Settings";
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new(secondary!(","), OpenSettings, None),
-        KeyBinding::new(secondary!("w"), CloseSettings, Some(CONTEXT)),
-    ]);
+    cx.bind_keys([KeyBinding::new(secondary!(","), OpenSettings, None)]);
     // An Adwaita dialog closes with Escape; a Mac's settings window doesn't.
     if cx.theme().look == Look::Gnome {
         cx.bind_keys([KeyBinding::new("escape", CloseSettings, Some(CONTEXT))]);
@@ -362,6 +360,7 @@ impl Render for SettingsWindow {
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::close))
+            .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()
             .size_full()
             .child(layout)

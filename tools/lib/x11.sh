@@ -1,7 +1,8 @@
 # The private headless display that tools/shot and tools/e2e run the app
-# on: Xvfb with Mesa's software Vulkan, a wallpaper, xcompmgr, and the root
-# window properties GPUI looks for before it draws its own frame. Source it
-# from bash with `theme` and `scale` set, then call x11_start.
+# on: Xvfb with Mesa's software Vulkan, a wallpaper, xcompmgr, the root
+# window properties GPUI looks for before it draws its own frame, and a
+# session bus of its own. Source it from bash with `theme` and `scale` set,
+# then call x11_start; x11_tray adds a stand-in system tray.
 #
 # Pointer positions are in points from a window's top-left corner, where
 # Linux draws an invisible 12-point frame border.
@@ -59,6 +60,51 @@ x.XCloseDisplay(display)
 PY
 	# Keep the pointer off where windows will appear.
 	xdotool mousemove 0 0
+
+	# A session bus of its own, so that nothing reaches this machine's.
+	dbus-daemon --session --nofork --print-address=4 4>"$work/bus" 2>/dev/null &
+	x11_pids+=($!)
+	for _ in $(seq 50); do [[ -s $work/bus ]] && break; sleep 0.1; done
+	DBUS_SESSION_BUS_ADDRESS=$(head -1 "$work/bus")
+	export DBUS_SESSION_BUS_ADDRESS
+}
+
+# Starts a stand-in system tray on the session bus (tools/lib/sni-watcher.py),
+# as KDE's, before the app starts.
+x11_tray() {
+	python3 -I "$(dirname "${BASH_SOURCE[0]}")/sni-watcher.py" >"$work/tray.log" 2>&1 &
+	x11_pids+=($!)
+	for _ in $(seq 50); do grep -q '^ready' "$work/tray.log" && return; sleep 0.1; done
+	x11_fail "the stand-in tray didn't start"
+}
+
+# Waits for the app's item in the stand-in tray, and makes it $tray_item.
+x11_tray_item() {
+	for _ in $(seq 100); do
+		tray_item=$(awk '/^registered/ { print $2 }' "$work/tray.log" | tail -1)
+		[[ -n $tray_item ]] && return
+		sleep 0.1
+	done
+	x11_fail "the app put no item in the tray"
+}
+
+# Clicks the item, as the tray does, at a point of the screen in pixels.
+x11_tray_click() {
+	gdbus call --session --dest "$tray_item" --object-path /StatusNotifierItem \
+		--method org.kde.StatusNotifierItem.Activate -- "$1" "$2" >/dev/null
+}
+
+# Chooses an entry of the item's menu by its label.
+x11_tray_menu() {
+	local id
+	id=$(gdbus call --session --dest "$tray_item" --object-path /MenuBar \
+		--method com.canonical.dbusmenu.GetLayout -- 0 -1 '[]' |
+		python3 -I -c 'import re, sys
+match = re.search(r"\((\d+), \{[^}]*.label.: <.(" + re.escape(sys.argv[1]) + r").>", sys.stdin.read())
+print(match.group(1) if match else "")' "$1")
+	[[ -n $id ]] || x11_fail "the item's menu has no $1"
+	gdbus call --session --dest "$tray_item" --object-path /MenuBar \
+		--method com.canonical.dbusmenu.Event -- "$id" clicked '<0>' 0 >/dev/null
 }
 
 x11_stop() {

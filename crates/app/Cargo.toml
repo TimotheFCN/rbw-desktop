@@ -9,7 +9,16 @@ publish = false
 
 [dependencies]
 env_logger = "0.11"
+futures = "0.3"
 gpui.workspace = true
 log = "0.4"
 rbw-desktop-core = { path = "../core" }
 rbw-desktop-ui = { path = "../ui" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["async-io"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3"
+tray-icon = { version = "0.26.1", default-features = false }

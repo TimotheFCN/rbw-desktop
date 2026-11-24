@@ -12,6 +12,8 @@ use crate::icons::Icons;
 
 pub struct Prefs {
     preferences: Preferences,
+    /// Whether they have been read; until then they are the defaults.
+    loaded: bool,
 }
 
 /// A change could not be saved; the preferences are back as they were.
@@ -34,6 +36,7 @@ pub fn init(cx: &mut App) {
                     Ok(preferences) => this.preferences = preferences,
                     Err(error) => log::warn!("reading the preferences: {error}"),
                 }
+                this.loaded = true;
                 apply(&this.preferences, cx);
                 cx.notify();
             },
@@ -41,6 +44,7 @@ pub fn init(cx: &mut App) {
         .detach();
         Prefs {
             preferences: Preferences::default(),
+            loaded: false,
         }
     });
     cx.set_global(Shared(prefs));
@@ -53,6 +57,10 @@ impl Prefs {
 
     pub fn get(&self) -> &Preferences {
         &self.preferences
+    }
+
+    pub fn loaded(&self) -> bool {
+        self.loaded
     }
 
     /// Changes the preferences now and saves them.

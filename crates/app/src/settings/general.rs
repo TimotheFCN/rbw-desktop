@@ -1,5 +1,6 @@
 //! General: how long each account stays unlocked without being used, when
-//! a copied secret leaves the clipboard, and whether websites' icons show.
+//! a copied secret leaves the clipboard, whether websites' icons show, and
+//! the menu bar item.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -14,6 +15,7 @@ use rbw_desktop_ui::{Select, Selected, setting_row, settings_group, switch};
 use super::store::Store;
 use crate::accounts::{self, Accounts};
 use crate::preferences::{self, Prefs};
+use crate::tray::{self, MenuBar};
 
 const LOCK_AFTER: [u64; 7] = [60, 5 * 60, 15 * 60, 30 * 60, 3600, 4 * 3600, 24 * 3600];
 const CLEAR_AFTER: [Option<u64>; 6] = [Some(10), Some(30), Some(60), Some(120), Some(300), None];
@@ -53,6 +55,12 @@ impl GeneralPage {
             cx.observe(&store, |this, _, cx| this.follow_store(cx)),
             cx.observe(&Accounts::global(cx), |_, _, cx| cx.notify()),
         ];
+        let subscriptions = subscriptions
+            .into_iter()
+            .chain(
+                MenuBar::global(cx).map(|menu_bar| cx.observe(&menu_bar, |_, _, cx| cx.notify())),
+            )
+            .collect();
         let mut this = Self {
             store,
             clear_after,
@@ -176,7 +184,16 @@ impl Render for GeneralPage {
             .collect();
         let lock_group = (!lock_rows.is_empty())
             .then(|| settings_group(several.then(|| "Lock after".into()), lock_rows, cx));
-        let icons_on = Prefs::global(cx).read(cx).get().website_icons;
+        let preferences = Prefs::global(cx).read(cx).get().clone();
+        let menu_bar_note = if MenuBar::global(cx)
+            .is_some_and(|menu_bar| preferences.menu_bar && menu_bar.read(cx).unseen())
+        {
+            "Your desktop has no system tray to show it in."
+        } else if cfg!(target_os = "macos") {
+            "Copy passwords you use often and make new ones from the menu bar."
+        } else {
+            "Copy passwords you use often and make new ones from the tray."
+        };
         let other = settings_group(
             None,
             [
@@ -189,9 +206,22 @@ impl Render for GeneralPage {
                 setting_row(
                     "Show website icons",
                     Some("Your server fetches them for the websites of your logins.".into()),
-                    switch("website-icons", icons_on, "Show website icons").on_change(
+                    switch(
+                        "website-icons",
+                        preferences.website_icons,
+                        "Show website icons",
+                    )
+                    .on_change(|on, _, cx| {
+                        preferences::update(cx, |preferences| preferences.website_icons = on)
+                    }),
+                    cx,
+                ),
+                setting_row(
+                    tray::SETTING,
+                    Some(menu_bar_note.into()),
+                    switch("menu-bar", preferences.menu_bar, tray::SETTING).on_change(
                         |on, _, cx| {
-                            preferences::update(cx, |preferences| preferences.website_icons = on)
+                            preferences::update(cx, |preferences| preferences.menu_bar = on)
                         },
                     ),
                     cx,

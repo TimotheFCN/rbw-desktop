@@ -396,6 +396,17 @@ impl VaultView {
         cx.notify();
     }
 
+    /// Shows an item from elsewhere, such as the menu bar panel, as if it
+    /// was clicked: whatever the search and the sidebar showed.
+    pub(crate) fn reveal(&mut self, item: ItemId, window: &mut Window, cx: &mut Context<Self>) {
+        self.search
+            .update(cx, |search, cx| search.set_value("", window, cx));
+        self.set_filter(Filter::All, cx);
+        window.focus(&self.list_focus, cx);
+        self.select_by(Some(item), true, cx);
+        self.refilter(cx);
+    }
+
     fn sync(&mut self, _: &Sync, _: &mut Window, cx: &mut Context<Self>) {
         let account = self.account_id();
         backend::request(
@@ -512,7 +523,8 @@ impl VaultView {
     }
 }
 
-fn matches(item: &ItemSummary, query: &str) -> bool {
+/// Whether a search, in lower case, finds the item.
+pub(crate) fn matches(item: &ItemSummary, query: &str) -> bool {
     query.is_empty()
         || item.name.to_lowercase().contains(query)
         || item

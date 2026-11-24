@@ -9,12 +9,13 @@ use gpui::{
     FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
     Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px, size,
 };
-use rbw_desktop_core::{Account, AccountId, Error, LockState, REQUIRED_RBW};
+use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, ConfirmDialog, ConfirmEvent, Confirmation, Look, SheetSlot,
     Theme, ToastSlot, app_icon, button, chrome, motion,
 };
 
+use crate::CloseWindow;
 use crate::accounts::{self, Accounts, Refreshed, Request};
 use crate::backend;
 use crate::lock::LockScreen;
@@ -124,6 +125,9 @@ pub struct MainWindow {
     /// The screen being replaced, drawn under the new one while it fades in.
     leaving: Option<AnyView>,
     alerts: Alerts,
+    /// The window's own focus, so that its shortcuts work before a screen
+    /// takes the keyboard.
+    focus: FocusHandle,
     /// Whether the next accounts to arrive replace even the sign-in that
     /// just finished.
     show_next: bool,
@@ -141,12 +145,15 @@ impl MainWindow {
             Theme::follow_window_appearance(window, cx);
         })
         .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         let mut this = Self {
             accounts: None,
             screen: Screen::Loading,
             generation: 0,
             leaving: None,
             alerts: Alerts::new(),
+            focus,
             show_next: false,
             retrying: false,
             _screen_events: None,
@@ -329,6 +336,23 @@ impl MainWindow {
             self.show_current(window, cx);
         }
         accounts::refresh(cx);
+    }
+
+    /// Shows an item of an account, such as one the menu bar panel can't
+    /// copy from without the master password, which it then asks for.
+    pub fn open_item(
+        &mut self,
+        account: AccountId,
+        item: ItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_account(account.clone(), window, cx);
+        if let Screen::Vault(vault) = &self.screen
+            && vault.read(cx).account() == &account
+        {
+            vault.update(cx, |vault, cx| vault.reveal(item, window, cx));
+        }
     }
 
     pub fn add_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -660,7 +684,9 @@ impl Render for MainWindow {
         let alerts = self.alerts.render(window, cx);
         let content = div()
             .key_context(CONTEXT)
+            .track_focus(&self.focus)
             .on_action(cx.listener(Self::add_account_action))
+            .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()
             .size_full()
             .children(leaving.map(|view| div().absolute().inset_0().child(view)))
