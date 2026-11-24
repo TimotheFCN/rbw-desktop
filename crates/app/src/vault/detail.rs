@@ -361,8 +361,10 @@ impl ItemDetail {
             move |backend| fetch(backend, &account, &requested),
             move |this, result, cx| {
                 // Fields the pane had nothing in place of fade in, after a
-                // wait that showed.
-                this.fields_fade = this.shape().is_none() && this.chosen_at.elapsed() > AT_ONCE;
+                // wait that showed; an item shown again, as after a sync,
+                // doesn't.
+                let had_nothing = this.loaded().is_none() && this.shape().is_none();
+                this.fields_fade = had_nothing && this.chosen_at.elapsed() > AT_ONCE;
                 let (item, code) = match result {
                     Ok((item, code)) => (Ok(item), code),
                     Err(error) => (Err(error), None),

@@ -334,8 +334,7 @@ impl QuickPanel {
             }
         }
         if self.loaded.is_some() && !was_unlocked && self.tab == Tab::Passwords {
-            self.search
-                .update(cx, |search, cx| search.focus(window, cx));
+            self.focus_search(window, cx);
         }
         self.account = account;
         cx.notify();
