@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, glass, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -22,11 +22,15 @@ and offers to look again (`backend::connect`, `crate::start`).
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `no-icons` and the `ssh-*` words, comma-separated, reach the
-other states (`demo.rs` lists them). The demo's master password is `demo`
-and its codes `123456`; an email with `+device@` asks for a new device code
-and one with `+apikey@` for the API key `user.d3m0` / `demo-secret`. The
-Bank login and the Visa card ask for the master password again.
+`old-rbw`, `outdated-rbw`, `no-icons`, `panel` and the `ssh-*` words,
+comma-separated, reach the other states (`demo.rs` lists them); `panel`
+opens the menu bar panel alone, as a click on the item would. The demo's
+master password is `demo` and its codes `123456`; an email with `+device@`
+asks for a new device code and one with `+apikey@` for the API key
+`user.d3m0` / `demo-secret`; a self-hosted address with `.invalid` in it has
+no Bitwarden server. The Bank login and the Visa card ask for the master
+password again. The demo runs beside a copy of the app that is already
+running, which an ordinary launch would bring forward instead.
 
 ## Build and run
 
@@ -41,7 +45,8 @@ tools/check-macos                                       # type-check and lint th
 On Ubuntu the build needs `libxkbcommon-dev libxkbcommon-x11-dev
 libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev
 libvulkan-dev libssl-dev libzstd-dev`; screenshots also need `xvfb xdotool
-xcompmgr hsetroot x11-utils mesa-vulkan-drivers imagemagick ffmpeg`.
+xcompmgr hsetroot x11-utils mesa-vulkan-drivers imagemagick ffmpeg`, and
+`tools/e2e` `xclip`, `dbus-daemon` and Python's `gi`.
 
 ## Screenshots
 
@@ -56,6 +61,7 @@ tools/shot --then 'type "Netflix"' --then 'key ctrl+Return' sheet out.png
 tools/shot --record 0.9 sheet out.png             # also out-frames/NNN.png at 30 fps, to check motion
 tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
 tools/shot --theme gnome-dark ssh-other out.png   # settings states shoot the Settings window
+tools/shot panel-generator out.png                # panel states shoot the panel, opened alone
 ```
 
 Each state starts the demo it needs. It runs the app on a private Xvfb with Mesa's software Vulkan at 2x, over a
@@ -67,7 +73,14 @@ GPUI does not see the pointer leave, so the script rests it on an empty spot
 before capturing.
 
 The shared X11 setup lives in `tools/lib/x11.sh`, which `tools/shot` and
-`tools/e2e` source.
+`tools/e2e` source. It gives the display a session bus of its own, so the
+app reaches none of this machine's desktop services, and `x11_tray` adds a
+stand-in system tray (`tools/lib/sni-watcher.py`, a StatusNotifierWatcher
+as KDE's) for the app's item: `x11_tray_item`, `x11_tray_click` and
+`x11_tray_menu LABEL` find it, click it and choose from its menu over D-Bus,
+as a tray would. Without a window manager GPUI knows no active window, so
+nothing that depends on it, such as the panel closing when it loses the
+keyboard, happens under Xvfb.
 
 ## The real backend, end to end
 
@@ -82,15 +95,56 @@ shared items, some protected), runs the app on rbw with a private `HOME`,
 `XDG_RUNTIME_DIR` and no `SSH_AUTH_SOCK`, and drives it with keys and
 clicks: add an account on a self-hosted server, open, copy (pasted back
 into the search to check the clipboard), create, edit, favourite, move,
-delete, a protected item, lock, unlock, a second account, switch, the lock
-timeout, the SSH agent set up and removed, sign out. Each step is checked
-with the `rbw` command line in the same `HOME` and screenshotted to
-`target/shots/e2e/NN-step.png`. A stand-in `systemctl` first on `PATH`
+delete, a protected item, lock, unlock, a second account, switch, the menu
+bar panel from the stand-in tray (a generated password, a login found by
+its search, the same login among the items used last, lock), closing the
+last window and opening it again from the tray, the lock timeout, the SSH
+agent set up and removed, sign out, and Quit from the tray. Each step is
+checked with the `rbw` command line in the same `HOME`, or the clipboard
+with `xclip`, and screenshotted to `target/shots/e2e/NN-step.png`. A stand-in `systemctl` first on `PATH`
 records what rbw asks of systemd and refuses `start`, so nothing of this
 machine's user services changes; rbw then starts its agent itself. Run it
 after any change to how the app calls the backend.
 
 ## Patterns
+
+**Preferences** (`preferences::Prefs`) are read once and shared: change
+them with `preferences::update(cx, |preferences| …)`, which applies the
+change at once (the clipboard's clearing, website icons) and saves it, and
+observe `Prefs::global(cx)` to follow them. A failed save puts them back
+and emits `SaveFailed`, which Settings shows.
+
+**The generator** (`generator::Generator`) is one entity wherever it shows:
+rendered whole in the panel and the main window's popover, or only
+`render_options` in the editor, which subscribes to `Generated` for each new
+value. It remembers its options in the preferences, makes a new value as
+soon as an option changes (one request at a time, the latest options
+next), and lays the value over the room the widest value of these options
+would take, so that a new one never moves anything. Its strength comes
+from `GeneratorOptions::strength`, never from the value.
+
+**Recently used.** Call `recent::used(account, item, cx)` when something of
+an item is copied, when it is opened with a click or its website opened,
+and when it is saved; the panel lists them. Ids only, kept by the backend.
+
+**The current account** is the shared accounts' `current()`: the one the
+main window chose last (`choose`), else the first unlocked, else the
+first. The panel and the menu bar item follow it.
+
+**The menu bar item and its panel.** `tray::init` shows the item while the
+preference says so: `tray/macos.rs` (tray-icon, a template image, the panel
+hung under the item) and `tray/linux.rs` (ksni, a StatusNotifierItem with a
+symbolic icon written to the session folder and pixmaps as a fallback).
+Both report to `tray::MenuBar` through a channel, on the app's thread.
+`panel::toggle(anchor, cx)` opens or closes the panel, a window of its own
+(`chrome::panel_options`). Closing the last window quits the app unless
+`tray::keeps_app_running`, which is true while something shows the item;
+GPUI's own quitting is off (`QuitMode::Explicit`). Each window handles
+`CloseWindow` (Ctrl-W, Cmd-W) itself.
+
+**One copy at a time** (`instance.rs`): a launch first offers itself to the
+socket in the session folder; the copy listening there brings its main
+window forward and the new one exits. The demo doesn't take part.
 
 **Accounts** are one shared entity (`accounts::Accounts`), which asks the
 backend every two seconds and emits `Refreshed` after each answer. Every
@@ -230,6 +284,17 @@ reduced-motion setting.
 - `role()` on a `div` needs an `id()` first.
 - Under Xvfb, `xdotool key shift+F10` arrives as Alt-Shift-F10; shots use the
   Menu key.
+- GPUI quits when the last window closes on Linux unless the application's
+  quit mode is `Explicit`.
+- A single-line `Input` takes Up and Down and does nothing with them. To
+  move through a list from a search field, bind them under
+  `"YourContext > Input"`, which the later binding wins at that depth.
+- `motion::content_enter` sets the top margin of what it animates; put the
+  margin on a parent.
+- A window's actions need something in it focused: without a focused
+  element, keys reach only global handlers. A window view tracks a focus
+  of its own (`MainWindow`, `SettingsWindow`, `QuickPanel`).
+- `Window::set_native_titlebar_visibility` exists only on macOS.
 
 ## macOS
 
@@ -247,6 +312,11 @@ The macOS-only code is small and type-checked from Linux by
 - The Settings window's title bar and traffic lights over its sidebar, the
   app menu's About and Settings… items, Touch ID's switch on the Accounts
   page, and the SSH page's advice to add `IdentityAgent` to `~/.ssh/config`.
+- `app/src/tray/macos.rs`: the menu bar item (a template image drawn from
+  `app/assets/menu-bar-symbolic.svg`, its right-click menu) and where the
+  panel hangs, from the item's `NSStatusItem` window; the panel as a
+  `PopUp` window on the blurred material without its title bar; staying in
+  the Dock when the last window closes and coming back with `on_reopen`.
 
 Everything else, the macOS look included, is the code Linux runs and is
 checked with `RBW_DESKTOP_THEME=macos-light` / `macos-dark` screenshots.

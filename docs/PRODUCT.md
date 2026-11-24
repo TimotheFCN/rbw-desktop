@@ -65,14 +65,35 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 
 ### Generator
 
-* Passwords and passphrases, with length and character options, using rbw's
-  generator.
+* Passwords, passphrases and PINs, using rbw's generator: length (or word
+  count), symbols, and "easy to read" (lower-case letters and digits that
+  can't be mistaken for each other). rbw offers no letters-only password,
+  so there is no "numbers" switch.
+* The result is large, its digits and symbols coloured; Copy is the main
+  action, with another value next to it. A password or passphrase says
+  whether it is weak, fair or strong, from the randomness its options hold;
+  a PIN says nothing, since what it unlocks limits the tries.
+* The options are remembered, and each change makes a new value at once.
+* The same generator is in the menu bar panel, in the main window (a
+  toolbar button, the Vault menu, GNOME's primary menu, Ctrl-Shift-G) and,
+  its options, in the item editor next to the password.
 
 ### Menu bar item
 
-* On every system that has one (macOS menu bar, KDE and other system trays).
-* Two tabs: recent items with search, and the generator. Plus "Open Vault"
-  and "Lock". Nothing about SSH lives here.
+* On every system that has one: the macOS menu bar, and the system tray of
+  KDE and other desktops that show StatusNotifierItems (GNOME with the
+  AppIndicator extension). Without one, as on stock GNOME, the app is as it
+  would be without the item. Settings, General turns it off.
+* A click opens a panel: on macOS hung under the item, elsewhere a small
+  window next to the pointer (X11) or in the middle of the screen (Wayland).
+  Two tabs: the items used last, with a search through the whole vault
+  (a click or Return copies a login's password; the selected row also
+  copies its username and code), and the generator. Plus "Open Vault" and
+  "Lock". It shows the account the main window shows. Nothing about SSH
+  lives here.
+* The item's menu has Open Vault, Lock and Quit.
+* While the item shows, closing the last window leaves the app running.
+  Launching the app again brings the running one forward.
 
 ### SSH agent
 

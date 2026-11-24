@@ -91,12 +91,13 @@ options:
                 <out>-frames/NNN.png at 30 frames per second
   --demo WORDS  more RBW_DESKTOP_DEMO words (see crates/app/src/demo.rs),
                 such as slow
+  --tray        run a stand-in system tray, which shows the app's item
   --no-build    use the binaries already built
 EOF
 	exit 2
 }
 
-theme=macos-light size="" scale=2 record="" build=1 then=() demo=""
+theme=macos-light size="" scale=2 record="" build=1 then=() demo="" tray=0
 while [[ $# -gt 0 && $1 == --* ]]; do
 	case $1 in
 	--theme) theme=$2; shift 2 ;;
@@ -105,6 +106,7 @@ while [[ $# -gt 0 && $1 == --* ]]; do
 	--record) record=$2; shift 2 ;;
 	--then) then+=("$2"); shift 2 ;;
 	--demo) demo=$2; shift 2 ;;
+	--tray) tray=1; shift ;;
 	--no-build) build=0; shift ;;
 	*) usage ;;
 	esac
@@ -156,6 +158,7 @@ signed-out) state_demo=first-run,signed-out ;;
 esac
 export RBW_DESKTOP_DEMO=$state_demo,$demo
 
+((tray)) && x11_tray
 x11_launch "$binary"
 x11_window "^$title\$"
 if [[ -n $size ]]; then

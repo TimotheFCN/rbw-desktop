@@ -11,8 +11,9 @@
 # first with items shared through an organization, among them some that ask
 # for the master password again), and runs the app with a private HOME, so
 # that no profile, ssh or systemd setup of yours is touched: a stand-in
-# `systemctl` records what rbw asks of systemd. Screenshots of each step go
-# to target/shots/e2e. Everything it started goes away at the end.
+# `systemctl` records what rbw asks of systemd, and a stand-in system tray
+# shows the app's menu bar item. Screenshots of each step go to
+# target/shots/e2e. Everything it started goes away at the end.
 set -euo pipefail
 
 usage() {
@@ -136,6 +137,18 @@ step() {
 		failed=$((failed + 1))
 	fi
 }
+# Checks a shell condition without a screenshot, as when no window is left.
+check() {
+	steps=$((steps + 1))
+	if eval "$2"; then
+		echo "ok   $1"
+	else
+		echo "FAIL $1: $2" >&2
+		failed=$((failed + 1))
+	fi
+}
+# What the app copied.
+clipboard() { xclip -o -selection clipboard 2>/dev/null; }
 # Waits up to ten seconds for a shell condition.
 until_true() {
 	for _ in $(seq 50); do eval "$1" && return 0; sleep 0.2; done
@@ -169,6 +182,7 @@ to_settings() {
 	x11_window '^(Settings|Preferences)$' 10
 }
 
+x11_tray
 RUST_BACKTRACE=1 x11_launch "$root/target/debug/rbw-desktop"
 x11_window '^Vault$'
 sleep 1.5
@@ -282,6 +296,57 @@ account_menu
 keys Down Return
 step switched
 
+# The menu bar panel, from the stand-in tray: a password from its
+# generator, a login found by its search, the same login among the items
+# used last, and locking.
+x11_tray_item
+main=$window
+panel_open() {
+	x11_tray_click 600 300
+	x11_window '^rbw-desktop$' 10
+}
+panel_open
+step panel "[[ -n \$(xdotool search --name '^rbw-desktop\$') ]]"
+# The Generator tab comes before the search field; its Copy button then has
+# the keyboard.
+keys shift+Tab space
+sleep 0.5
+keys Return
+step panel-generated "[[ \$(clipboard | wc -c) -eq 20 ]]"
+# Back to Passwords, whose search field takes the keyboard.
+keys shift+Tab shift+Tab space
+sleep 0.4
+type_text "router"
+keys Return
+step panel-search-copied "[[ \$(clipboard) == router-password ]]"
+keys Escape
+sleep 0.5
+check panel-closed "[[ -z \$(xdotool search --name '^rbw-desktop\$') ]]"
+printf nothing | xclip -selection clipboard
+panel_open
+keys Return
+step panel-recent-copied "[[ \$(clipboard) == router-password ]]"
+# Lock, at the end of the panel's last row.
+x11_click 279 373
+until_true "query 'j[\"status\"]' '' status --json | grep -qx locked" || true
+step panel-locked "query 'j[\"status\"]' '' status --json | grep -qx locked"
+keys Escape
+window=$main
+xdotool windowfocus --sync "$window"
+type_text "$password"
+keys Return
+until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
+step unlocked-again "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+# With the tray, closing the last window leaves the app running; Open
+# Vault brings it back.
+keys ctrl+w
+sleep 1
+check closed-but-running "[[ -z \$(xdotool search --name '^Vault\$') ]] && kill -0 $app_pid"
+x11_tray_menu "Open Vault"
+x11_window '^Vault$' 10
+main=$window
+step reopened-from-tray "kill -0 $app_pid"
+
 # Settings: the lock timeout, then the SSH agent set up and removed.
 keys ctrl+comma
 main=$window
@@ -332,6 +397,10 @@ step sign-out-asks
 keys Return
 until_true "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]" || true
 step signed-out "[[ \$(query 'len(j)' '' profiles --json) == 1 ]]"
+
+x11_tray_menu Quit
+until_true "! kill -0 $app_pid 2>/dev/null" || true
+check quit-from-tray "! kill -0 $app_pid 2>/dev/null"
 
 echo "$((steps - failed)) of $steps steps passed; screenshots in $shots"
 ((failed == 0))
