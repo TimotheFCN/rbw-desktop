@@ -581,7 +581,7 @@ impl ItemDetail {
         &self,
         item: &ItemSummary,
         reprompt: Entity<Reprompt>,
-        icon: Option<std::sync::Arc<gpui::RenderImage>>,
+        icon: rbw_desktop_ui::TileIcon,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let dim = cx.theme().colors.text_secondary;

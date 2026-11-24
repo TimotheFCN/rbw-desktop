@@ -89,6 +89,11 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
     {
         log::error!("the demo's signed-out account wasn't added");
     }
+    // Their icons as on a computer the vaults were opened on before; the
+    // logins `big` adds fetch theirs.
+    for account in fake.accounts().unwrap_or_default() {
+        fake.keep_icons(&account.id);
+    }
     if wants("big")
         && let Some(id) = &first
     {

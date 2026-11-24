@@ -121,14 +121,25 @@ pub fn section_label(label: impl Into<SharedString>, cx: &App) -> impl IntoEleme
         .child(label.into())
 }
 
+/// What a tile shows of a website's icon.
+#[derive(Clone)]
+pub enum TileIcon {
+    /// Being looked for: the tile stays neutral, so that a letter in a
+    /// colour doesn't flash before the icon.
+    Pending,
+    Image(Arc<RenderImage>),
+    /// There is none: the tile shows its letter in its colour.
+    Letter,
+}
+
 /// The coloured rounded square with an item's initial, or the website's
-/// icon in its place once there is one.
+/// icon in its place.
 #[derive(IntoElement)]
 pub struct Tile {
     letter: SharedString,
     hue: f32,
     size: Pixels,
-    icon: Option<(ElementId, Option<Arc<RenderImage>>)>,
+    icon: Option<(ElementId, TileIcon)>,
 }
 
 /// A tile for `name`, with a hue derived from it so an item keeps its colour.
@@ -155,9 +166,10 @@ impl Tile {
         self
     }
 
-    /// Shows a website's icon over the letter, fading in when it arrives.
-    /// `id` names the tile, so the icon fades in only once.
-    pub fn icon(mut self, id: impl Into<ElementId>, icon: Option<Arc<RenderImage>>) -> Self {
+    /// Shows a website's icon, or a neutral square while it is looked for.
+    /// What arrives fades in; what was known when the tile first showed is
+    /// there at once. `id` names the tile.
+    pub fn icon(mut self, id: impl Into<ElementId>, icon: TileIcon) -> Self {
         self.icon = Some((id.into(), icon));
         self
     }
@@ -165,18 +177,30 @@ impl Tile {
 
 impl RenderOnce for Tile {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let icon = self.icon.map(|(id, icon)| {
-            let shown = motion::transition(
-                (id, "icon"),
-                if icon.is_some() { 1. } else { 0. },
-                m::fade(m::STANDARD),
-                window,
-                cx,
-            );
-            (icon, shown)
-        });
+        let (lettered, image) = match self.icon {
+            None => (1., None),
+            Some((id, icon)) => {
+                let mut appear = |channel: &'static str, shown: bool| {
+                    motion::transition(
+                        (id.clone(), channel),
+                        if shown { 1. } else { 0. },
+                        m::fade(m::ARRIVE),
+                        window,
+                        cx,
+                    )
+                };
+                let lettered = appear("letter", matches!(icon, TileIcon::Letter));
+                let shown = appear("icon", matches!(icon, TileIcon::Image(_)));
+                let image = match icon {
+                    TileIcon::Image(image) if shown > 0. => Some((image, shown)),
+                    _ => None,
+                };
+                (lettered, image)
+            }
+        };
         let theme = cx.theme();
         let (light, dark) = theme.colors.tile(self.hue);
+        let neutral = theme.colors.fill;
         let radius = self.size
             * match theme.look {
                 Look::MacOs => 0.28,
@@ -195,28 +219,26 @@ impl RenderOnce for Tile {
             .rounded(radius)
             .bg(linear_gradient(
                 160.,
-                linear_color_stop(light, 0.),
-                linear_color_stop(dark, 1.),
+                linear_color_stop(mix(neutral, light, lettered), 0.),
+                linear_color_stop(mix(neutral, dark, lettered), 1.),
             ))
-            .text_color(gpui::white())
+            .text_color(gpui::white().opacity(lettered))
             .text_size(self.size * 0.44)
             .font_weight(FontWeight::SEMIBOLD)
             .child(self.letter)
-            .when_some(icon, |d, (image, shown)| {
-                d.when_some(image.filter(|_| shown > 0.), |d, image| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .p(inset)
-                            .rounded(radius)
-                            .bg(backdrop)
-                            .border(px(0.5))
-                            .border_color(edge)
-                            .opacity(shown)
-                            .child(img(image).size_full().object_fit(ObjectFit::Contain)),
-                    )
-                })
+            .when_some(image, |d, (image, shown)| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .p(inset)
+                        .rounded(radius)
+                        .bg(backdrop)
+                        .border(px(0.5))
+                        .border_color(edge)
+                        .opacity(shown)
+                        .child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                )
             })
     }
 }
@@ -300,7 +322,7 @@ pub struct ListRow {
     name: SharedString,
     subtitle: Option<SharedString>,
     selected: bool,
-    icon: Option<Arc<RenderImage>>,
+    icon: TileIcon,
     trailing: Option<AnyElement>,
     copied: bool,
     compact: bool,
@@ -331,7 +353,7 @@ pub fn list_row(
         name: name.into(),
         subtitle,
         selected,
-        icon: None,
+        icon: TileIcon::Letter,
         trailing: None,
         copied: false,
         compact: false,
@@ -350,8 +372,8 @@ impl ListRow {
         self
     }
 
-    /// The website's icon to show in the tile, once it has arrived.
-    pub fn icon(mut self, icon: Option<Arc<RenderImage>>) -> Self {
+    /// The website's icon to show in the tile.
+    pub fn icon(mut self, icon: TileIcon) -> Self {
         self.icon = icon;
         self
     }

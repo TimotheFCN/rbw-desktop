@@ -316,14 +316,25 @@ impl QuickPanel {
         cx.notify();
     }
 
+    /// Loads the account's items, with the icons of those used last.
     fn load(&mut self, account: AccountId, cx: &mut Context<Self>) {
         self.load_task = backend::request(
             cx,
-            move |backend| Ok((backend.items(&account)?, backend.recent_items(&account)?)),
+            move |backend| {
+                let mut items = backend.items(&account)?;
+                items.sort_by_cached_key(|item| item.name.to_lowercase());
+                let recent = backend.recent_items(&account)?;
+                let first = recent
+                    .iter()
+                    .filter_map(|id| items.iter().find(|item| item.id == *id))
+                    .take(RECENT);
+                let icons = icons::read_cached(backend, &account, first);
+                Ok((items, recent, icons))
+            },
             |this, result, cx| {
                 match result {
-                    Ok((mut items, recent)) => {
-                        items.sort_by_cached_key(|item| item.name.to_lowercase());
+                    Ok((items, recent, icons)) => {
+                        Icons::global(cx).update(cx, |known, cx| known.insert_cached(icons, cx));
                         this.items = Load::Ready(items);
                         this.recent = recent;
                     }

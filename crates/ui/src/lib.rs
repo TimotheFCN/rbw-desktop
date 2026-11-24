@@ -41,7 +41,8 @@ pub use icon::{Assets, Icon, IconName, icon};
 pub use material::{Material, backdrop};
 pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
 pub use rows::{
-    ListRow, NavRow, ROW_HEIGHT, Tile, app_icon, avatar, list_row, nav_row, section_label, tile,
+    ListRow, NavRow, ROW_HEIGHT, Tile, TileIcon, app_icon, avatar, list_row, nav_row,
+    section_label, tile,
 };
 pub use scroll::{ScrollArea, scroll_area, scrollbar};
 pub use select::{Select, Selected};

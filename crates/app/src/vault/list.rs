@@ -1,5 +1,7 @@
 //! The item list with its search field.
 
+use std::ops::Range;
+
 use gpui::{
     AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
@@ -15,7 +17,7 @@ use rbw_desktop_ui::{
 use super::{ListDivider, MAX_LIST_SHARE, NewItem, Only, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::generator;
-use crate::icons;
+use crate::icons::{self, Icons};
 use crate::preferences::Prefs;
 use crate::secondary;
 
@@ -23,6 +25,9 @@ use crate::secondary;
 pub(super) const ROW_GAP: Pixels = px(1.);
 /// The narrowest the list gets, however small the window or its share.
 pub(super) const MIN_WIDTH: Pixels = px(240.);
+/// How many screens of rows either side of those drawn have their icons
+/// read ahead.
+const PREFETCH_SCREENS: usize = 2;
 /// How far either side of the list's edge its divider takes the pointer.
 const DIVIDER_REACH: Pixels = px(3.);
 
@@ -77,6 +82,7 @@ impl VaultView {
                 self.visible.len(),
                 cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
                     let account = this.account.id.clone();
+                    this.prefetch_icons(&range, cx);
                     let list_focused = this.list_focus.is_focused(window);
                     range
                         .map(|position| {
@@ -164,6 +170,20 @@ impl VaultView {
 }
 
 impl VaultView {
+    /// Reads the icons of the rows a few screens either side of those
+    /// drawn from rbw's cache, so that scrolling finds them there.
+    fn prefetch_icons(&mut self, drawn: &Range<usize>, cx: &mut Context<Self>) {
+        let ahead = drawn.len() * PREFETCH_SCREENS;
+        let around = drawn.start.saturating_sub(ahead)..(drawn.end + ahead).min(self.visible.len());
+        if self.prefetched == around {
+            return;
+        }
+        self.prefetched = around.clone();
+        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
+        let rows = self.visible[around].iter().map(|&index| &items[index]);
+        Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&self.account.id, rows, cx));
+    }
+
     /// The divider between the list and the item: dragged, it moves the
     /// list's edge; a double-click puts it back. It straddles the edge,
     /// drawn last, so that neither the item nor the list's scroll bar

@@ -100,6 +100,8 @@ struct FakeAccount {
     recent: Vec<ItemId>,
     // when items were created or last edited here
     modified: HashMap<ItemId, SystemTime>,
+    // the websites' icons fetched, as rbw keeps them on disk
+    icons: HashMap<String, Option<WebsiteIcon>>,
 }
 
 // How long an unlocked item that asks for the password again stays
@@ -144,6 +146,7 @@ impl FakeBackend {
                 unlocked_items: HashMap::new(),
                 recent: demo.recent,
                 modified: HashMap::new(),
+                icons: HashMap::new(),
             })
             .collect();
         Self {
@@ -252,6 +255,22 @@ impl FakeBackend {
     pub fn add_logins(&self, account: &AccountId, count: usize) {
         if let Ok(account) = self.state().account_mut(account) {
             account.items.extend(demo::many_logins(count));
+        }
+    }
+
+    /// Keeps the icons of the account's websites as if they had been
+    /// fetched before, as on a computer the vault was opened on already.
+    pub fn keep_icons(&self, account: &AccountId) {
+        if let Ok(account) = self.state().account_mut(account) {
+            let hosts: Vec<String> = account
+                .items
+                .iter()
+                .filter_map(|item| icon::icon_host(&summary(item, SystemTime::UNIX_EPOCH)))
+                .collect();
+            for host in hosts {
+                let icon = demo_icon(&host);
+                account.icons.insert(host, icon);
+            }
         }
     }
 
@@ -668,6 +687,7 @@ impl Backend for FakeBackend {
             unlocked_items: HashMap::new(),
             recent: vec![],
             modified: HashMap::new(),
+            icons: HashMap::new(),
         });
         Ok(id)
     }
@@ -901,7 +921,27 @@ impl Backend for FakeBackend {
         if !state.preferences.website_icons {
             return Ok(None);
         }
-        Ok(icon::icon_host(item).and_then(|host| demo_icon(&host)))
+        let Some(host) = icon::icon_host(item) else {
+            return Ok(None);
+        };
+        let icon = demo_icon(&host);
+        state.account_mut(account)?.icons.insert(host, icon.clone());
+        Ok(icon)
+    }
+
+    fn cached_website_icon(
+        &self,
+        account: &AccountId,
+        item: &ItemSummary,
+    ) -> Result<Option<Option<WebsiteIcon>>> {
+        let mut state = self.state();
+        if !state.preferences.website_icons {
+            return Ok(Some(None));
+        }
+        let Some(host) = icon::icon_host(item) else {
+            return Ok(Some(None));
+        };
+        Ok(state.account_mut(account)?.icons.get(&host).cloned())
     }
 
     fn recent_items(&self, account: &AccountId) -> Result<Vec<ItemId>> {
@@ -1410,10 +1450,28 @@ mod tests {
             .into_iter()
             .filter(|item| item.kind == ItemKind::Login)
             .collect();
+        // Nothing is kept before an icon is fetched, or kept.
+        let with_website = logins
+            .iter()
+            .find(|item| !item.websites.is_empty())
+            .unwrap();
+        assert_eq!(fake.cached_website_icon(&id, with_website).unwrap(), None);
         let icons: Vec<_> = logins
             .iter()
             .map(|item| fake.website_icon(&id, item).unwrap())
             .collect();
+        for (item, icon) in logins.iter().zip(&icons) {
+            assert_eq!(
+                fake.cached_website_icon(&id, item).unwrap(),
+                Some(icon.clone())
+            );
+        }
+        let fresh = unlocked();
+        fresh.keep_icons(&id);
+        assert_eq!(
+            fresh.cached_website_icon(&id, with_website).unwrap(),
+            Some(fake.website_icon(&id, with_website).unwrap())
+        );
         // The made-up websites have one; the real ones show their letter.
         assert!((8..logins.len() / 2).contains(&icons.iter().flatten().count()));
         for icon in icons.into_iter().flatten() {
@@ -1428,6 +1486,10 @@ mod tests {
             logins
                 .iter()
                 .all(|item| fake.website_icon(&id, item).unwrap().is_none())
+        );
+        assert_eq!(
+            fake.cached_website_icon(&id, with_website).unwrap(),
+            Some(None)
         );
     }
 

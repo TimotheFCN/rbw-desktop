@@ -162,6 +162,18 @@ pub trait Backend: Send + Sync {
     /// [`Error::Offline`], aren't kept: a later call tries again.
     fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>>;
 
+    /// What [`Backend::website_icon`] would answer from the disk alone,
+    /// without asking the server: `Some(Some(icon))` for an icon kept,
+    /// `Some(None)` when the item has no icon to show (none kept for its
+    /// website, icons off, no website that gets one), and `None` when only
+    /// the server can say. Quick, but it reads files: call it off the main
+    /// thread.
+    fn cached_website_icon(
+        &self,
+        account: &AccountId,
+        item: &ItemSummary,
+    ) -> Result<Option<Option<WebsiteIcon>>>;
+
     /// The items of the account used last in the app on this computer,
     /// most recent first, as [`Backend::item_used`] noted them: their ids
     /// only, kept with the preferences. Items deleted since are still

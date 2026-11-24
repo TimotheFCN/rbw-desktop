@@ -22,7 +22,7 @@ use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot, motion};
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
 use crate::generator::Generator;
-use crate::icons::Icons;
+use crate::icons::{self, Icons};
 use crate::preferences::{self, Prefs};
 use crate::recent;
 use crate::secondary;
@@ -68,6 +68,10 @@ const MAX_LIST_SHARE: f32 = 0.6;
 /// How long the divider between the list and the item rests after a drag
 /// before where it was left is saved.
 const SAVE_DIVIDER_AFTER: Duration = Duration::from_millis(400);
+
+/// How many of the list's first rows have their websites' icons read with
+/// it, so that they show with it: a tall window's worth.
+const FIRST_ROWS: usize = 40;
 
 /// What the divider between the list and the item drags.
 struct ListDivider;
@@ -146,6 +150,26 @@ impl Only {
     }
 }
 
+/// The items, as indices into `items`, that the sidebar's choice, the
+/// menu's and a search in lower case admit, in `order`.
+fn visible(
+    items: &[ItemSummary],
+    filter: &Filter,
+    only: Only,
+    query: &str,
+    order: SortOrder,
+    recent: &[ItemId],
+) -> Vec<usize> {
+    let mut visible: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| filter.admits(item) && only.admits(item) && matches(item, query))
+        .map(|(index, _)| index)
+        .collect();
+    sort(&mut visible, items, order, recent);
+    visible
+}
+
 /// Puts the list's items, given as indices into `items`, in `order`.
 /// `items` are sorted by name already, and ties keep that order.
 fn sort(visible: &mut [usize], items: &[ItemSummary], order: SortOrder, recent: &[ItemId]) {
@@ -190,6 +214,8 @@ pub struct VaultView {
     /// Indices into the loaded items that pass the filter and the search,
     /// in display order.
     visible: Vec<usize>,
+    /// The rows whose icons were last read ahead.
+    prefetched: std::ops::Range<usize>,
     selected: Option<ItemId>,
     detail: Entity<ItemDetail>,
     sheet: SheetSlot,
@@ -260,6 +286,7 @@ impl VaultView {
             sort_menu_focus: cx.focus_handle(),
             search,
             visible: vec![],
+            prefetched: 0..0,
             selected: None,
             detail,
             sheet: SheetSlot::default(),
@@ -323,23 +350,40 @@ impl VaultView {
         cx.notify();
     }
 
+    /// The search, in lower case.
+    fn query(&self, cx: &App) -> String {
+        self.search.read(cx).value().trim().to_lowercase()
+    }
+
     /// Loads the items and folders again, keeping the selection if it still
-    /// exists.
+    /// exists. The first time, the icons of the first rows come with them.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let account = self.account_id();
+        let first_load = matches!(self.items, Load::Loading);
+        let (filter, only, query) = (self.filter.clone(), self.only, self.query(cx));
+        let order = Prefs::global(cx).read(cx).get().sort;
         self.load_task = backend::request(
             cx,
             move |backend| {
-                let items = backend.items(&account)?;
+                let mut items = backend.items(&account)?;
+                items.sort_by_cached_key(|item| item.name.to_lowercase());
                 let folders = backend.folders(&account)?;
                 // Without them, the list is still worth showing.
                 let recent = backend.recent_items(&account).unwrap_or_default();
-                Ok((items, folders, recent))
+                let icons = first_load.then(|| {
+                    let rows = visible(&items, &filter, only, &query, order, &recent);
+                    let first = rows.into_iter().take(FIRST_ROWS).map(|index| &items[index]);
+                    icons::read_cached(backend, &account, first)
+                });
+                Ok((items, folders, recent, icons))
             },
             |this, result, cx| {
                 match result {
-                    Ok((mut items, folders, recent)) => {
-                        items.sort_by_cached_key(|item| item.name.to_lowercase());
+                    Ok((items, folders, recent, icons)) => {
+                        if let Some(icons) = icons {
+                            Icons::global(cx)
+                                .update(cx, |known, cx| known.insert_cached(icons, cx));
+                        }
                         this.items = Load::Ready(items);
                         this.folders = folders;
                         this.recent = recent;
@@ -354,25 +398,16 @@ impl VaultView {
     /// Lists the items the sidebar and the search admit, keeping the
     /// selection if it is among them, else selecting the first.
     fn refilter(&mut self, cx: &mut Context<Self>) {
-        let query = self.search.read(cx).value().to_lowercase();
-        let query = query.trim();
+        let query = self.query(cx);
         let order = Prefs::global(cx).read(cx).get().sort;
         self.sorted_by = order;
         self.visible = match &self.items {
             Load::Ready(items) => {
-                let mut visible: Vec<usize> = items
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, item)| {
-                        self.filter.admits(item) && self.only.admits(item) && matches(item, query)
-                    })
-                    .map(|(index, _)| index)
-                    .collect();
-                sort(&mut visible, items, order, &self.recent);
-                visible
+                visible(items, &self.filter, self.only, &query, order, &self.recent)
             }
             Load::Loading | Load::Failed(_) => vec![],
         };
+        self.prefetched = 0..0;
         match self.selected_index() {
             Some(index) => {
                 self.list_scroll

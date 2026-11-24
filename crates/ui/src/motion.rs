@@ -21,6 +21,8 @@ use gpui::{
 
 /// Hover and press feedback, and a highlight leaving a row.
 pub const QUICK: Duration = Duration::from_millis(120);
+/// Something arriving in its place, such as a website's icon.
+pub const ARRIVE: Duration = Duration::from_millis(200);
 /// Content replacing other content, like the detail pane changing item.
 pub const STANDARD: Duration = Duration::from_millis(220);
 /// A sheet or popover arriving.

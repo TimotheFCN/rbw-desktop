@@ -657,6 +657,20 @@ impl Backend for RbwBackend {
         Ok(icon)
     }
 
+    fn cached_website_icon(
+        &self,
+        account: &AccountId,
+        item: &ItemSummary,
+    ) -> Result<Option<Option<WebsiteIcon>>> {
+        if !self.preferences()?.website_icons {
+            return Ok(Some(None));
+        }
+        Ok(match icon::icon_host(item) {
+            Some(host) => self.icons.get(account, &host),
+            None => Some(None),
+        })
+    }
+
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
         if !options.makes_anything() {
             return Err(Error::Other("these options make nothing".into()));
