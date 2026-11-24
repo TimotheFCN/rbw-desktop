@@ -216,7 +216,7 @@ act() {
 	# The window's size in points, without the frame.
 	local width=$((win_w / scale - 2 * frame)) height=$((win_h / scale - 2 * frame))
 	# The item list: its default share of the room right of the sidebar.
-	local list=$(((width - sidebar) * 36 / 100))
+	local list=$(((width - sidebar) * 40 / 100))
 	((list < 220)) && list=220
 	# The middle of the account button at the bottom of the sidebar.
 	local footer_x=60 footer_y=$((height - 7 - 19))

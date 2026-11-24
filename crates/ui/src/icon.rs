@@ -52,6 +52,7 @@ icons! {
     Down => "down",
     Edit => "pen",
     External => "ext",
+    Filter => "filter",
     Eye => "eye",
     Folder => "folder",
     Gear => "gear",

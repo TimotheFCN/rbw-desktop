@@ -19,8 +19,8 @@ use process::{Rbw, Wait};
 use crate::{
     Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, Error, Folder,
     FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode,
-    WebsiteIcon, icon,
+    Preferences, Result, Secret, Server, SortOrder, SshAgentStatus, SshService, SshUses,
+    VerificationCode, WebsiteIcon, icon,
 };
 
 /// How many recently used items each account keeps.
@@ -212,6 +212,36 @@ struct PreferencesJson {
     menu_bar: Option<bool>,
     #[serde(default)]
     list_share: Option<f32>,
+    #[serde(default)]
+    sort: Option<SortJson>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SortJson {
+    Name,
+    Modified,
+    RecentlyUsed,
+}
+
+impl From<SortOrder> for SortJson {
+    fn from(order: SortOrder) -> Self {
+        match order {
+            SortOrder::Name => SortJson::Name,
+            SortOrder::Modified => SortJson::Modified,
+            SortOrder::RecentlyUsed => SortJson::RecentlyUsed,
+        }
+    }
+}
+
+impl From<SortJson> for SortOrder {
+    fn from(order: SortJson) -> Self {
+        match order {
+            SortJson::Name => SortOrder::Name,
+            SortJson::Modified => SortOrder::Modified,
+            SortJson::RecentlyUsed => SortOrder::RecentlyUsed,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -730,6 +760,7 @@ impl Backend for RbwBackend {
                 generator: saved.generator.map_or(defaults.generator, Into::into),
                 menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
                 list_share: saved.list_share,
+                sort: saved.sort.map_or(defaults.sort, Into::into),
             })
             .unwrap_or(defaults))
     }
@@ -741,6 +772,7 @@ impl Backend for RbwBackend {
             generator: Some(preferences.generator.into()),
             menu_bar: Some(preferences.menu_bar),
             list_share: preferences.list_share,
+            sort: Some(preferences.sort.into()),
         };
         write_json(&self.preferences, &saved)
             .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;

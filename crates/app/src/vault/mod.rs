@@ -15,7 +15,7 @@ use gpui::{
     Styled as _, Subscription, Task, UniformListScrollHandle, Window, actions, div, px,
 };
 use rbw_desktop_core::{
-    Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary,
+    Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary, SortOrder,
 };
 use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot, motion};
 
@@ -63,7 +63,7 @@ const CONTEXT: &str = "Vault";
 
 /// The item list's share of the room right of the sidebar, unless it was
 /// moved, and the most it can take.
-const LIST_SHARE: f32 = 0.36;
+const LIST_SHARE: f32 = 0.4;
 const MAX_LIST_SHARE: f32 = 0.6;
 /// How long the divider between the list and the item rests after a drag
 /// before where it was left is saved.
@@ -110,6 +110,8 @@ pub enum Filter {
     Favorites,
     Kind(ItemKind),
     Folder(FolderId),
+    /// Items in no folder.
+    NoFolder,
 }
 
 impl Filter {
@@ -119,6 +121,46 @@ impl Filter {
             Filter::Favorites => item.favorite,
             Filter::Kind(kind) => item.kind == *kind,
             Filter::Folder(folder) => item.folder.as_ref() == Some(folder),
+            Filter::NoFolder => item.folder.is_none(),
+        }
+    }
+}
+
+/// What the list's menu narrows it to, on top of the sidebar's choice:
+/// what the sidebar doesn't offer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Only {
+    /// Logins with a verification code.
+    pub code: bool,
+    /// Items shared with the account through an organization.
+    pub shared: bool,
+}
+
+impl Only {
+    fn admits(self, item: &ItemSummary) -> bool {
+        (!self.code || item.has_code) && (!self.shared || item.organization.is_some())
+    }
+
+    fn any(self) -> bool {
+        self.code || self.shared
+    }
+}
+
+/// Puts the list's items, given as indices into `items`, in `order`.
+/// `items` are sorted by name already, and ties keep that order.
+fn sort(visible: &mut [usize], items: &[ItemSummary], order: SortOrder, recent: &[ItemId]) {
+    match order {
+        SortOrder::Name => {}
+        SortOrder::Modified => {
+            visible.sort_by_key(|&index| std::cmp::Reverse(items[index].modified));
+        }
+        SortOrder::RecentlyUsed => {
+            let rank: std::collections::HashMap<&ItemId, usize> = recent
+                .iter()
+                .enumerate()
+                .map(|(rank, id)| (id, rank))
+                .collect();
+            visible.sort_by_key(|&index| rank.get(&items[index].id).copied().unwrap_or(usize::MAX));
         }
     }
 }
@@ -134,7 +176,16 @@ pub struct VaultView {
     main_menu_focus: FocusHandle,
     items: Load<Vec<ItemSummary>>,
     folders: Vec<Folder>,
+    /// The items used last, as they were when the vault loaded, for
+    /// sorting by them; using an item doesn't move it while it shows.
+    recent: Vec<ItemId>,
     filter: Filter,
+    only: Only,
+    /// The order the list was last sorted in, to sort it again when the
+    /// preferences, read after it loaded, say otherwise.
+    sorted_by: SortOrder,
+    sort_menu_open: bool,
+    sort_menu_focus: FocusHandle,
     search: Entity<InputState>,
     /// Indices into the loaded items that pass the filter and the search,
     /// in display order.
@@ -201,7 +252,12 @@ impl VaultView {
             main_menu_focus: cx.focus_handle(),
             items: Load::Loading,
             folders: vec![],
+            recent: vec![],
             filter: Filter::All,
+            only: Only::default(),
+            sorted_by: SortOrder::Name,
+            sort_menu_open: false,
+            sort_menu_focus: cx.focus_handle(),
             search,
             visible: vec![],
             selected: None,
@@ -224,7 +280,12 @@ impl VaultView {
             save_share_task: Task::ready(()),
             _subscriptions: [
                 cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
-                cx.observe(&Prefs::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Prefs::global(cx), |this, prefs, cx| {
+                    if prefs.read(cx).get().sort != this.sorted_by {
+                        this.refilter(cx);
+                    }
+                    cx.notify();
+                }),
             ],
         };
         this.reload(cx);
@@ -268,13 +329,20 @@ impl VaultView {
         let account = self.account_id();
         self.load_task = backend::request(
             cx,
-            move |backend| Ok((backend.items(&account)?, backend.folders(&account)?)),
+            move |backend| {
+                let items = backend.items(&account)?;
+                let folders = backend.folders(&account)?;
+                // Without them, the list is still worth showing.
+                let recent = backend.recent_items(&account).unwrap_or_default();
+                Ok((items, folders, recent))
+            },
             |this, result, cx| {
                 match result {
-                    Ok((mut items, folders)) => {
+                    Ok((mut items, folders, recent)) => {
                         items.sort_by_cached_key(|item| item.name.to_lowercase());
                         this.items = Load::Ready(items);
                         this.folders = folders;
+                        this.recent = recent;
                     }
                     Err(error) => this.items = Load::Failed(error),
                 }
@@ -288,13 +356,21 @@ impl VaultView {
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value().to_lowercase();
         let query = query.trim();
+        let order = Prefs::global(cx).read(cx).get().sort;
+        self.sorted_by = order;
         self.visible = match &self.items {
-            Load::Ready(items) => items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| self.filter.admits(item) && matches(item, query))
-                .map(|(index, _)| index)
-                .collect(),
+            Load::Ready(items) => {
+                let mut visible: Vec<usize> = items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| {
+                        self.filter.admits(item) && self.only.admits(item) && matches(item, query)
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                sort(&mut visible, items, order, &self.recent);
+                visible
+            }
             Load::Loading | Load::Failed(_) => vec![],
         };
         match self.selected_index() {
@@ -333,6 +409,21 @@ impl VaultView {
             self.refilter(cx);
             self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
         }
+    }
+
+    /// Narrows the list to what the menu's choices admit.
+    pub(crate) fn set_only(&mut self, only: Only, cx: &mut Context<Self>) {
+        if self.only != only {
+            self.only = only;
+            self.refilter(cx);
+            self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        }
+    }
+
+    pub(crate) fn set_sort(&mut self, order: SortOrder, cx: &mut Context<Self>) {
+        preferences::update(cx, move |preferences| preferences.sort = order);
+        self.refilter(cx);
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
     }
 
     fn select(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
@@ -466,6 +557,7 @@ impl VaultView {
         self.search
             .update(cx, |search, cx| search.set_value("", window, cx));
         self.set_filter(Filter::All, cx);
+        self.only = Only::default();
         window.focus(&self.list_focus, cx);
         self.select_by(Some(item), true, cx);
         self.refilter(cx);
@@ -800,6 +892,59 @@ mod tests {
         assert!(!Filter::Kind(ItemKind::Card).admits(&note));
         assert!(Filter::Folder(folder.clone()).admits(&card));
         assert!(!Filter::Folder(folder).admits(&note));
+    }
+
+    #[test]
+    fn the_list_sorts_by_name_change_or_use() {
+        let at = |seconds| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+        let items = [
+            ItemSummary {
+                modified: at(10),
+                ..item("Amazon", ItemKind::Login)
+            },
+            ItemSummary {
+                modified: at(30),
+                ..item("Bank", ItemKind::Login)
+            },
+            ItemSummary {
+                modified: at(20),
+                ..item("Codes", ItemKind::SecureNote)
+            },
+        ];
+        let sorted = |order, recent: &[ItemId]| {
+            let mut visible = vec![0, 1, 2];
+            sort(&mut visible, &items, order, recent);
+            visible
+        };
+        assert_eq!(sorted(SortOrder::Name, &[]), [0, 1, 2]);
+        assert_eq!(sorted(SortOrder::Modified, &[]), [1, 2, 0]);
+        // Those used last first, then the others by name.
+        let recent = [ItemId("codes".into())];
+        assert_eq!(sorted(SortOrder::RecentlyUsed, &recent), [2, 0, 1]);
+    }
+
+    #[test]
+    fn the_menu_shows_only_codes_or_shared_items() {
+        let with_code = ItemSummary {
+            has_code: true,
+            ..item("GitHub", ItemKind::Login)
+        };
+        let shared = ItemSummary {
+            organization: Some("family".into()),
+            ..item("Netflix", ItemKind::Login)
+        };
+        let codes = Only {
+            code: true,
+            shared: false,
+        };
+        assert!(codes.admits(&with_code) && !codes.admits(&shared));
+        let both = Only {
+            code: true,
+            shared: true,
+        };
+        assert!(!both.admits(&with_code) && !both.admits(&shared));
+        assert!(Only::default().admits(&shared) && !Only::default().any());
+        assert!(Filter::NoFolder.admits(&shared));
     }
 
     #[test]

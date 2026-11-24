@@ -3,18 +3,20 @@
 use gpui::{
     AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
-    StatefulInteractiveElement as _, Styled as _, Window, deferred, div, px, relative,
-    uniform_list,
+    StatefulInteractiveElement as _, Styled as _, Window, deferred, div,
+    prelude::FluentBuilder as _, px, relative, uniform_list,
 };
+use rbw_desktop_core::SortOrder;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, motion,
-    popover, scrollbar, search_field,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, menu_item,
+    menu_separator, motion, popover, scrollbar, search_field, section_label,
 };
 
-use super::{ListDivider, MAX_LIST_SHARE, NewItem, ShowGenerator, VaultView};
+use super::{ListDivider, MAX_LIST_SHARE, NewItem, Only, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::generator;
 use crate::icons;
+use crate::preferences::Prefs;
 use crate::secondary;
 
 /// The space under each row of the list.
@@ -50,6 +52,7 @@ impl VaultView {
                 .gap(px(8.))
                 .px(px(12.))
                 .child(search_field(&self.search))
+                .child(self.render_sort_button(add_style, cx))
                 .child(self.render_generator_button(add_style, cx))
                 .child(
                     button("new-item")
@@ -153,6 +156,7 @@ impl VaultView {
             .border_r(separator_width)
             .border_color(separator)
             .child(toolbar)
+            .children(self.render_only(cx))
             .child(body)
             .child(self.render_divider(cx))
             .into_any_element()
@@ -183,6 +187,181 @@ impl VaultView {
                 })),
         )
         .into_any_element()
+    }
+
+    /// The menu next to the search field: how the list is sorted, and what
+    /// it shows only. Its choices for the list's contents leave out what no
+    /// item has.
+    fn render_sort_button(&self, style: ButtonStyle, cx: &mut Context<Self>) -> AnyElement {
+        let order = Prefs::global(cx).read(cx).get().sort;
+        let only = self.only;
+        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
+        let has_codes = items.iter().any(|item| item.has_code);
+        let has_shared = items.iter().any(|item| item.organization.is_some());
+        let this = cx.entity().downgrade();
+        let sort =
+            |id: &'static str, label: &'static str, choice: SortOrder, cx: &mut Context<Self>| {
+                menu_item(id, label)
+                    .checked(order == choice)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.close_sort_menu(window, cx);
+                        this.set_sort(choice, cx);
+                    }))
+            };
+        let show = |id: &'static str,
+                    label: &'static str,
+                    on: bool,
+                    change: fn(&mut Only),
+                    cx: &mut Context<Self>| {
+            menu_item(id, label)
+                .checked(on)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_sort_menu(window, cx);
+                    let mut only = this.only;
+                    change(&mut only);
+                    this.set_only(only, cx);
+                }))
+        };
+        let menu = popover(
+            "sort-menu",
+            self.sort_menu_open,
+            &self.sort_menu_focus,
+            "Sort and Filter",
+        )
+        .opening(Opening::BelowEnd)
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_sort_menu(window, cx))
+                .ok();
+        })
+        .child(section_label("Sort By", cx))
+        .child(sort("sort-name", "Name", SortOrder::Name, cx))
+        .child(sort(
+            "sort-modified",
+            "Last Modified",
+            SortOrder::Modified,
+            cx,
+        ))
+        .child(sort(
+            "sort-recent",
+            "Recently Used",
+            SortOrder::RecentlyUsed,
+            cx,
+        ))
+        .when(has_codes || has_shared || only.any(), |menu| {
+            menu.child(menu_separator(cx))
+                .child(section_label("Show Only", cx))
+        })
+        .when(has_codes || only.code, |menu| {
+            menu.child(show(
+                "only-code",
+                "With Verification Code",
+                only.code,
+                |only| only.code = !only.code,
+                cx,
+            ))
+        })
+        .when(has_shared || only.shared, |menu| {
+            menu.child(show(
+                "only-shared",
+                "Shared",
+                only.shared,
+                |only| only.shared = !only.shared,
+                cx,
+            ))
+        });
+        div()
+            .relative()
+            .child(
+                button("sort-menu-button")
+                    .icon(IconName::Filter)
+                    .style(style)
+                    .accessibility_label("Sort and Filter")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.sort_menu_open {
+                            this.close_sort_menu(window, cx);
+                        } else {
+                            this.sort_menu_open = true;
+                            window.focus(&this.sort_menu_focus, cx);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(menu)
+            .into_any_element()
+    }
+
+    fn close_sort_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sort_menu_open = false;
+        window.focus(&self.list_focus, cx);
+        cx.notify();
+    }
+
+    /// What the list shows only, under its toolbar while it narrows it,
+    /// each with a button that shows everything again.
+    fn render_only(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let only = self.only;
+        if !only.any() {
+            return None;
+        }
+        let colors = &cx.theme().colors;
+        let (fill, dim) = (colors.fill, colors.text_secondary);
+        let chip = |id: &'static str,
+                    label: &'static str,
+                    clear: fn(&mut Only),
+                    cx: &mut Context<Self>| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .h(px(24.))
+                .pl(px(10.))
+                .pr(px(3.))
+                .rounded_full()
+                .bg(fill)
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(label)
+                .child(
+                    div().text_color(dim).child(
+                        button(id)
+                            .icon(IconName::Close)
+                            .style(ButtonStyle::Flat)
+                            .size(px(18.))
+                            .accessibility_label(format!("Stop Showing Only {label}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let mut only = this.only;
+                                clear(&mut only);
+                                this.set_only(only, cx);
+                            })),
+                    ),
+                )
+        };
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_wrap()
+                .gap(px(6.))
+                .px(px(12.))
+                .pb(px(8.))
+                .when(only.code, |d| {
+                    d.child(chip(
+                        "clear-only-code",
+                        "With Verification Code",
+                        |only| only.code = false,
+                        cx,
+                    ))
+                })
+                .when(only.shared, |d| {
+                    d.child(chip(
+                        "clear-only-shared",
+                        "Shared",
+                        |only| only.shared = false,
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+        )
     }
 
     /// The generator's button, with its popover hanging from it.

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use rbw_desktop_core::{
     Backend, Card, CharacterClasses, Characters, CustomField, Error, FieldValue, FolderId,
     GeneratorOptions, Identity, ItemContent, ItemData, ItemKind, LockState, Login, LoginCode,
-    Preferences, RbwBackend, Secret, Server, SshKey, TwoStepMethod, UriMatch, Website,
+    Preferences, RbwBackend, Secret, Server, SortOrder, SshKey, TwoStepMethod, UriMatch, Website,
 };
 
 // an unencrypted ed25519 key, made for this test
@@ -341,6 +341,7 @@ fn against_vaultwarden() {
         },
         menu_bar: false,
         list_share: Some(0.5),
+        sort: SortOrder::RecentlyUsed,
     };
     backend.set_preferences(&preferences).unwrap();
     assert_eq!(backend.preferences().unwrap(), preferences);

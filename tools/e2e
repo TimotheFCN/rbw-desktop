@@ -173,7 +173,7 @@ keys() { xdotool key --delay 80 "$@"; }
 toolbar=50 sidebar=180
 # The item list, at its default share of the room right of the sidebar in
 # the window's first size.
-list=252
+list=280
 # The account button at the bottom of the sidebar.
 account_menu() {
 	x11_geometry

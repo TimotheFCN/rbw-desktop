@@ -17,6 +17,20 @@ pub struct Preferences {
     /// The vault's item list, as a share of the room right of the sidebar;
     /// `None` for the app's default.
     pub list_share: Option<f32>,
+    /// How the vault's item list is sorted.
+    pub sort: SortOrder,
+}
+
+/// How the vault's item list is sorted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortOrder {
+    /// By name, A to Z.
+    #[default]
+    Name,
+    /// The item changed last first.
+    Modified,
+    /// The items used last in the app first, then the others by name.
+    RecentlyUsed,
 }
 
 impl Default for Preferences {
@@ -27,6 +41,7 @@ impl Default for Preferences {
             generator: GeneratorOptions::default(),
             menu_bar: true,
             list_share: None,
+            sort: SortOrder::Name,
         }
     }
 }

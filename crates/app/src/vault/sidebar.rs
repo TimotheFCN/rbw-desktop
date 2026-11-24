@@ -191,6 +191,23 @@ impl VaultView {
                 .into_any_element(),
             );
         }
+        // Where the items no folder holds are, once there are folders.
+        let unfiled = self
+            .items
+            .ready()
+            .is_some_and(|items| items.iter().any(|item| item.folder.is_none()));
+        if !self.folders.is_empty() && unfiled {
+            rows.push(
+                row(
+                    "no-folder",
+                    IconName::Folder,
+                    "No Folder",
+                    Filter::NoFolder,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
 
         let name = accounts::name(&self.account);
         let shown = accounts::short_name(&self.account, &self.accounts);

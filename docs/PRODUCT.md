@@ -61,7 +61,14 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 ### Vault
 
 * Browse all items, favourites, by type (logins, cards, identities, notes,
-  SSH keys) and by folder. Search as you type.
+  SSH keys) and by folder, "No Folder" included. Search as you type.
+* A menu next to the search field sorts the list by name, by last change
+  or by recent use (remembered), and shows only the logins with a
+  verification code or only the items shared with the account. What it
+  shows only is written under the search field, with a button that shows
+  everything again.
+* The list takes a share of the window, which dragging its edge changes
+  (remembered; a double-click puts it back).
 * Item view: every field copies on click, with a brief "Copied" confirmation.
   Passwords and other hidden fields reveal on request. Verification codes
   count down live. Websites open in the browser.
