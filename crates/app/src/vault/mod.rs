@@ -258,6 +258,8 @@ pub struct VaultView {
     generator_task: Task<()>,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
+    /// Fetches ahead the row the pointer rests on.
+    hover_task: Task<()>,
     /// The list's share while its divider is dragged, until it is saved.
     dragged_share: Option<f32>,
     save_share_task: Task<()>,
@@ -329,6 +331,7 @@ impl VaultView {
             generator_focus: cx.focus_handle(),
             generator_task: Task::ready(()),
             load_task: Task::ready(()),
+            hover_task: Task::ready(()),
             dragged_share: None,
             save_share_task: Task::ready(()),
             _subscriptions: [

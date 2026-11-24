@@ -1,6 +1,7 @@
 //! The item list with its search field.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
@@ -28,6 +29,8 @@ pub(super) const MIN_WIDTH: Pixels = px(240.);
 /// How many screens of rows either side of those drawn have their icons
 /// read ahead.
 const PREFETCH_SCREENS: usize = 2;
+/// How long the pointer rests on a row before its item is fetched ahead.
+const POINTER_REST: Duration = Duration::from_millis(60);
 /// How far either side of the list's edge its divider takes the pointer.
 const DIVIDER_REACH: Pixels = px(3.);
 
@@ -110,7 +113,7 @@ impl VaultView {
                                 .pb(ROW_GAP)
                                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                     if *hovered {
-                                        this.prefetch_rows([position], cx);
+                                        this.pointer_rests(position, cx);
                                     }
                                 }))
                                 .on_mouse_down(
@@ -202,6 +205,17 @@ impl VaultView {
         let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
         let rows = self.visible[around].iter().map(|&index| &items[index]);
         Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&self.account.id, rows, cx));
+    }
+
+    /// The pointer came onto a row: once it rests there, the row's item is
+    /// fetched ahead, so that a click shows it complete at once. Rows only
+    /// passed over aren't.
+    fn pointer_rests(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.hover_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(POINTER_REST).await;
+            this.update(cx, |this, cx| this.prefetch_rows([row], cx))
+                .ok();
+        });
     }
 
     /// The divider between the list and the item: dragged, it moves the
