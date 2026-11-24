@@ -49,9 +49,15 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let demo = demo::words().is_some();
-    if !demo && instance::hand_over() {
-        return;
-    }
+    let instance = if demo {
+        None
+    } else {
+        match instance::claim() {
+            instance::Claim::First(instance) => Some(instance),
+            instance::Claim::HandedOver => return,
+            instance::Claim::Alone => None,
+        }
+    };
     let backend = backend::connect();
 
     // The app quits by itself, below.
@@ -82,8 +88,8 @@ fn main() {
             }
         })
         .detach();
-        if !demo {
-            instance::listen(cx);
+        if let Some(instance) = instance {
+            instance::listen(instance, cx);
         }
         let missing = match backend {
             Ok(backend) => {
