@@ -97,15 +97,16 @@ impl RenderOnce for SegmentedControl {
                             .selected(selected)
                             .relative()
                             .flex_1()
-                            .py(px(4.5))
+                            .py(px(2.5))
                             .rounded(if macos { px(7.) } else { px(6.) })
                             .text_size(px(12.5))
                             .line_height(relative(1.3))
-                            .focus_visible(move |s| {
-                                s.shadow(vec![
-                                    BoxShadow::new(px(0.), px(0.), ring).spread_radius(px(2.)),
-                                ])
-                            })
+                            // A shadow would show through the clear segment
+                            // as a fill: the ring is a border, always there
+                            // and clear until the keyboard reaches it.
+                            .border_2()
+                            .border_color(gpui::transparent_black())
+                            .focus_visible(move |s| s.border_color(ring))
                             .when(selected, |d| d.font_weight(FontWeight::SEMIBOLD))
                             .when_some(on_select, |d, on_select| {
                                 d.on_click(move |_: &ClickEvent, window, cx| {
