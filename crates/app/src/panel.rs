@@ -10,19 +10,18 @@ use gpui::base::input::{InputEvent, InputState};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
     FocusHandle, Focusable, FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
-    Window, WindowOptions, actions, div, point, prelude::FluentBuilder as _, px, size,
-    uniform_list,
+    MouseMoveEvent, ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
+    Styled as _, Subscription, Task, UniformListScrollHandle, Window, WindowOptions, actions, div,
+    point, prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use rbw_desktop_core::{
     APP_ID, APP_NAME, Account, AccountId, Error, Item, ItemContent, ItemId, ItemKind, ItemSummary,
     LockState, Secret,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, Material, ToastSlot,
-    backdrop, button, chrome, icon, key_hint, list_row, motion, scroll_area, scrollbar,
-    search_field, section_label, segmented_control,
+    ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, Material, TileIcon,
+    ToastSlot, backdrop, button, chrome, icon, key_hint, list_row, motion, scroll_area, scrollbar,
+    search_field, section_label, segmented_control, tile,
 };
 
 use crate::CloseWindow;
@@ -32,6 +31,7 @@ use crate::clipboard;
 use crate::generator::Generator;
 use crate::icons::{self, Icons};
 use crate::recent;
+use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
 use crate::vault;
 use crate::window;
@@ -49,11 +49,16 @@ actions!(
         CopyCode,
         /// Shows the selected item in the main window.
         OpenInVault,
+        /// Locks the account.
+        Lock,
+        /// Goes back to the list from the master password an item asks for.
+        CancelReprompt,
     ]
 );
 
 const CONTEXT: &str = "QuickPanel";
 const PASSWORDS: &str = "PanelPasswords";
+const REPROMPT: &str = "PanelReprompt";
 /// The panel's size, without the frame Linux draws around it.
 const SIZE: gpui::Size<Pixels> = size(px(306.), px(488.));
 /// How many of the items used last it lists.
@@ -73,6 +78,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(secondary!("shift-c"), CopyUsername, Some(PASSWORDS)),
         KeyBinding::new(secondary!("alt-c"), CopyCode, Some(PASSWORDS)),
         KeyBinding::new(secondary!("o"), OpenInVault, Some(PASSWORDS)),
+        KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
+        KeyBinding::new("escape", CancelReprompt, Some(REPROMPT)),
     ]);
     cx.set_global(PanelWindow::default());
 }
@@ -198,7 +205,7 @@ pub struct QuickPanel {
     recent: Vec<ItemId>,
     /// Indices into the items of the rows shown, in order.
     shown: Vec<usize>,
-    selected: usize,
+    selection: Selection,
     /// Where the selection's highlight is drawn, in rows: it slides with
     /// the arrow keys, and follows the pointer at once, as a menu's does.
     highlight_at: f32,
@@ -208,9 +215,11 @@ pub struct QuickPanel {
     drew: std::ops::Range<usize>,
     copied: Option<ItemId>,
     copied_timer: Task<()>,
-    /// The selected row's button under the pointer, which the line under
-    /// the list names.
-    pointed: Option<RowAction>,
+    /// The button under the pointer, which the line under the list names.
+    pointed: Option<Pointed>,
+    /// The master password of an item that asks for it before something
+    /// of it is copied.
+    asking: Option<Asking>,
     unlocking: bool,
     /// Made when its tab is first shown.
     generator: Option<Entity<Generator>>,
@@ -235,9 +244,9 @@ impl QuickPanel {
             cx.subscribe_in(
                 &search,
                 window,
-                |this, _, event: &InputEvent, _, cx| match event {
+                |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => this.refilter(cx),
-                    InputEvent::PressEnter { .. } => this.copy_main(cx),
+                    InputEvent::PressEnter { .. } => this.copy_main(window, cx),
                     InputEvent::Focus | InputEvent::Blur => {}
                 },
             ),
@@ -271,13 +280,14 @@ impl QuickPanel {
             loaded: None,
             recent: vec![],
             shown: vec![],
-            selected: 0,
+            selection: Selection::new(window.mouse_position()),
             highlight_at: 0.,
             highlight_jumps: false,
             drew: 0..0,
             copied: None,
             copied_timer: Task::ready(()),
             pointed: None,
+            asking: None,
             unlocking: false,
             generator: None,
             focus: cx.focus_handle(),
@@ -383,7 +393,7 @@ impl QuickPanel {
                 .map(|(index, _)| index)
                 .collect()
         };
-        self.selected = 0;
+        self.selection.reset(self.shown.len());
         self.highlight_jumps = true;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
@@ -395,88 +405,152 @@ impl QuickPanel {
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected + 1 < self.shown.len() {
-            self.select(self.selected + 1, false, cx);
+        if self.selection.next() {
+            self.selection_moved(false, cx);
         }
     }
 
     fn select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(previous) = self.selected.checked_sub(1) {
-            self.select(previous, false, cx);
+        if self.selection.previous() {
+            self.selection_moved(false, cx);
         }
     }
 
-    /// Selects a row, with the arrow keys or under the pointer.
-    fn select(&mut self, position: usize, by_pointer: bool, cx: &mut Context<Self>) {
-        if self.selected != position {
-            self.selected = position;
+    /// The pointer moved over a row, which it selects.
+    fn pointer_moved(&mut self, position: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.selection.pointer_at(position, at) {
+            self.selection_moved(true, cx);
+        }
+    }
+
+    /// The selection moved: with the arrow keys it slides there and is
+    /// scrolled into view; under the pointer it is there at once, as a
+    /// menu's.
+    fn selection_moved(&mut self, by_pointer: bool, cx: &mut Context<Self>) {
+        if matches!(self.pointed, Some(Pointed::Row(_))) {
             self.pointed = None;
-            self.highlight_jumps |= by_pointer;
-            self.scroll
-                .scroll_to_item(position, ScrollStrategy::Nearest);
-            cx.notify();
         }
+        self.highlight_jumps |= by_pointer;
+        if !by_pointer {
+            self.scroll
+                .scroll_to_item(self.selection.row, ScrollStrategy::Nearest);
+        }
+        cx.notify();
     }
 
-    fn copy_username(&mut self, _: &CopyUsername, _: &mut Window, cx: &mut Context<Self>) {
+    fn copy_username(&mut self, _: &CopyUsername, window: &mut Window, cx: &mut Context<Self>) {
         self.copy_selected(
             |kind| (kind == ItemKind::Login).then_some(Part::Username),
+            window,
             cx,
         );
     }
 
-    fn copy_code(&mut self, _: &CopyCode, _: &mut Window, cx: &mut Context<Self>) {
+    fn copy_code(&mut self, _: &CopyCode, window: &mut Window, cx: &mut Context<Self>) {
         self.copy_selected(
             |kind| match kind {
                 ItemKind::Login => Some(Part::Code),
                 ItemKind::Card => Some(Part::SecurityCode),
                 _ => None,
             },
+            window,
             cx,
         );
     }
 
     /// Return: copies what the selected item is for.
-    fn copy_main(&mut self, cx: &mut Context<Self>) {
-        self.copy_selected(|kind| Some(Part::main(kind)), cx);
+    fn copy_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_selected(|kind| Some(Part::main(kind)), window, cx);
     }
 
     fn open_in_vault(&mut self, _: &OpenInVault, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(item) = self.item(self.selected) {
+        if let Some(item) = self.selection.target().and_then(|row| self.item(row)) {
             self.open_item(item.id.clone(), cx);
         }
     }
 
     /// Copies what `part` picks of the selected item's kind, if anything.
-    fn copy_selected(&mut self, part: impl Fn(ItemKind) -> Option<Part>, cx: &mut Context<Self>) {
-        if let Some(item) = self.item(self.selected).cloned()
+    fn copy_selected(
+        &mut self,
+        part: impl Fn(ItemKind) -> Option<Part>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(item) = self
+            .selection
+            .target()
+            .and_then(|row| self.item(row))
+            .cloned()
             && let Some(part) = part(item.kind)
         {
-            self.copy(item, part, cx);
+            self.copy(item, part, window, cx);
         }
     }
 
     /// Copies something of an item. An item that asks for the master
-    /// password again opens in the main window instead.
-    fn copy(&mut self, item: ItemSummary, part: Part, cx: &mut Context<Self>) {
+    /// password again asks for it here first.
+    fn copy(&mut self, item: ItemSummary, part: Part, window: &mut Window, cx: &mut Context<Self>) {
         let Some(account) = self.account_id() else {
             return;
         };
-        let (requested, id) = (item.id.clone(), item.id);
-        backend::request(
+        let requested = item.id.clone();
+        backend::request_in(
+            window,
             cx,
             move |backend| match part {
                 Part::Code => Ok(backend.verification_code(&account, &requested)?.code),
                 _ => Ok(part.value(&backend.item(&account, &requested)?)),
             },
-            move |this, result, cx| match result {
+            move |this, result, window, cx| match result {
                 Ok(value) if value.expose().is_empty() => this.say(part.missing(), cx),
-                Ok(value) => this.copied(id, &value, part.secret(), cx),
-                Err(Error::RepromptRequired) => this.open_item(id, cx),
+                Ok(value) => this.copied(item.id, &value, part.secret(), cx),
+                Err(Error::RepromptRequired) => this.ask_password(item, part, window, cx),
                 Err(error) => this.say(backend::describe(&error), cx),
             },
         )
         .detach();
+    }
+
+    /// Asks for the master password in place of the list, then copies what
+    /// was asked for.
+    fn ask_password(
+        &mut self,
+        item: ItemSummary,
+        part: Part,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(account) = self.account_id() else {
+            return;
+        };
+        let reprompt = cx.new(|cx| Reprompt::new(account, item.id.clone(), window, cx));
+        reprompt.update(cx, |reprompt, cx| reprompt.focus(window, cx));
+        let unlocked = cx.subscribe_in(&reprompt, window, |this, _, _: &Unlocked, window, cx| {
+            // The field that had the keyboard goes with the prompt.
+            this.focus_search(window, cx);
+            if let Some(asking) = this.asking.take() {
+                this.copy(asking.item, asking.part, window, cx);
+            }
+            cx.notify();
+        });
+        self.asking = Some(Asking {
+            item,
+            part,
+            reprompt,
+            _unlocked: unlocked,
+        });
+        cx.notify();
+    }
+
+    fn cancel_reprompt(&mut self, _: &CancelReprompt, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_search(window, cx);
+        self.asking = None;
+        cx.notify();
+    }
+
+    fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search
+            .update(cx, |search, cx| search.focus(window, cx));
     }
 
     fn copied(&mut self, item: ItemId, value: &Secret, secret: bool, cx: &mut Context<Self>) {
@@ -546,8 +620,8 @@ impl QuickPanel {
         });
     }
 
-    fn lock(&mut self, cx: &mut Context<Self>) {
-        let Some(account) = self.account_id() else {
+    fn lock(&mut self, _: &Lock, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(account) = self.account_id().filter(|_| self.loaded.is_some()) else {
             return;
         };
         backend::request(
@@ -588,9 +662,7 @@ impl QuickPanel {
         }
         self.tab = tab;
         match tab {
-            Tab::Passwords if self.loaded.is_some() => self
-                .search
-                .update(cx, |search, cx| search.focus(window, cx)),
+            Tab::Passwords if self.loaded.is_some() => self.focus_search(window, cx),
             Tab::Passwords => window.focus(&self.focus, cx),
             Tab::Generator => {
                 let generator = self
@@ -605,6 +677,9 @@ impl QuickPanel {
     fn render_passwords(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let account = self.account.clone();
         let known = !matches!(Accounts::global(cx).read(cx).load(), Load::Loading);
+        if let Some(asking) = self.asking.as_ref().filter(|_| self.loaded.is_some()) {
+            return self.render_asking(asking, cx);
+        }
         let body = match account.as_ref().map(|account| account.state) {
             _ if !known => div().into_any_element(),
             Some(LockState::Unlocked) => self.render_items(window, cx),
@@ -628,10 +703,10 @@ impl QuickPanel {
 
     fn render_items(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let jump = std::mem::take(&mut self.highlight_jumps);
-        let on_screen = motion::rows_on_screen(&self.drew, self.selected);
+        let on_screen = motion::rows_on_screen(&self.drew, self.selection.row);
         self.highlight_at = motion::slide(
             "panel-selection",
-            self.selected as f32,
+            self.selection.row as f32,
             jump,
             on_screen,
             window,
@@ -658,7 +733,7 @@ impl QuickPanel {
             }
             _ => None,
         };
-        let (listed, hint) = (empty.is_none(), self.render_hint(cx));
+        let hint = self.render_hint(cx);
         div()
             .flex_1()
             .min_h_0()
@@ -716,17 +791,18 @@ impl QuickPanel {
                     .child(scrollbar("panel-rows-bar", &self.scroll, cx))
                     .into_any_element(),
             })
-            .when(listed, |d| d.child(hint))
+            .child(hint)
             .into_any_element()
     }
 
     /// A row: a click copies what the item is for, such as a login's
-    /// password; the selected row also has a button for each thing it can
-    /// copy, and one that opens the item in the vault.
+    /// password, as Return does; the selected row also has a button for
+    /// each thing it can copy, and one that opens the item in the vault.
+    /// The pointer moving onto a row selects it.
     fn render_row(&self, position: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let item = self.item(position)?.clone();
         let account = self.account.as_ref()?.id.clone();
-        let selected = position == self.selected;
+        let selected = position == self.selection.row;
         let icon = icons::icon(&account, &item, cx);
         let copied = self.copied.as_ref() == Some(&item.id);
         // They fade in with the selection, rather than pop.
@@ -741,10 +817,8 @@ impl QuickPanel {
         Some(
             div()
                 .id(("panel-row", position))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered {
-                        this.select(position, true, cx);
-                    }
+                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                    this.pointer_moved(position, event.position, cx);
                 }))
                 .child(
                     list_row(
@@ -754,9 +828,6 @@ impl QuickPanel {
                         selected,
                     )
                     .compact()
-                    // The search field keeps the keyboard; the arrow keys
-                    // move through the rows.
-                    .in_focusable_list(false)
                     .icon(icon)
                     .highlight(Highlight::at(
                         self.highlight_at - position as f32,
@@ -765,9 +836,9 @@ impl QuickPanel {
                     .accessibility_label(format!("{}, {}", item.name, main.label()))
                     .copied(copied)
                     .trailing(div().flex().items_center().children(actions))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.copy(clicked.clone(), main, cx)),
-                    ),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.copy(clicked.clone(), main, window, cx)
+                    })),
                 )
                 .into_any_element(),
         )
@@ -776,31 +847,29 @@ impl QuickPanel {
     /// Notes the button the pointer is on, or that it left it.
     fn point_at(
         &self,
-        action: RowAction,
+        pointed: Pointed,
         cx: &mut Context<Self>,
     ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
         cx.listener(move |this, hovered: &bool, _, cx| {
             if *hovered {
-                this.pointed = Some(action);
-            } else if this.pointed == Some(action) {
+                this.pointed = Some(pointed);
+            } else if this.pointed == Some(pointed) {
                 this.pointed = None;
             }
             cx.notify();
         })
     }
 
-    /// The line under the list that names what the button under the
-    /// pointer does, or else what Return does, with its key: the row's
-    /// buttons say it at once, without waiting for their tooltips.
+    /// The line under the list, which says what Return does to the
+    /// selected row, or what the button under the pointer does, with its
+    /// key: the buttons are icons, and a tooltip waits a second.
     fn render_hint(&self, cx: &mut Context<Self>) -> AnyElement {
-        let hint = self.item(self.selected).map(|item| {
-            let action = self
-                .pointed
-                .unwrap_or(RowAction::Copy(Part::main(item.kind)));
-            let (label, keys) = match action {
-                RowAction::Copy(part) => (part.label(), part.keys(item.kind)),
-                RowAction::Open => ("Open in Vault", secondary!("o")),
-            };
+        let selected = self
+            .selection
+            .target()
+            .and_then(|row| self.item(row))
+            .map(|item| item.kind);
+        let hint = hint(self.pointed, selected).map(|(label, keys)| {
             motion::replace(SharedString::from(label), key_hint(label, keys, cx))
         });
         div()
@@ -817,7 +886,7 @@ impl QuickPanel {
     /// to copy, then one that opens it in the vault. The list says whether
     /// a login has a username or a code; it doesn't say whether a password,
     /// a card's number or a note is empty, so those buttons always show and
-    /// say so when it is.
+    /// say so when it is. They leave the keyboard in the search field.
     fn render_row_actions(&self, item: &ItemSummary, cx: &mut Context<Self>) -> AnyElement {
         let parts = Part::of(item);
         let id = item.id.clone();
@@ -831,12 +900,13 @@ impl QuickPanel {
                     .icon(part.icon())
                     .style(ButtonStyle::Flat)
                     .size(px(26.))
+                    .focusable(false)
+                    .without_tooltip()
                     .accessibility_label(part.label())
-                    .shortcut(part.keys(item.kind))
-                    .on_hover(self.point_at(RowAction::Copy(part), cx))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_hover(self.point_at(Pointed::Row(RowAction::Copy(part)), cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.copy(item.clone(), part, cx);
+                        this.copy(item.clone(), part, window, cx);
                     }))
             }))
             .child(
@@ -844,15 +914,72 @@ impl QuickPanel {
                     .icon(IconName::Window)
                     .style(ButtonStyle::Flat)
                     .size(px(26.))
+                    .focusable(false)
+                    .without_tooltip()
                     .accessibility_label("Open in Vault")
-                    .shortcut(secondary!("o"))
-                    .on_hover(self.point_at(RowAction::Open, cx))
+                    .on_hover(self.point_at(Pointed::Row(RowAction::Open), cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.open_item(id.clone(), cx);
                     })),
             )
             .into_any_element()
+    }
+
+    /// In place of the list, the master password of an item that asks for
+    /// it before something of it is copied; Escape goes back to the list.
+    fn render_asking(&self, asking: &Asking, cx: &mut Context<Self>) -> AnyElement {
+        let dim = cx.theme().colors.text_secondary;
+        let item = &asking.item;
+        let icon = self.account.as_ref().map_or(TileIcon::Letter, |account| {
+            icons::icon(&account.id, item, cx)
+        });
+        motion::appear(
+            SharedString::from(format!("panel-asking-{}", item.id.0)),
+            div()
+                .key_context(REPROMPT)
+                .on_action(cx.listener(Self::cancel_reprompt))
+                .flex_1()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .px(px(16.))
+                .child(tile(&item.name).size(px(44.)).icon(
+                    SharedString::from(format!("panel-asking-tile-{}", item.id.0)),
+                    icon,
+                ))
+                .child(
+                    div()
+                        .mt(px(10.))
+                        .max_w_full()
+                        .truncate()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(item.name.clone()),
+                )
+                .child(
+                    div()
+                        .mt(px(2.))
+                        .mb(px(14.))
+                        .text_center()
+                        .text_size(px(12.))
+                        .text_color(dim)
+                        .child(format!(
+                            "Enter your master password to copy its {}.",
+                            asking.part.noun()
+                        )),
+                )
+                .child(div().w_full().child(asking.reprompt.clone()))
+                .child(
+                    button("panel-reprompt-cancel")
+                        .label("Cancel")
+                        .style(ButtonStyle::Flat)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.cancel_reprompt(&CancelReprompt, window, cx)
+                        })),
+                ),
+        )
+        .into_any_element()
     }
 
     /// The account is locked: unlock it in the main window, or with Touch
@@ -908,6 +1035,8 @@ impl QuickPanel {
         )
     }
 
+    /// Open Vault and Lock, buttons of a kind, each named in the line
+    /// under the list when the pointer is on it.
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let unlocked = self.loaded.is_some();
         div()
@@ -918,19 +1047,117 @@ impl QuickPanel {
                 div().flex_1().child(
                     button("open-vault")
                         .label("Open Vault")
+                        .icon(IconName::Window)
                         .wide()
+                        .on_hover(self.point_at(Pointed::OpenVault, cx))
                         .on_click(cx.listener(|this, _, _, cx| this.open_vault(cx))),
                 ),
             )
             .child(
                 button("panel-lock")
+                    .label("Lock")
                     .icon(IconName::Lock)
-                    .accessibility_label("Lock")
+                    .without_tooltip()
                     .disabled(!unlocked)
-                    .on_click(cx.listener(|this, _, _, cx| this.lock(cx))),
+                    .on_hover(self.point_at(Pointed::Lock, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.lock(&Lock, window, cx))),
             )
             .into_any_element()
     }
+}
+
+/// The panel's one selection, which the arrow keys and the pointer move
+/// alike, as in Spotlight: the row a pointer moves onto is selected, and
+/// Return acts on the selected row. A pointer that only rests, as when the
+/// panel opens under it or the list scrolls under it, selects nothing.
+#[derive(Debug)]
+struct Selection {
+    row: usize,
+    rows: usize,
+    /// Where the pointer was last seen, in the window.
+    pointer: Point<Pixels>,
+}
+
+impl Selection {
+    /// `pointer` is where the pointer is as the panel opens.
+    fn new(pointer: Point<Pixels>) -> Self {
+        Self {
+            row: 0,
+            rows: 0,
+            pointer,
+        }
+    }
+
+    /// The list changed: its first row.
+    fn reset(&mut self, rows: usize) {
+        self.rows = rows;
+        self.row = 0;
+    }
+
+    fn next(&mut self) -> bool {
+        let moves = self.row + 1 < self.rows;
+        self.row += usize::from(moves);
+        moves
+    }
+
+    fn previous(&mut self) -> bool {
+        let moves = self.row > 0;
+        self.row -= usize::from(moves);
+        moves
+    }
+
+    /// The pointer is `at` a place over `row`: if it moved there, the row
+    /// is selected. Whether the selection changed.
+    fn pointer_at(&mut self, row: usize, at: Point<Pixels>) -> bool {
+        let moved = std::mem::replace(&mut self.pointer, at) != at;
+        let changes = moved && row < self.rows && row != self.row;
+        if changes {
+            self.row = row;
+        }
+        changes
+    }
+
+    /// The row Return acts on.
+    fn target(&self) -> Option<usize> {
+        (self.row < self.rows).then_some(self.row)
+    }
+}
+
+/// What the pointer is on that the line under the list names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pointed {
+    /// A button of the selected row.
+    Row(RowAction),
+    OpenVault,
+    Lock,
+}
+
+/// What the line under the list says: what the button under the pointer
+/// does, or else what Return does to the selected item, with its key, if
+/// it has one.
+fn hint(
+    pointed: Option<Pointed>,
+    selected: Option<ItemKind>,
+) -> Option<(&'static str, Option<&'static str>)> {
+    let row = |action: RowAction, kind: ItemKind| match action {
+        RowAction::Copy(part) => (part.label(), Some(part.keys(kind))),
+        RowAction::Open => ("Open in Vault", Some(secondary!("o"))),
+    };
+    match (pointed, selected) {
+        (Some(Pointed::OpenVault), _) => Some(("Open Vault", None)),
+        (Some(Pointed::Lock), _) => Some(("Lock", Some(secondary!("l")))),
+        (Some(Pointed::Row(action)), Some(kind)) => Some(row(action, kind)),
+        (_, Some(kind)) => Some(row(RowAction::Copy(Part::main(kind)), kind)),
+        (_, None) => None,
+    }
+}
+
+/// An item asking for the master password before `part` of it is copied.
+struct Asking {
+    item: ItemSummary,
+    part: Part,
+    reprompt: Entity<Reprompt>,
+    _unlocked: Subscription,
 }
 
 /// What a button of the selected row does.
@@ -996,6 +1223,20 @@ impl Part {
             Part::Note => "Copy Note",
             Part::Name => "Copy Name",
             Part::PublicKey => "Copy Public Key",
+        }
+    }
+
+    /// What it is, in a sentence.
+    fn noun(self) -> &'static str {
+        match self {
+            Part::Username => "username",
+            Part::Password => "password",
+            Part::Code => "verification code",
+            Part::Number => "number",
+            Part::SecurityCode => "security code",
+            Part::Note => "note",
+            Part::Name => "name",
+            Part::PublicKey => "public key",
         }
     }
 
@@ -1144,6 +1385,7 @@ impl Render for QuickPanel {
                 d.track_focus(&self.focus)
             })
             .on_action(cx.listener(Self::close_action))
+            .on_action(cx.listener(Self::lock))
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()
             .size_full()
@@ -1222,6 +1464,68 @@ mod tests {
         assert_eq!(Part::Password.keys(ItemKind::Login), "enter");
         assert_eq!(Part::Number.keys(ItemKind::Card), "enter");
         assert_ne!(Part::SecurityCode.keys(ItemKind::Card), "enter");
+    }
+
+    #[test]
+    fn the_pointer_and_the_keys_move_one_selection() {
+        let resting = point(px(100.), px(80.));
+        let mut selection = Selection::new(resting);
+        selection.reset(5);
+        assert_eq!(selection.target(), Some(0));
+        // The panel opened under the pointer, or the list scrolled under
+        // it: a row it rests on isn't selected.
+        assert!(!selection.pointer_at(2, resting));
+        assert_eq!(selection.target(), Some(0));
+        // It moves onto a row: that row.
+        assert!(selection.pointer_at(2, point(px(100.), px(84.))));
+        assert_eq!(selection.target(), Some(2));
+        // The keys move on from there, and stop at the ends.
+        assert!(selection.next() && selection.next());
+        assert!(!selection.next());
+        assert_eq!(selection.target(), Some(4));
+        // The list scrolls under the resting pointer: still the keys' row.
+        assert!(!selection.pointer_at(1, point(px(100.), px(84.))));
+        assert_eq!(selection.target(), Some(4));
+        assert!(selection.previous());
+        assert_eq!(selection.target(), Some(3));
+        // A new search starts at its first row; an empty one has none.
+        selection.reset(0);
+        assert_eq!(selection.target(), None);
+        assert!(!selection.previous());
+    }
+
+    #[test]
+    fn the_line_under_the_list_says_what_return_does() {
+        // What Return copies of the selected item, with ↵.
+        assert_eq!(
+            hint(None, Some(ItemKind::Login)),
+            Some(("Copy Password", Some("enter")))
+        );
+        // The pointer on a button of the row: that button, with its keys.
+        assert_eq!(
+            hint(
+                Some(Pointed::Row(RowAction::Copy(Part::Username))),
+                Some(ItemKind::Login)
+            ),
+            Some(("Copy Username", Some(secondary!("shift-c"))))
+        );
+        assert_eq!(
+            hint(
+                Some(Pointed::Row(RowAction::Copy(Part::Password))),
+                Some(ItemKind::Login)
+            ),
+            Some(("Copy Password", Some("enter")))
+        );
+        // On a footer button, that button, though nothing is selected.
+        assert_eq!(
+            hint(Some(Pointed::Lock), None),
+            Some(("Lock", Some(secondary!("l"))))
+        );
+        assert_eq!(
+            hint(Some(Pointed::OpenVault), None),
+            Some(("Open Vault", None))
+        );
+        assert_eq!(hint(None, None), None);
     }
 
     #[test]

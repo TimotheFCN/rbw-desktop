@@ -13,7 +13,7 @@ use crate::controls::spinner;
 use crate::focus::control_ring;
 use crate::icon::{IconName, icon};
 use crate::theme::{ActiveTheme, Look};
-use crate::tooltip::WithTooltip as _;
+use crate::tooltip::{ICON_DELAY, WithTooltip as _};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
@@ -47,6 +47,8 @@ pub struct Button {
     busy: bool,
     wide: bool,
     toggled: bool,
+    focusable: bool,
+    tooltip: bool,
     focus: Option<FocusHandle>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
@@ -68,6 +70,8 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         busy: false,
         wide: false,
         toggled: false,
+        focusable: true,
+        tooltip: true,
         focus: None,
         on_click: None,
         on_hover: None,
@@ -140,6 +144,21 @@ impl Button {
     /// Fills the width it is given, like the buttons of an alert.
     pub fn wide(mut self) -> Self {
         self.wide = true;
+        self
+    }
+
+    /// Whether a click gives the button the keyboard. A button of a row in
+    /// a list that a search field moves through leaves it in the field, so
+    /// that Return still acts on the list's selection.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Leaves out the tooltip, for a button whose action a line next to it
+    /// names already, as under the menu bar panel's list.
+    pub fn without_tooltip(mut self) -> Self {
+        self.tooltip = false;
         self
     }
 
@@ -232,10 +251,12 @@ impl RenderOnce for Button {
         let (busy, disabled) = (self.busy, self.disabled);
         let label = self.accessibility_label.or_else(|| self.label.clone());
         // A button with only an icon says what it does when the pointer
-        // rests on it, as does one with a shortcut.
+        // rests on it, almost at once, as does one with a shortcut, after
+        // the platform's delay.
+        let icon_only = round && !link;
         let tip = label
             .clone()
-            .filter(|_| (round && !link) || self.shortcut.is_some());
+            .filter(|_| self.tooltip && (icon_only || self.shortcut.is_some()));
         let shortcut = self.shortcut;
         let padding = match self.style {
             ButtonStyle::Link => px(2.),
@@ -256,9 +277,16 @@ impl RenderOnce for Button {
 
         BaseButton::new(self.id)
             .when_some(self.focus, |b, focus| b.track_focus(&focus))
+            .focusable(self.focusable)
             .disabled(disabled || busy)
             .when_some(label, |b, label| b.accessibility_label(label))
-            .when_some(tip, |b, tip| b.with_tooltip(tip, shortcut, cx))
+            .when_some(tip, |b, tip| {
+                if icon_only {
+                    b.with_tooltip_after(tip, shortcut, ICON_DELAY)
+                } else {
+                    b.with_tooltip(tip, shortcut, cx)
+                }
+            })
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .when_some(self.on_hover, |b, handler| b.on_hover(handler))
             .relative()

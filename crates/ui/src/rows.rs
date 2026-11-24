@@ -548,6 +548,9 @@ pub fn list_row(
 impl ListRow {
     /// A row of a panel or popover, as in the menu bar panel: a smaller
     /// tile, and a neutral highlight in place of the accent, as a menu's.
+    /// As in a menu, the selection follows the pointer, so the row shows
+    /// no hover of its own, and it never takes the keyboard from the field
+    /// that moves through its list.
     pub fn compact(mut self) -> Self {
         self.compact = true;
         self
@@ -663,6 +666,7 @@ impl RenderOnce for ListRow {
             .accessibility_label(self.accessibility_label.unwrap_or_else(|| name.clone()))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .tab_stop(self.tab_stop)
+            .focusable(!self.compact)
             .focus_visible(row_ring(ring_color))
             .when(list_focused && self.selected, |b| {
                 b.shadow(inner_ring(ring_color))
@@ -674,7 +678,9 @@ impl RenderOnce for ListRow {
             .h(height)
             .px(if self.compact { px(7.) } else { px(9.) })
             .rounded(radius)
-            .when(!self.selected, |b| b.hover(move |s| s.bg(hover)))
+            .when(!self.selected && !self.compact, |b| {
+                b.hover(move |s| s.bg(hover))
+            })
             .when_some(highlight, |b, highlight| {
                 b.child(highlight.render(radius, selection))
             })

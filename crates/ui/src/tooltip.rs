@@ -1,9 +1,10 @@
 //! What a control does, shown when the pointer rests on it, with its
 //! keyboard shortcut when it has one, as macOS and GNOME do for toolbar
-//! buttons: after the platform's delay, in the platform's style, centred
-//! under the control, or over it where the window has no room under it.
-//! Icon buttons get one from their label; [`WithTooltip`] gives one to any
-//! other element.
+//! buttons: in the platform's style, centred under the control, or over it
+//! where the window has no room under it. A button that shows only an
+//! icon says it almost at once, since its name is its only text; others
+//! wait the platform's delay. Icon buttons get one from their label;
+//! [`WithTooltip`] gives one to any other element.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -22,8 +23,13 @@ use crate::theme::{ActiveTheme, Look};
 /// The room between a control and its tooltip.
 const GAP: Pixels = px(6.);
 
-/// How long the pointer rests before a tooltip shows: AppKit's wait, and
-/// GTK's.
+/// How long the pointer rests on a button that shows only an icon before
+/// it says what it does: just long enough that sweeping across a toolbar
+/// shows nothing.
+pub(crate) const ICON_DELAY: Duration = Duration::from_millis(250);
+
+/// How long the pointer rests before any other tooltip shows: AppKit's
+/// wait, and GTK's.
 fn delay(look: Look) -> Duration {
     match look {
         Look::MacOs => Duration::from_millis(1000),
@@ -95,6 +101,17 @@ pub trait WithTooltip: StatefulInteractiveElement + ParentElement + Sized {
         keys: Option<&'static str>,
         cx: &App,
     ) -> Self {
+        self.with_tooltip_after(label, keys, delay(cx.theme().look))
+    }
+
+    /// Shows `label` and `keys` once the pointer has rested `wait` on the
+    /// element.
+    fn with_tooltip_after(
+        self,
+        label: impl Into<SharedString>,
+        keys: Option<&'static str>,
+        wait: Duration,
+    ) -> Self {
         let label = label.into();
         // Where the element is, for the tooltip to go under it.
         let control = Rc::new(Cell::new(Bounds::default()));
@@ -114,15 +131,16 @@ pub trait WithTooltip: StatefulInteractiveElement + ParentElement + Sized {
             })
             .into()
         })
-        .tooltip_show_delay(delay(cx.theme().look))
+        .tooltip_show_delay(wait)
     }
 }
 
 impl<E: StatefulInteractiveElement + ParentElement> WithTooltip for E {}
 
-/// What a click or a key does, named with the key, as a line under a list
-/// says it for the row the pointer or the keyboard is on.
-pub fn key_hint(label: impl Into<SharedString>, keys: &'static str, cx: &App) -> gpui::Div {
+/// What a click or a key does, named with its key if it has one, as a line
+/// under a list says it for the selected row or the button under the
+/// pointer.
+pub fn key_hint(label: impl Into<SharedString>, keys: Option<&'static str>, cx: &App) -> gpui::Div {
     let theme = cx.theme();
     div()
         .flex()
@@ -132,11 +150,13 @@ pub fn key_hint(label: impl Into<SharedString>, keys: &'static str, cx: &App) ->
         .text_size(px(11.5))
         .text_color(theme.colors.text_secondary)
         .child(label.into())
-        .child(
-            div()
-                .text_color(theme.colors.text_tertiary)
-                .child(shortcut(keys, theme.look)),
-        )
+        .when_some(keys, |d, keys| {
+            d.child(
+                div()
+                    .text_color(theme.colors.text_tertiary)
+                    .child(shortcut(keys, theme.look)),
+            )
+        })
 }
 
 /// A key binding as the platform writes it: `⇧⌘C` on a Mac, `Shift+Ctrl+C`

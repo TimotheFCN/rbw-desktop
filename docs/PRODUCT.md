@@ -86,7 +86,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 * Copy shortcuts: the password, the username and the verification code of
   the selected login, in the vault as in the menu bar panel.
 * Every button that shows only an icon says what it does, and its
-  shortcut, when the pointer rests on it, in a tooltip under it.
+  shortcut, in a tooltip under it as soon as the pointer rests on it;
+  where there is room, a button has a label instead.
 * Website icons show with their row when they were fetched before; one
   fetched the first time fades in on a neutral tile, and a website
   without one shows the item's coloured letter.
@@ -121,15 +122,19 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 * A click opens a panel: on macOS hung under the item, elsewhere a small
   window next to the pointer (X11) or in the middle of the screen (Wayland).
   Two tabs: the items used last, with a search through the whole vault,
-  and the generator. A click or Return copies what an item is for: a
-  login's password, a card's number, a note's text, an identity's name,
-  an SSH key's public key. The selected row has a button for each thing
-  it can copy (a login's username, password and verification code, a
-  card's number and security code, and so on, leaving out what the item
-  hasn't got) and one that opens the item in the main window, each with a
-  tooltip that gives its shortcut. A line under the list names the button
-  under the pointer, or what Return does, with its key: the buttons are
-  icons, and a tooltip waits a second. Plus "Open Vault" and "Lock". It
+  and the generator. One row is selected, as in Spotlight: the arrow keys
+  move it, and so does the pointer when it moves onto a row (not when the
+  panel opens under it or the list scrolls under it). A click or Return
+  copies what the selected item is for: a login's password, a card's
+  number, a note's text, an identity's name, an SSH key's public key. The
+  selected row has a button for each thing it can copy (a login's
+  username, password and verification code, a card's number and security
+  code, and so on, leaving out what the item hasn't got) and one that
+  opens the item in the main window. A line under the list says what
+  Return does to the selected row, with ↵, or what the button under the
+  pointer does, with its own shortcut. Under it, "Open Vault" and "Lock".
+  An item that asks for the master password again asks for it in the
+  panel, then copies what was asked for; Escape goes back to the list. It
   shows the account the main window shows. Nothing about SSH lives here.
 * The item's menu has Open Vault, Lock and Quit.
 * While the item shows, closing the last window leaves the app running.

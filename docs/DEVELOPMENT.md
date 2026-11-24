@@ -291,6 +291,15 @@ and when it is saved; the panel lists them. Ids only, kept by the backend.
 main window chose last (`choose`), else the first unlocked, else the
 first. The panel and the menu bar item follow it.
 
+**The panel's selection** (`panel::Selection`) is one row for the keys
+and the pointer: a row's `on_mouse_move` selects it only when the pointer
+is somewhere else than it was last seen, so that a panel opening under a
+resting pointer, or a list scrolling under it, leaves the selection where
+the keys put it. Its rows and their buttons don't take the keyboard
+(`ListRow::compact`, `button(…).focusable(false)`), which stays in the
+search field, so that Return always acts on the selection. `hint` says what
+the line under the list names; both are tested without a display.
+
 **The menu bar item and its panel.** `tray::init` shows the item while the
 preference says so: `tray/macos.rs` (tray-icon, a template image, the panel
 hung under the item) and `tray/linux.rs` (ksni, a StatusNotifierItem with a
@@ -493,12 +502,14 @@ sheets and alerts trap Tab. Copy shortcuts are the panel's in the vault
 too: Cmd/Ctrl-C the password where no text field has the keyboard,
 Cmd/Ctrl-Shift-C the username, Cmd/Ctrl-Alt-C the code; in the panel,
 Return copies what the item is for and Cmd/Ctrl-O opens it in the vault.
-A button with a shortcut says so in its tooltip (`button(…).shortcut(…)`,
-or `WithTooltip::with_tooltip` on another element), which waits the
-platform's delay, takes its style and shows centred under the control
-(GPUI places tooltips at the pointer; ours moves to the control).
+A button with only an icon says what it does in a tooltip after a short
+rest (`ICON_DELAY`), its name being its only text; one with a label and a
+shortcut says the shortcut after the platform's delay
+(`button(…).shortcut(…)`, or `WithTooltip::with_tooltip` on another
+element). Tooltips take the platform's style and show centred under the
+control (GPUI places tooltips at the pointer; ours moves to the control).
 `key_hint` names an action with its key in a line, as under the panel's
-list. `button(…).toggled(on)` shows that what a button turns on is on.
+list, whose buttons then go `without_tooltip`. `button(…).toggled(on)` shows that what a button turns on is on.
 Escape in the vault empties the search, then leaves its field.
 
 ## GPUI gotchas
