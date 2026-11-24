@@ -6,8 +6,16 @@ pub enum GeneratorOptions {
         length: usize,
         characters: Characters,
     },
-    /// Words from the EFF word list, separated by spaces.
-    Passphrase { words: usize },
+    /// Words from the EFF word list.
+    Passphrase {
+        words: usize,
+        /// What goes between the words; `None` joins them.
+        separator: Option<char>,
+        /// Each word begins with a capital letter.
+        capitalize: bool,
+        /// A digit after one of the words.
+        number: bool,
+    },
 }
 
 impl Default for GeneratorOptions {
@@ -118,6 +126,16 @@ pub enum Strength {
 }
 
 impl GeneratorOptions {
+    /// rbw's own passphrase: `words` words separated by spaces.
+    pub fn passphrase(words: usize) -> Self {
+        Self::Passphrase {
+            words,
+            separator: Some(' '),
+            capitalize: false,
+            number: false,
+        }
+    }
+
     /// The bits of randomness in what these options make: the logarithm of
     /// how many values they can make, all equally likely. 0 when they make
     /// nothing.
@@ -129,7 +147,15 @@ impl GeneratorOptions {
             GeneratorOptions::Password { length, characters } => {
                 password_entropy(length, characters)
             }
-            GeneratorOptions::Passphrase { words } => words as f64 * f64::from(WORDS).log2(),
+            GeneratorOptions::Passphrase { words, number, .. } => {
+                let bits = words as f64 * f64::from(WORDS).log2();
+                // one of ten digits, after one of the words
+                if number {
+                    bits + (10. * words as f64).log2()
+                } else {
+                    bits
+                }
+            }
         }
     }
 
@@ -149,7 +175,9 @@ impl GeneratorOptions {
                 let classes = characters.classes().len();
                 length > 0 && classes > 0 && (!characters.each_class() || length >= classes)
             }
-            GeneratorOptions::Passphrase { words } => words > 0,
+            GeneratorOptions::Passphrase {
+                words, separator, ..
+            } => words > 0 && !separator.is_some_and(char::is_control),
         }
     }
 }
@@ -217,7 +245,7 @@ mod tests {
             password(6, Characters::DigitsOnly).strength(),
             Strength::Weak
         );
-        let words = |words| GeneratorOptions::Passphrase { words }.strength();
+        let words = |words| GeneratorOptions::passphrase(words).strength();
         assert_eq!(words(3), Strength::Weak);
         assert_eq!(words(4), Strength::Fair);
         assert_eq!(words(5), Strength::Strong);
@@ -279,6 +307,25 @@ mod tests {
     }
 
     #[test]
+    fn a_number_adds_its_digit_and_its_place() {
+        let plain = GeneratorOptions::passphrase(5).entropy();
+        let numbered = GeneratorOptions::Passphrase {
+            words: 5,
+            separator: Some('-'),
+            capitalize: true,
+            number: true,
+        };
+        assert!((numbered.entropy() - plain - 50f64.log2()).abs() < 1e-9);
+        let on_lines = GeneratorOptions::Passphrase {
+            words: 5,
+            separator: Some('\n'),
+            capitalize: false,
+            number: false,
+        };
+        assert!(!on_lines.makes_anything());
+    }
+
+    #[test]
     fn options_that_make_nothing_have_no_randomness() {
         let none = Characters::Classes(CharacterClasses {
             uppercase: false,
@@ -291,7 +338,7 @@ mod tests {
             password(0, Characters::All),
             password(12, none),
             password(3, classes(true, true, true)),
-            GeneratorOptions::Passphrase { words: 0 },
+            GeneratorOptions::passphrase(0),
         ] {
             assert!(!options.makes_anything(), "{options:?}");
             assert_eq!(options.entropy(), 0.);

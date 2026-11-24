@@ -563,10 +563,28 @@ fn generate(options: &GeneratorOptions) -> Result<Secret> {
                 }
             }
         }
-        GeneratorOptions::Passphrase { words } => (0..words)
-            .filter_map(|_| demo::WORDS.choose(&mut rng).copied())
-            .collect::<Vec<_>>()
-            .join(" "),
+        GeneratorOptions::Passphrase {
+            words,
+            separator,
+            capitalize,
+            number,
+        } => {
+            let mut words: Vec<String> = (0..words)
+                .filter_map(|_| demo::WORDS.choose(&mut rng))
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(first) if capitalize => first.to_uppercase().chain(chars).collect(),
+                        _ => (*word).to_string(),
+                    }
+                })
+                .collect();
+            if number {
+                let at = rng.random_range(0..words.len());
+                words[at].push(char::from(b'0' + rng.random_range(0..10)));
+            }
+            words.join(separator.map(String::from).unwrap_or_default().as_str())
+        }
     };
     Ok(Secret::new(value))
 }
@@ -1303,10 +1321,26 @@ mod tests {
             .unwrap();
         assert_eq!(password.expose().len(), 24);
         assert!(password.expose().chars().all(|c| c.is_ascii_digit()));
-        let phrase = fake
-            .generate(&GeneratorOptions::Passphrase { words: 5 })
-            .unwrap();
+        let phrase = fake.generate(&GeneratorOptions::passphrase(5)).unwrap();
         assert_eq!(phrase.expose().split(' ').count(), 5);
+        let options = GeneratorOptions::Passphrase {
+            words: 4,
+            separator: Some('-'),
+            capitalize: true,
+            number: true,
+        };
+        let phrase = fake.generate(&options).unwrap();
+        let words: Vec<_> = phrase.expose().split('-').collect();
+        assert_eq!(words.len(), 4);
+        assert!(
+            words
+                .iter()
+                .all(|word| word.starts_with(char::is_uppercase))
+        );
+        assert_eq!(
+            phrase.expose().chars().filter(char::is_ascii_digit).count(),
+            1
+        );
     }
 
     #[test]

@@ -239,10 +239,33 @@ fn against_vaultwarden() {
         .unwrap();
     assert_eq!(generated.expose().len(), 24);
     assert!(generated.expose().bytes().all(|b| b.is_ascii_digit()));
-    let phrase = backend
-        .generate(&GeneratorOptions::Passphrase { words: 4 })
-        .unwrap();
+    let phrase = backend.generate(&GeneratorOptions::passphrase(4)).unwrap();
     assert_eq!(phrase.expose().split(' ').count(), 4);
+    let options = GeneratorOptions::Passphrase {
+        words: 4,
+        separator: Some('-'),
+        capitalize: true,
+        number: true,
+    };
+    let phrase = backend.generate(&options).unwrap();
+    let words: Vec<_> = phrase.expose().split('-').collect();
+    assert_eq!(words.len(), 4);
+    assert!(
+        words
+            .iter()
+            .all(|word| word.starts_with(char::is_uppercase))
+    );
+    assert_eq!(
+        phrase.expose().chars().filter(char::is_ascii_digit).count(),
+        1
+    );
+    let joined = GeneratorOptions::Passphrase {
+        words: 3,
+        separator: None,
+        capitalize: false,
+        number: false,
+    };
+    assert!(!backend.generate(&joined).unwrap().expose().contains(' '));
     let letters_and_symbols = |each_class| {
         Characters::Classes(CharacterClasses {
             uppercase: true,
@@ -310,7 +333,12 @@ fn against_vaultwarden() {
     let preferences = Preferences {
         clipboard_clear: None,
         website_icons: false,
-        generator: GeneratorOptions::Passphrase { words: 6 },
+        generator: GeneratorOptions::Passphrase {
+            words: 6,
+            separator: Some('-'),
+            capitalize: true,
+            number: true,
+        },
         menu_bar: false,
     };
     backend.set_preferences(&preferences).unwrap();

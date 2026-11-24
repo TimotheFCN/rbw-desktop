@@ -217,7 +217,18 @@ enum GeneratorJson {
     },
     Passphrase {
         words: usize,
+        // these came later: older files take rbw's own
+        #[serde(default = "space")]
+        separator: Option<char>,
+        #[serde(default)]
+        capitalize: bool,
+        #[serde(default)]
+        number: bool,
     },
+}
+
+fn space() -> Option<char> {
+    Some(' ')
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -255,7 +266,17 @@ impl From<GeneratorOptions> for GeneratorJson {
                     },
                 },
             },
-            GeneratorOptions::Passphrase { words } => GeneratorJson::Passphrase { words },
+            GeneratorOptions::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            } => GeneratorJson::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            },
         }
     }
 }
@@ -285,7 +306,17 @@ impl From<GeneratorJson> for GeneratorOptions {
                     }),
                 },
             },
-            GeneratorJson::Passphrase { words } => GeneratorOptions::Passphrase { words },
+            GeneratorJson::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            } => GeneratorOptions::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            },
         }
     }
 }
@@ -594,31 +625,51 @@ impl Backend for RbwBackend {
         if !options.makes_anything() {
             return Err(Error::Other("these options make nothing".into()));
         }
+        let flags = |flags: &[(bool, &str)]| {
+            flags
+                .iter()
+                .filter_map(|(set, flag)| set.then(|| flag.to_string()))
+                .collect::<Vec<_>>()
+        };
         let (length, flags) = match *options {
             GeneratorOptions::Password { length, characters } => (
                 length,
                 match characters {
                     Characters::All => vec![],
-                    Characters::NoSymbols => vec!["--no-symbols"],
-                    Characters::DigitsOnly => vec!["--only-numbers"],
-                    Characters::Unambiguous => vec!["--nonconfusables"],
-                    Characters::Classes(classes) => [
+                    Characters::NoSymbols => flags(&[(true, "--no-symbols")]),
+                    Characters::DigitsOnly => flags(&[(true, "--only-numbers")]),
+                    Characters::Unambiguous => flags(&[(true, "--nonconfusables")]),
+                    Characters::Classes(classes) => flags(&[
                         (!classes.uppercase, "--no-uppercase"),
                         (!classes.lowercase, "--no-lowercase"),
                         (!classes.digits, "--no-numbers"),
                         (!classes.symbols, "--no-symbols"),
                         (classes.each_class, "--each-class"),
-                    ]
-                    .into_iter()
-                    .filter_map(|(set, flag)| set.then_some(flag))
-                    .collect(),
+                    ]),
                 },
             ),
-            GeneratorOptions::Passphrase { words } => (words, vec!["--diceware"]),
+            GeneratorOptions::Passphrase {
+                words,
+                separator,
+                capitalize,
+                number,
+            } => {
+                let mut args = flags(&[
+                    (true, "--diceware"),
+                    (capitalize, "--capitalize"),
+                    (number, "--include-number"),
+                ]);
+                // rbw separates the words with a space unless told otherwise
+                if separator != Some(' ') {
+                    args.push("--separator".to_string());
+                    args.push(separator.map(String::from).unwrap_or_default());
+                }
+                (words, args)
+            }
         };
         let length = length.to_string();
         let mut args = vec!["generate", &length];
-        args.extend(flags);
+        args.extend(flags.iter().map(String::as_str));
         let output = self.rbw.run(None, &args, None, Wait::Local)?;
         let text = std::str::from_utf8(&output)
             .map_err(|_| Error::Other("rbw generated something that isn't text".into()))?;
@@ -801,6 +852,27 @@ mod tests {
             let options = GeneratorOptions::Password {
                 length: 12,
                 characters,
+            };
+            let json = serde_json::to_string(&GeneratorJson::from(options)).unwrap();
+            let back: GeneratorJson = serde_json::from_str(&json).unwrap();
+            assert_eq!(GeneratorOptions::from(back), options);
+        }
+    }
+
+    #[test]
+    fn passphrases_keep_their_options_and_older_ones_take_rbws() {
+        let older: GeneratorJson =
+            serde_json::from_str(r#"{"kind": "passphrase", "words": 6}"#).unwrap();
+        assert_eq!(
+            GeneratorOptions::from(older),
+            GeneratorOptions::passphrase(6)
+        );
+        for separator in [None, Some('-')] {
+            let options = GeneratorOptions::Passphrase {
+                words: 5,
+                separator,
+                capitalize: true,
+                number: true,
             };
             let json = serde_json::to_string(&GeneratorJson::from(options)).unwrap();
             let back: GeneratorJson = serde_json::from_str(&json).unwrap();
