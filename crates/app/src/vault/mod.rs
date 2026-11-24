@@ -28,6 +28,8 @@ actions!(
     [
         /// Opens the New Item sheet.
         NewItem,
+        /// Opens the selected item in the edit sheet.
+        EditItem,
         /// Moves the keyboard to the search field.
         Find,
         SelectNext,
@@ -45,6 +47,7 @@ const POLL: Duration = Duration::from_secs(2);
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(secondary!("n"), NewItem, Some(CONTEXT)),
+        KeyBinding::new(secondary!("e"), EditItem, Some(CONTEXT)),
         KeyBinding::new(secondary!("f"), Find, Some(CONTEXT)),
         KeyBinding::new(secondary!("r"), Sync, Some(CONTEXT)),
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
@@ -220,13 +223,14 @@ impl VaultView {
                 .collect(),
             Load::Loading | Load::Failed(_) => vec![],
         };
-        let still_visible = self
-            .selected
-            .as_ref()
-            .is_some_and(|id| self.visible_items().any(|item| &item.id == id));
-        if !still_visible {
-            let first = self.visible_items().next().map(|item| item.id.clone());
-            self.select(first, cx);
+        match self.selected_index() {
+            Some(index) => self
+                .list_scroll
+                .scroll_to_item(index, ScrollStrategy::Nearest),
+            None => {
+                let first = self.visible_items().next().map(|item| item.id.clone());
+                self.select(first, cx);
+            }
         }
         cx.notify();
     }
@@ -307,7 +311,7 @@ impl VaultView {
         self.present(editor, window, cx);
     }
 
-    pub(crate) fn edit_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit_item(&mut self, _: &EditItem, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.detail.read(cx).item().cloned() else {
             return;
         };
@@ -404,6 +408,7 @@ impl Render for VaultView {
         let content = div()
             .key_context(CONTEXT)
             .on_action(cx.listener(Self::new_item))
+            .on_action(cx.listener(Self::edit_item))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))

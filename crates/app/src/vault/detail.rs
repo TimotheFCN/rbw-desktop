@@ -16,7 +16,7 @@ use rbw_desktop_ui::{
     progress_ring, tile,
 };
 
-use super::VaultView;
+use super::{EditItem, VaultView};
 use crate::backend::{self, Load};
 use crate::clipboard;
 
@@ -245,11 +245,11 @@ impl ItemDetail {
                         button("edit")
                             .label("Edit")
                             .style(ButtonStyle::Normal)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.vault
-                                    .update(cx, |vault, cx| vault.edit_selected(window, cx))
-                                    .ok();
-                            })),
+                            // An action, not a call: the vault reads this view
+                            // to edit the item, and this view is mid-update.
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(EditItem), cx)
+                            }),
                     )
                 })
                 .children(chrome::window_buttons(chrome::Side::End, window, cx)),

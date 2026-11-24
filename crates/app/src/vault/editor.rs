@@ -487,9 +487,9 @@ impl Render for ItemEditor {
             .position(|(kind, _)| *kind == self.kind)
             .unwrap_or_default();
         let fields = self.render_fields(cx);
+        let menu = self.folder_menu_open.then(|| self.render_folder_menu(cx));
         let folder_row = div()
             .id("folder")
-            .relative()
             .on_click(cx.listener(|this, _, _, cx| {
                 this.folder_menu_open = !this.folder_menu_open;
                 cx.notify();
@@ -500,13 +500,11 @@ impl Render for ItemEditor {
                     .flex_1()
                     .flex()
                     .items_center()
-                    .child(div().flex_1().child(self.folder_name()))
+                    // The menu opens under the value, like a pop-up button's.
+                    .child(div().flex_1().child(self.folder_name()).children(menu))
                     .child(icon(IconName::ChevronsUpDown).text_color(faint)),
                 cx,
-            ))
-            .when(self.folder_menu_open, |d| {
-                d.child(self.render_folder_menu(cx))
-            });
+            ));
 
         div()
             .key_context(CONTEXT)

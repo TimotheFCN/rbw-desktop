@@ -53,9 +53,14 @@ pub fn window_options(
             appears_transparent: true,
             traffic_light_position: Some(TRAFFIC_LIGHTS),
         }),
-        // macOS: the sidebar's glass needs to see through the window.
-        // Linux: the frame's rounded corners and shadow do.
-        window_background: WindowBackgroundAppearance::Transparent,
+        // macOS: the glass sidebar floats on the window's own blurred
+        // material, which shows around it. Linux: the drawn frame's rounded
+        // corners and shadow need a see-through window.
+        window_background: if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
         window_decorations: Some(WindowDecorations::Client),
         ..Default::default()
     }
