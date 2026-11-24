@@ -40,6 +40,7 @@ macro_rules! icons {
 
 icons! {
     ArrowRight => "arrow",
+    Back => "back",
     Card => "card",
     Check => "check",
     ChevronRight => "chev",
@@ -55,9 +56,11 @@ icons! {
     Gear => "gear",
     Grid => "grid",
     Identity => "user",
+    Info => "info",
     Key => "key",
     Lock => "lock",
     Maximize => "maximize",
+    Menu => "menu",
     Minimize => "minimize",
     Note => "note",
     Plus => "plus",
@@ -67,6 +70,7 @@ icons! {
     Star => "star",
     Terminal => "term",
     TouchId => "finger",
+    Warning => "warning",
 }
 
 /// Serves the icons to GPUI's `svg()` element.

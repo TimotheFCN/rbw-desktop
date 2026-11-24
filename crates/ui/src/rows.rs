@@ -3,10 +3,12 @@
 
 use gpui::base::Button as BaseButton;
 use gpui::base::motion;
+use std::sync::Arc;
+
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, Styled, Window, div, linear_color_stop,
-    linear_gradient, prelude::FluentBuilder as _, px, relative,
+    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, IntoElement, ObjectFit,
+    ParentElement, Pixels, RenderImage, RenderOnce, SharedString, Styled, StyledImage, Window, div,
+    img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::icon::{IconName, icon};
@@ -109,12 +111,14 @@ pub fn section_label(label: impl Into<SharedString>, cx: &App) -> impl IntoEleme
         .child(label.into())
 }
 
-/// The coloured rounded square with an item's initial.
+/// The coloured rounded square with an item's initial, or the website's
+/// icon in its place once there is one.
 #[derive(IntoElement)]
 pub struct Tile {
     letter: SharedString,
     hue: f32,
     size: Pixels,
+    icon: Option<(ElementId, Option<Arc<RenderImage>>)>,
 }
 
 /// A tile for `name`, with a hue derived from it so an item keeps its colour.
@@ -131,6 +135,7 @@ pub fn tile(name: &str) -> Tile {
         letter: letter.into(),
         hue: HUES[hash as usize % HUES.len()],
         size: px(32.),
+        icon: None,
     }
 }
 
@@ -139,23 +144,45 @@ impl Tile {
         self.size = size;
         self
     }
+
+    /// Shows a website's icon over the letter, fading in when it arrives.
+    /// `id` names the tile, so the icon fades in only once.
+    pub fn icon(mut self, id: impl Into<ElementId>, icon: Option<Arc<RenderImage>>) -> Self {
+        self.icon = Some((id.into(), icon));
+        self
+    }
 }
 
 impl RenderOnce for Tile {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let icon = self.icon.map(|(id, icon)| {
+            let shown = motion::transition(
+                (id, "icon"),
+                if icon.is_some() { 1. } else { 0. },
+                m::fade(m::STANDARD),
+                window,
+                cx,
+            );
+            (icon, shown)
+        });
         let theme = cx.theme();
         let (light, dark) = theme.colors.tile(self.hue);
-        let radius = match theme.look {
-            Look::MacOs => 0.28,
-            Look::Gnome => 0.22,
-        };
+        let radius = self.size
+            * match theme.look {
+                Look::MacOs => 0.28,
+                Look::Gnome => 0.22,
+            };
+        let backdrop = theme.colors.icon_backdrop;
+        let edge = theme.colors.separator;
+        let inset = (self.size * 0.14).round();
         div()
+            .relative()
             .flex()
             .flex_none()
             .items_center()
             .justify_center()
             .size(self.size)
-            .rounded(self.size * radius)
+            .rounded(radius)
             .bg(linear_gradient(
                 160.,
                 linear_color_stop(light, 0.),
@@ -165,12 +192,43 @@ impl RenderOnce for Tile {
             .text_size(self.size * 0.44)
             .font_weight(FontWeight::SEMIBOLD)
             .child(self.letter)
+            .when_some(icon, |d, (image, shown)| {
+                d.when_some(image.filter(|_| shown > 0.), |d, image| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .p(inset)
+                            .rounded(radius)
+                            .bg(backdrop)
+                            .border(px(0.5))
+                            .border_color(edge)
+                            .opacity(shown)
+                            .child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                    )
+                })
+            })
     }
 }
 
-/// The round badge with an account's initial.
-pub fn avatar(email: &str, cx: &App) -> impl IntoElement {
-    let initial: String = email.chars().take(1).flat_map(char::to_uppercase).collect();
+/// The round badge with an account's initial, in a colour of its own
+/// derived from `name`, so that each account keeps its colour and two
+/// accounts rarely share one.
+pub fn avatar(name: &str, cx: &App) -> impl IntoElement {
+    // Hues far enough apart to tell at a glance.
+    const HUES: [f32; 8] = [215., 350., 145., 275., 28., 185., 320., 48.];
+    let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
+    // FNV-1a: stable across runs and builds, unlike the standard hasher.
+    let hash = name
+        .to_lowercase()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let (light, dark) = cx
+        .theme()
+        .colors
+        .tile(HUES[(hash % HUES.len() as u64) as usize]);
     div()
         .size(px(26.))
         .flex_none()
@@ -178,7 +236,11 @@ pub fn avatar(email: &str, cx: &App) -> impl IntoElement {
         .flex()
         .items_center()
         .justify_center()
-        .bg(cx.theme().colors.avatar)
+        .bg(linear_gradient(
+            160.,
+            linear_color_stop(light, 0.),
+            linear_color_stop(dark, 1.),
+        ))
         .text_color(gpui::white())
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
@@ -228,6 +290,7 @@ pub struct ListRow {
     name: SharedString,
     subtitle: Option<SharedString>,
     selected: bool,
+    icon: Option<Arc<RenderImage>>,
     trailing: Option<AnyElement>,
     on_click: Option<ClickHandler>,
 }
@@ -248,12 +311,19 @@ pub fn list_row(
         name: name.into(),
         subtitle,
         selected,
+        icon: None,
         trailing: None,
         on_click: None,
     }
 }
 
 impl ListRow {
+    /// The website's icon to show in the tile, once it has arrived.
+    pub fn icon(mut self, icon: Option<Arc<RenderImage>>) -> Self {
+        self.icon = icon;
+        self
+    }
+
     pub fn trailing(mut self, element: impl IntoElement) -> Self {
         self.trailing = Some(element.into_any_element());
         self
@@ -282,6 +352,7 @@ impl RenderOnce for ListRow {
             progress,
         );
         let name = self.name;
+        let tile = tile(&name).icon((self.id.clone(), "tile"), self.icon);
         BaseButton::new(self.id)
             .selected(self.selected)
             .accessibility_label(name.clone())
@@ -294,7 +365,7 @@ impl RenderOnce for ListRow {
             .rounded(theme.metrics.row_radius)
             .bg(selection.opacity(progress))
             .when(!self.selected, |b| b.hover(move |s| s.bg(hover)))
-            .child(tile(&name))
+            .child(tile)
             .child(
                 div()
                     .flex_1()

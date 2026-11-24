@@ -12,9 +12,9 @@ use std::rc::Rc;
 use gpui::base::{Button as BaseButton, FocusTrapElement as _};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FocusHandle, FontWeight, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
-    Styled, Window, actions, anchored, deferred, div, point, prelude::FluentBuilder as _, px,
-    relative,
+    IntoElement, KeyBinding, ParentElement, Pixels, Point, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, actions, anchored, deferred, div, point,
+    prelude::FluentBuilder as _, px, relative,
 };
 use smallvec::SmallVec;
 
@@ -46,6 +46,9 @@ pub enum Opening {
     BelowCentered,
     /// Over the element, like a menu from the bottom of a sidebar.
     Above,
+    /// From a point in the window, such as where a row was right-clicked:
+    /// a context menu.
+    At(Point<Pixels>),
 }
 
 type DismissHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -108,6 +111,7 @@ impl RenderOnce for Popover {
         let gap = px(4.);
         // It moves in from a few points towards the control it belongs to.
         let shift = px(6.) * (1. - p);
+        let mut window_position = None;
         let (anchor, place, offset) = match self.opening {
             Opening::Below => (
                 gpui::Anchor::TopLeft,
@@ -124,6 +128,14 @@ impl RenderOnce for Popover {
                 div().absolute().left_0().top_0(),
                 point(px(0.), shift - gap),
             ),
+            Opening::At(position) => {
+                window_position = Some(position);
+                (
+                    gpui::Anchor::TopLeft,
+                    div().absolute().left_0().top_0(),
+                    point(px(0.), gap - shift),
+                )
+            }
         };
         let dismiss = self.on_dismiss;
         let (outside, escape) = (dismiss.clone(), dismiss);
@@ -170,6 +182,10 @@ impl RenderOnce for Popover {
                 deferred(
                     anchored()
                         .anchor(anchor)
+                        .when_some(window_position, |a, position| {
+                            a.position_mode(gpui::AnchoredPositionMode::Window)
+                                .position(position)
+                        })
                         .offset(offset)
                         .snap_to_window_with_margin(px(8.))
                         .child(menu),
@@ -208,6 +224,7 @@ pub struct MenuItem {
     detail: Option<SharedString>,
     leading: Option<AnyElement>,
     checked: bool,
+    submenu: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -218,6 +235,7 @@ pub fn menu_item(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Me
         detail: None,
         leading: None,
         checked: false,
+        submenu: false,
         on_click: None,
     }
 }
@@ -240,6 +258,12 @@ impl MenuItem {
 
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+
+    /// Marks an item that shows more choices, with a chevron at its end.
+    pub fn submenu(mut self) -> Self {
+        self.submenu = true;
         self
     }
 
@@ -296,7 +320,10 @@ impl RenderOnce for MenuItem {
                     .w(px(15.))
                     .flex_none()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .when(self.checked, |d| d.child(icon(IconName::Check))),
+                    .when(self.checked, |d| d.child(icon(IconName::Check)))
+                    .when(self.submenu, |d| {
+                        d.text_color(dim).child(icon(IconName::ChevronRight))
+                    }),
             )
     }
 }

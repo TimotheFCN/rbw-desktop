@@ -172,11 +172,11 @@ pub struct Colors {
     pub danger: Hsla,
     /// The fill of a button that removes something.
     pub destructive: Hsla,
+    /// Behind a website's icon, which is drawn for a light background.
+    pub icon_backdrop: Hsla,
     /// Symbols in a shown password; its digits take `accent_text`.
     pub symbol: Hsla,
     pub focus_ring: Hsla,
-    /// An account's avatar behind its initial.
-    pub avatar: Background,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -247,12 +247,8 @@ impl Colors {
             danger: c(0xff3b30),
             destructive: c(0xff3b30),
             symbol: c(0xe8590c),
+            icon_backdrop: c(0xffffff),
             focus_ring: accent,
-            avatar: linear_gradient(
-                160.,
-                linear_color_stop(c(0x8e9bff), 0.),
-                linear_color_stop(c(0x5b6cf0), 1.),
-            ),
         }
     }
 
@@ -294,12 +290,8 @@ impl Colors {
             danger: c(0xff453a),
             destructive: c(0xff453a),
             symbol: c(0xff9f0a),
+            icon_backdrop: c(0xf2f2f5),
             focus_ring: accent,
-            avatar: linear_gradient(
-                160.,
-                linear_color_stop(c(0x8e9bff), 0.),
-                linear_color_stop(c(0x5b6cf0), 1.),
-            ),
         }
     }
 
@@ -337,8 +329,8 @@ impl Colors {
             danger: c(0xe01b24),
             destructive: c(0xe01b24),
             symbol: c(0xc64600),
+            icon_backdrop: c(0xffffff),
             focus_ring: accent,
-            avatar: c(0x9141ac).into(),
         }
     }
 
@@ -376,12 +368,13 @@ impl Colors {
             danger: c(0xff7b63),
             destructive: c(0xc01c28),
             symbol: c(0xffa348),
+            icon_backdrop: c(0xf0f0f2),
             focus_ring: accent,
-            avatar: c(0x9141ac).into(),
         }
     }
 
-    /// The two colours of an item's letter tile, top-left to bottom-right.
+    /// The two colours of an item's letter tile or an account's avatar,
+    /// top-left to bottom-right.
     pub fn tile(&self, hue: f32) -> (Hsla, Hsla) {
         let h = hue / 360.;
         (hsla(h, 0.78, 0.64, 1.), hsla(h, 0.72, 0.48, 1.))
