@@ -102,6 +102,17 @@ impl Rbw {
         env: &[(&str, &str)],
         wait: Wait,
     ) -> Result<Zeroizing<Vec<u8>>, Failure> {
+        self.run_within(profile, args, stdin, env, wait.limit())
+    }
+
+    fn run_within<S: AsRef<OsStr>>(
+        &self,
+        profile: Option<&AccountId>,
+        args: &[S],
+        stdin: Option<&[u8]>,
+        env: &[(&str, &str)],
+        limit: Duration,
+    ) -> Result<Zeroizing<Vec<u8>>, Failure> {
         let mut command = Command::new(&self.path);
         command
             .args(args)
@@ -123,44 +134,53 @@ impl Rbw {
         if let Some(agent) = &self.agent {
             command.env("RBW_AGENT", agent);
         }
+        // from the start: a stalled rbw may not even read its input
+        let deadline = Instant::now() + limit;
         let mut child = command.spawn().map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => Error::RbwNotFound,
             _ => Error::Other(format!("can't run {}: {error}", self.path.display())),
         })?;
+        let (input_pipe, output_pipe, error_pipe) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take());
 
-        let stdout = read_in_background(child.stdout.take());
-        let stderr = read_in_background(child.stderr.take());
-        if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
-            // a failed write shows as rbw's own error about its input
-            let _ = pipe.write_all(input);
-        }
-
-        let deadline = Instant::now() + wait.limit();
-        let mut pause = Duration::from_millis(1);
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(Error::Timeout.into());
-                }
-                Ok(None) => {
-                    std::thread::sleep(pause);
-                    pause = (pause * 2).min(Duration::from_millis(20));
-                }
-                Err(error) => {
-                    return Err(Error::Other(format!("can't wait for rbw: {error}")).into());
-                }
+        // the scope waits for its threads, which end once rbw has exited or
+        // been killed and its pipes have closed
+        std::thread::scope(|scope| {
+            let stdout = scope.spawn(|| read_all(output_pipe));
+            let stderr = scope.spawn(|| read_all(error_pipe));
+            if let (Some(input), Some(mut pipe)) = (stdin, input_pipe) {
+                // a failed write shows as rbw's own error about its input
+                scope.spawn(move || pipe.write_all(input));
             }
-        };
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = stderr.join().unwrap_or_default();
-        if status.success() {
-            Ok(stdout)
-        } else {
-            Err(failure(&String::from_utf8_lossy(&stderr)))
-        }
+
+            let mut pause = Duration::from_millis(1);
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break status,
+                    Ok(None) if Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(Error::Timeout.into());
+                    }
+                    Ok(None) => {
+                        std::thread::sleep(pause);
+                        pause = (pause * 2).min(Duration::from_millis(20));
+                    }
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(Error::Other(format!("can't wait for rbw: {error}")).into());
+                    }
+                }
+            };
+            let stdout = stdout.join().unwrap_or_default();
+            let stderr = stderr.join().unwrap_or_default();
+            if status.success() {
+                Ok(stdout)
+            } else {
+                Err(failure(&String::from_utf8_lossy(&stderr)))
+            }
+        })
     }
 
     /// Runs `rbw` and parses its JSON output.
@@ -177,18 +197,14 @@ impl Rbw {
     }
 }
 
-fn read_in_background(
-    pipe: Option<impl std::io::Read + Send + 'static>,
-) -> std::thread::JoinHandle<Zeroizing<Vec<u8>>> {
-    std::thread::spawn(move || {
-        // room for an item with its secrets, so that the buffer rarely
-        // grows and leaves copies behind
-        let mut output = Zeroizing::new(Vec::with_capacity(64 * 1024));
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut output);
-        }
-        output
-    })
+fn read_all(pipe: Option<impl std::io::Read>) -> Zeroizing<Vec<u8>> {
+    // room for an item with its secrets, so that the buffer rarely grows
+    // and leaves copies behind
+    let mut output = Zeroizing::new(Vec::with_capacity(64 * 1024));
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut output);
+    }
+    output
 }
 
 // The rbw on PATH when it is recent enough, else the bundled one, with the
@@ -494,6 +510,19 @@ mod tests {
         let start = Instant::now();
         let output = sleep.run(None, &["0.05"], None, Wait::Local).unwrap();
         assert!(output.is_empty());
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn times_out_while_rbw_doesnt_read_its_input() {
+        // more than a pipe holds, to a program that never reads it
+        let input = vec![b'x'; 1024 * 1024];
+        let sleep = Rbw::at(PathBuf::from("/bin/sleep"));
+        let start = Instant::now();
+        let failure = sleep
+            .run_within(None, &["10"], Some(&input), &[], Duration::from_millis(200))
+            .unwrap_err();
+        assert_eq!(failure.error, Error::Timeout);
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 }
