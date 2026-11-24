@@ -103,6 +103,9 @@ fn main() {
             panel::open(panel::Anchor::Centered, cx);
         } else {
             window::open(missing, cx);
+            if demo::wants("settings") {
+                settings::open(None, cx);
+            }
         }
         cx.activate(true);
     });

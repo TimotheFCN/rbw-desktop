@@ -49,7 +49,7 @@ jobs:
       - run: cargo deny check
       - name: Scripts
         run: |
-          shellcheck -x tools/check-macos tools/e2e tools/footprint tools/perf tools/shot tools/smoke-macos \
+          shellcheck -x tools/check-macos tools/e2e tools/footprint tools/mac-check tools/perf tools/shot tools/smoke-macos \
             tools/lib/*.sh packaging/*.sh packaging/*/*.sh crates/core/tests/*.sh
           python3 -m py_compile packaging/icon/render.py packaging/macos/check.py tools/lib/*.py
       - name: Desktop file and AppStream metadata

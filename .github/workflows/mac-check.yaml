@@ -1,0 +1,47 @@
+name: mac-check
+
+# Screenshots of the app on a Mac, over a colourful desktop, in the light and
+# the dark appearance (tools/mac-check): on pushes to the mac-check branch,
+# and on request. CI's own Mac has a black desktop, which hides how
+# translucent surfaces look.
+
+on:
+  push:
+    branches: [mac-check]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-check
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    working-directory: rbw-desktop
+
+jobs:
+  shots:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: ./rbw-desktop/.github/actions/setup
+      - run: sw_vers && system_profiler SPDisplaysDataType | grep -i resolution || true
+      - run: cargo build --locked -p rbw-desktop
+      - name: Screenshots
+        run: tools/mac-check target/debug/rbw-desktop target/shots/mac-check
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mac-check
+          path: rbw-desktop/target/shots/mac-check
+          if-no-files-found: ignore
+          retention-days: 14

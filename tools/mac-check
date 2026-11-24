@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Screenshots the app on a Mac over a busy, colourful desktop, in the light
+# and the dark appearance, for the mac-check workflow: the vault, Settings,
+# the lock screen, the menu bar panel, and the vault while another app is in
+# front. It keeps each screenshot and the app's log, and fails if the app
+# quits on its own. See docs/DEVELOPMENT.md.
+#
+#     tools/mac-check path/to/rbw-desktop OUT_FOLDER
+set -euo pipefail
+
+[[ $# -eq 2 ]] || { echo "usage: tools/mac-check path/to/rbw-desktop OUT_FOLDER" >&2; exit 2; }
+[[ $(uname -s) == Darwin ]] || { echo "tools/mac-check runs on macOS" >&2; exit 1; }
+binary=$1 out=$2
+root=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$out"
+# The demo keeps nothing, but the app's preferences would be this user's.
+work=$(mktemp -d)
+mkdir "$work/home"
+backdrop=
+cleanup() {
+	if [[ -n $backdrop ]]; then kill "$backdrop" 2>/dev/null || true; fi
+	rm -rf "$work"
+}
+trap cleanup EXIT
+
+swiftc -O -o "$work/backdrop" "$root/tools/lib/mac-backdrop.swift"
+"$work/backdrop" &
+backdrop=$!
+
+# The system's appearance: through System Events where the runner lets
+# scripts drive it, else the global default apps read as they start.
+appearance() {
+	local dark=false
+	[[ $1 == dark ]] && dark=true
+	if ! osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $dark"; then
+		echo "System Events refused; setting AppleInterfaceStyle instead" >&2
+		if $dark; then
+			defaults write -g AppleInterfaceStyle -string Dark
+		else
+			defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+		fi
+	fi
+	echo "AppleInterfaceStyle: $(defaults read -g AppleInterfaceStyle 2>/dev/null || echo Light)"
+	sleep 2
+}
+
+# Runs the demo with WORDS, then screenshots the screen; with `inactive`,
+# once another app has come in front.
+shoot() {
+	local name=$1 demo=$2 inactive=${3:-} pid other status=0
+	HOME=$work/home RBW_DESKTOP_DEMO=$demo RUST_LOG=info "$binary" >"$out/$name.log" 2>&1 &
+	pid=$!
+	sleep 8
+	if [[ -n $inactive ]]; then
+		"$work/backdrop" --front &
+		other=$!
+		sleep 3
+	fi
+	screencapture -x "$out/$name.png" || echo "no screenshot of $name: is screen recording allowed?" >&2
+	if [[ -n $inactive ]]; then kill "$other"; fi
+	if ! kill -0 "$pid" 2>/dev/null; then
+		wait "$pid" || status=$?
+		echo "::error::the app quit with status $status, RBW_DESKTOP_DEMO=$demo"
+		cat "$out/$name.log"
+		return 1
+	fi
+	kill "$pid"
+	wait "$pid" 2>/dev/null || true
+	echo "ok   $name"
+}
+
+failed=0
+for look in light dark; do
+	appearance "$look"
+	shoot "$look-vault" unlocked || failed=1
+	shoot "$look-settings" unlocked,settings || failed=1
+	shoot "$look-lock" "" || failed=1
+	shoot "$look-panel" unlocked,panel || failed=1
+	shoot "$look-inactive" unlocked inactive || failed=1
+done
+appearance light
+((failed == 0))
