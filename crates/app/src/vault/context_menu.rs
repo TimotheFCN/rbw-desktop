@@ -8,15 +8,13 @@ use gpui::{
     point, px,
 };
 use rbw_desktop_core::{Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result};
-use rbw_desktop_ui::{IconName, Opening, menu_item, menu_separator, popover};
+use rbw_desktop_ui::{IconName, Opening, ROW_HEIGHT, menu_item, menu_separator, popover};
 
+use super::list::ROW_GAP;
 use super::{OpenContextMenu, Part, VaultView};
 use crate::backend;
 use crate::clipboard;
 use crate::recent;
-
-/// The height of a row of the list, with the gap under it.
-const LIST_ROW: Pixels = px(47.);
 
 pub(super) struct ContextMenu {
     item: ItemSummary,
@@ -63,7 +61,9 @@ impl VaultView {
             let bounds = list.base_handle.bounds();
             point(
                 bounds.origin.x + px(40.),
-                bounds.origin.y + list.base_handle.offset().y + LIST_ROW * (index as f32 + 0.75),
+                bounds.origin.y
+                    + list.base_handle.offset().y
+                    + (ROW_HEIGHT + ROW_GAP) * (index as f32 + 0.75),
             )
         };
         self.open_context_menu(id, position, window, cx);
@@ -78,7 +78,8 @@ impl VaultView {
     }
 
     /// The item with its secrets, for `then`. An item that asks for the
-    /// master password again shows its prompt instead.
+    /// master password again shows its prompt instead. A newer request
+    /// replaces it.
     fn with_item(
         &mut self,
         id: ItemId,
@@ -88,7 +89,7 @@ impl VaultView {
     ) {
         let account = self.account_id();
         let requested = id.clone();
-        backend::request_in(
+        self.menu_task = backend::request_in(
             window,
             cx,
             move |backend| backend.item(&account, &requested),
@@ -97,8 +98,7 @@ impl VaultView {
                 Err(Error::RepromptRequired) => this.ask_password_for(id, cx),
                 Err(error) => this.show_error(&error, cx),
             },
-        )
-        .detach();
+        );
     }
 
     /// Shows the item, with the keyboard in its master password prompt.
@@ -216,7 +216,10 @@ impl VaultView {
         let id = menu.item.id.clone();
         self.close_context_menu(window, cx);
         self.with_item(id, window, cx, |this, item, window, cx| {
-            this.open_editor(item, window, cx)
+            // Not over a sheet opened meanwhile.
+            if !this.sheet.is_open() {
+                this.open_editor(item, window, cx)
+            }
         });
     }
 

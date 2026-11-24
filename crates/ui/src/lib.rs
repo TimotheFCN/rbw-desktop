@@ -38,7 +38,9 @@ pub use form::{setting_row, setting_row_with, settings_group};
 pub use glass::{Glass, Material, glass};
 pub use icon::{Assets, Icon, IconName, icon};
 pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
-pub use rows::{ListRow, NavRow, Tile, app_icon, avatar, list_row, nav_row, section_label, tile};
+pub use rows::{
+    ListRow, NavRow, ROW_HEIGHT, Tile, app_icon, avatar, list_row, nav_row, section_label, tile,
+};
 pub use select::{Select, Selected};
 pub use sheet::{SheetSlot, surface};
 pub use text::{screen_title, sheet_title};

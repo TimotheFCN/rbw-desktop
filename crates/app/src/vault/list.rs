@@ -2,7 +2,7 @@
 
 use gpui::{
     AnyElement, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement as _, Styled as _, Window, div, px, uniform_list,
+    MouseDownEvent, ParentElement as _, Pixels, Styled as _, Window, div, px, uniform_list,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, motion,
@@ -13,6 +13,9 @@ use super::{NewItem, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::generator;
 use crate::icons;
+
+/// The space under each row of the list.
+pub(super) const ROW_GAP: Pixels = px(1.);
 
 impl VaultView {
     pub(super) fn render_list(
@@ -74,7 +77,7 @@ impl VaultView {
                             let (id, menu_id) = (item.id.clone(), item.id.clone());
                             div()
                                 .px(px(7.))
-                                .pb(px(1.))
+                                .pb(ROW_GAP)
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {

@@ -1,12 +1,10 @@
 //! About: the app's version, the rbw it runs on, its licence and where it
 //! lives, and whether the rbw command line needs updating.
 
-use gpui::{
-    Context, FontWeight, IntoElement, ParentElement as _, Render, Styled as _, Window, div, px,
-};
+use gpui::{Context, IntoElement, ParentElement as _, Render, Styled as _, Window, div, px};
 use rbw_desktop_core::OutdatedRbw;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, app_icon, button, setting_row, settings_group,
+    ActiveTheme as _, ButtonStyle, app_icon, button, screen_title, setting_row, settings_group,
 };
 
 use super::note;
@@ -69,13 +67,7 @@ impl Render for AboutPage {
                     .flex_col()
                     .items_center()
                     .child(app_icon(cx))
-                    .child(
-                        div()
-                            .mt(px(12.))
-                            .text_size(px(20.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("rbw-desktop"),
-                    )
+                    .child(screen_title("rbw-desktop").mt(px(12.)))
                     .child(
                         div()
                             .mt(px(2.))

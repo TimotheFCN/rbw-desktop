@@ -3,13 +3,13 @@
 
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    IntoElement, ParentElement as _, Render, Styled as _, Task, Window, div, px,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement as _, Render, Styled as _, Task, Window, div, px,
 };
 use rbw_desktop_core::{Account, AccountId, Error, LockState, Secret};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, chrome, field_error,
-    motion, text_field,
+    motion, screen_title, text_field,
 };
 
 use crate::accounts::{self, AccountMenu, Request};
@@ -244,13 +244,7 @@ impl Render for LockScreen {
             .items_center()
             .w(px(270.))
             .child(app_icon(cx))
-            .child(
-                div()
-                    .mt(px(16.))
-                    .text_size(px(20.))
-                    .font_weight(FontWeight::BOLD)
-                    .child("Welcome back"),
-            )
+            .child(screen_title("Welcome back").mt(px(16.)))
             .child(div().mt(px(3.)).h(px(24.)).flex().items_center().child(who))
             .child(
                 div()

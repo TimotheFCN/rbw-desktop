@@ -6,13 +6,13 @@
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
-    FontWeight, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
-    SharedString, Styled as _, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
+    Styled as _, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{Account, AccountId, Error, LoginCode, Secret, Server, TwoStepMethod};
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, app_icon, button, chrome, field_error,
-    motion, segmented_control, text_field,
+    motion, screen_title, segmented_control, text_field,
 };
 
 use crate::accounts::{self, AccountMenu, Request};
@@ -758,12 +758,7 @@ impl Render for SignIn {
                         .items_center()
                         .text_center()
                         .mb(px(8.))
-                        .child(
-                            div()
-                                .text_size(px(20.))
-                                .font_weight(FontWeight::BOLD)
-                                .child(title),
-                        )
+                        .child(screen_title(title))
                         .child(
                             div()
                                 .mt(px(3.))

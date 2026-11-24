@@ -6,12 +6,13 @@
 
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Context, Entity, FocusHandle,
-    FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
-    size,
+    Global, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
+    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
-use rbw_desktop_ui::{ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion};
+use rbw_desktop_ui::{
+    ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion, screen_title,
+};
 
 use crate::CloseWindow;
 use crate::accounts::{self, Accounts, Refreshed, Request};
@@ -509,13 +510,7 @@ impl MainWindow {
             .w(px(320.))
             .text_center()
             .child(app_icon(cx))
-            .child(
-                div()
-                    .mt(px(16.))
-                    .text_size(px(20.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(title),
-            )
+            .child(screen_title(title).mt(px(16.)))
             .child(div().mt(px(6.)).text_color(dim).child(message))
             .child(
                 div()

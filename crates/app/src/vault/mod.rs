@@ -17,7 +17,7 @@ use gpui::{
 use rbw_desktop_core::{
     Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary,
 };
-use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot};
+use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot, motion};
 
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
@@ -138,11 +138,14 @@ pub struct VaultView {
     /// says so for a moment.
     copied: Option<ItemId>,
     copied_timer: Task<()>,
+    /// Fetches an item for the context menu; a newer one replaces it.
+    menu_task: Task<()>,
     context_menu_focus: FocusHandle,
     /// The generator's popover, kept while it leaves.
     generator: Option<Entity<Generator>>,
     generator_open: bool,
     generator_focus: FocusHandle,
+    generator_task: Task<()>,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
     _icons: Subscription,
@@ -195,10 +198,12 @@ impl VaultView {
             context_menu: None,
             copied: None,
             copied_timer: Task::ready(()),
+            menu_task: Task::ready(()),
             context_menu_focus: cx.focus_handle(),
             generator: None,
             generator_open: false,
             generator_focus: cx.focus_handle(),
+            generator_task: Task::ready(()),
             load_task: Task::ready(()),
             _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
         };
@@ -565,6 +570,18 @@ impl VaultView {
     fn close_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.generator_open = false;
         window.focus(&self.list_focus, cx);
+        // Once the popover has left, the generator goes, and the last
+        // value it made with it.
+        self.generator_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::DISMISS).await;
+            this.update(cx, |this, cx| {
+                if !this.generator_open {
+                    this.generator = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
         cx.notify();
     }
 

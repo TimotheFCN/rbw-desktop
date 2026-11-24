@@ -307,7 +307,8 @@ pub struct ListRow {
     on_click: Option<ClickHandler>,
 }
 
-const ROW_HEIGHT: Pixels = px(46.);
+/// The height of a row of the item list.
+pub const ROW_HEIGHT: Pixels = px(46.);
 const COMPACT_ROW_HEIGHT: Pixels = px(40.);
 /// Text in rows reads at the mockups' line height. gpui-base's buttons set
 /// it to the font size, which presses a name onto its subtitle.
