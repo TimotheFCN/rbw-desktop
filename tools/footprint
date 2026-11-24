@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Measures what the app costs: the size of its release binary, how long it
+# takes from launch to its window, and its memory once idle, with the vault
+# open and with only the menu bar item left. It runs the demo on the private
+# display of tools/shot, whose Vulkan is Mesa's software renderer: memory
+# counts that renderer too, which a GPU's driver mostly keeps elsewhere. See
+# docs/DEVELOPMENT.md.
+set -euo pipefail
+
+usage() {
+	echo "usage: tools/footprint [--no-build] [--binary PATH] [--runs N]" >&2
+	exit 2
+}
+
+theme=macos-light scale=2 build=1 binary="" runs=5
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	--no-build) build=0; shift ;;
+	--binary) binary=$(realpath "$2") build=0; shift 2 ;;
+	--runs) runs=$2; shift 2 ;;
+	*) usage ;;
+	esac
+done
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+((build)) && cargo build --release --quiet --locked --manifest-path "$root/Cargo.toml" -p rbw-desktop
+binary=${binary:-$root/target/release/rbw-desktop}
+
+# shellcheck source=tools/lib/x11.sh
+source "$root/tools/lib/x11.sh"
+x11_start
+x11_tray
+# The demo keeps nothing, but the app's preferences and session folders
+# would be this user's.
+home=$(mktemp -d)
+trap 'x11_stop; rm -rf "$home"' EXIT
+export HOME=$home XDG_CONFIG_HOME=$home/.config XDG_CACHE_HOME=$home/.cache \
+	XDG_RUNTIME_DIR=$home/run RBW_DESKTOP_DEMO=unlocked
+mkdir -m 700 "$XDG_RUNTIME_DIR"
+
+awk -v bytes="$(stat -c %s "$binary")" 'BEGIN { printf "%-28s %6.1f MB\n", "binary", bytes / 1e6 }'
+
+# Launch to the window shown, best and median of the runs.
+times=()
+for _ in $(seq "$runs"); do
+	began=$(date +%s%N)
+	x11_launch "$binary"
+	# xdotool's own --sync looks every half second
+	until xdotool search --onlyvisible --name '^Vault$' >/dev/null; do
+		(($(date +%s%N) - began < 30000000000)) || x11_fail "no window appeared"
+		sleep 0.005
+	done
+	times+=($((($(date +%s%N) - began) / 1000000)))
+	kill "$app_pid"
+	wait "$app_pid" 2>/dev/null || true
+done
+mapfile -t sorted < <(printf '%s\n' "${times[@]}" | sort -n)
+printf '%-28s %6d ms (median %d ms of %d)\n' "launch to window" "${sorted[0]}" \
+	"${sorted[$((runs / 2))]}" "$runs"
+
+# Resident and proportional memory, in MB: the second shares each library
+# page among the processes that map it.
+memory() {
+	sleep 5
+	awk -v name="$1" '/^VmRSS:/ { rss = $2 } /^Pss:/ { pss = $2 }
+		END { printf "%-28s %6.1f MB resident, %.1f MB proportional\n", name, rss / 1e3, pss / 1e3 }' \
+		"/proc/$app_pid/status" "/proc/$app_pid/smaps_rollup"
+}
+x11_launch "$binary"
+x11_window '^Vault$'
+memory "idle, vault open"
+x11_tray_item
+xdotool key ctrl+w
+sleep 1
+kill -0 "$app_pid" 2>/dev/null || x11_fail "the app quit with its window"
+memory "idle, menu bar item only"
