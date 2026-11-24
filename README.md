@@ -9,3 +9,4 @@ to it.
 
 * [What the app is and who it is for](docs/PRODUCT.md)
 * [Design mockups](design/mockups)
+* [Building, screenshots and code patterns](docs/DEVELOPMENT.md)

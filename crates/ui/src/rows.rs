@@ -79,6 +79,7 @@ impl RenderOnce for NavRow {
             .accessibility_label(self.label.clone())
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(9.))
             .h(metrics.nav_row_height)
@@ -98,6 +99,7 @@ impl RenderOnce for NavRow {
 pub fn section_label(label: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     div()
+        .flex_none()
         .px(px(8.))
         .pt(px(13.))
         .pb(px(4.))
