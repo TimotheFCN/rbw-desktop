@@ -15,6 +15,7 @@ states, in the vault:
   copied         the first field of the item copied
   revealed       the item's password shown
   sheet          the New Item sheet
+  sheet-options  its password options
   folder-menu    the sheet's folder menu
   new-folder     a folder being created from it
   delete         asking before deleting the selected item
@@ -27,6 +28,7 @@ states, in the vault:
   reprompt       an item that asks for the master password again
   reprompt-wrong a wrong master password for it
   no-icons       the vault with website icons off
+  generator      the password generator's popover
 
 locking and signing in:
   lock           the lock screen
@@ -219,10 +221,13 @@ act() {
 	# The eye of the second field, the password.
 	revealed) click $((width - 62)) $((toolbar + 2 + 56 + 4 + 10 + 51 + 25)) ;;
 	sheet) xdotool key ctrl+n ;;
-	# Name, Username, Password, its Generate button, Website, then Folder.
-	folder-menu) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Return ;;
+	generator) xdotool key ctrl+shift+g ;;
+	# Name, Username, Password, its Generate and Options buttons, Website,
+	# then Folder.
+	sheet-options) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Return ;;
+	folder-menu) xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Return ;;
 	new-folder)
-		xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Return sleep 0.4 key Up Return
+		xdotool key ctrl+n sleep 0.4 key Tab Tab Tab Tab Tab Tab Return sleep 0.4 key Up Return
 		xdotool sleep 0.4 type --delay 60 Travel
 		;;
 	delete) xdotool key ctrl+BackSpace ;;

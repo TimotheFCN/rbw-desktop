@@ -5,10 +5,11 @@ use gpui::{
     ParentElement as _, Styled as _, Window, div, px, uniform_list,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, button, chrome, list_row, search_field,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, popover,
+    search_field,
 };
 
-use super::{NewItem, VaultView};
+use super::{NewItem, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
 use crate::icons;
 
@@ -38,6 +39,7 @@ impl VaultView {
                 .gap(px(8.))
                 .px(px(12.))
                 .child(search_field(&self.search))
+                .child(self.render_generator_button(add_style, cx))
                 .child(
                     button("new-item")
                         .icon(IconName::Plus)
@@ -119,6 +121,43 @@ impl VaultView {
             .border_color(separator)
             .child(toolbar)
             .child(body)
+            .into_any_element()
+    }
+}
+
+impl VaultView {
+    /// The generator's button, with its popover hanging from it.
+    fn render_generator_button(&self, style: ButtonStyle, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let popover = popover(
+            "generator-popover",
+            self.generator_open,
+            &self.generator_focus,
+            "Password Generator",
+        )
+        .dialog()
+        .opening(Opening::Below)
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_generator(window, cx))
+                .ok();
+        })
+        .children(
+            self.generator
+                .clone()
+                .map(|generator| div().w(px(282.)).child(generator)),
+        );
+        div()
+            .relative()
+            .child(
+                button("generator")
+                    .icon(IconName::Dice)
+                    .style(style)
+                    .accessibility_label("Password Generator")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_generator(&ShowGenerator, window, cx)
+                    })),
+            )
+            .child(popover)
             .into_any_element()
     }
 }

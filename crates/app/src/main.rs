@@ -2,8 +2,10 @@ mod accounts;
 mod backend;
 mod clipboard;
 mod demo;
+mod generator;
 mod icons;
 mod lock;
+mod preferences;
 mod reprompt;
 mod settings;
 mod sign_in;
@@ -70,6 +72,7 @@ pub fn start(backend: Arc<dyn Backend>, cx: &mut App) {
     backend::init(backend, cx);
     clipboard::init(cx);
     icons::init(cx);
+    preferences::init(cx);
     accounts::init(cx);
 }
 
@@ -90,6 +93,7 @@ fn menus() -> Vec<Menu> {
         ]),
         Menu::new("Vault").items([
             MenuItem::action("Find", vault::Find),
+            MenuItem::action("Password Generator", vault::ShowGenerator),
             MenuItem::separator(),
             MenuItem::action("Sync Now", vault::Sync),
             MenuItem::action("Lock", vault::Lock),

@@ -1,5 +1,5 @@
 //! The sheet that creates an item or edits one. New logins get a generated
-//! password.
+//! password; the generator's options open from the password's row.
 
 use gpui::base::Button as BaseButton;
 use gpui::base::input::{Input, InputEvent, InputState};
@@ -10,16 +10,17 @@ use gpui::{
     px, relative,
 };
 use rbw_desktop_core::{
-    AccountId, Card, Error, Folder, FolderId, GeneratorOptions, Identity, Item, ItemContent,
-    ItemData, ItemId, ItemKind, Secret, Website,
+    AccountId, Card, Error, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
+    ItemKind, Secret, Website,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Popover, button, card, form_row, icon, menu_item,
-    menu_separator, password_text, popover, segmented_control, switch, toggle_row,
+    ActiveTheme as _, ButtonStyle, IconName, Opening, Popover, button, card, form_row, icon,
+    menu_item, menu_separator, password_text, popover, segmented_control, switch, toggle_row,
 };
 
 use super::VaultView;
 use crate::backend;
+use crate::generator::{self, Generated, Generator};
 use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
 
@@ -73,6 +74,10 @@ pub struct ItemEditor {
     /// The name of a folder being created from the folder menu.
     new_folder: Option<Entity<InputState>>,
     favorite: bool,
+    /// Makes the password, with the options its popover shows.
+    generator: Entity<Generator>,
+    generator_open: bool,
+    generator_focus: FocusHandle,
     /// Whether the password is still the generated one.
     generated: bool,
     problem: Option<&'static str>,
@@ -101,9 +106,8 @@ impl ItemEditor {
         } else {
             ItemKind::Login
         };
-        let mut this = Self::new(account, None, kind, folders, vault, window, cx);
+        let mut this = Self::new(account, None, kind, folders, vault, true, window, cx);
         this.folder = folder;
-        this.generate_password(window, cx);
         this
     }
 
@@ -116,7 +120,7 @@ impl ItemEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let kind = item.kind();
-        let mut this = Self::new(account, None, kind, folders, vault, window, cx);
+        let mut this = Self::new(account, None, kind, folders, vault, false, window, cx);
         let data = &item.data;
         let set = |input: &Entity<InputState>,
                    value: &str,
@@ -159,12 +163,17 @@ impl ItemEditor {
         this
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the two ways to open the editor share it"
+    )]
     fn new(
         account: AccountId,
         editing: Option<Item>,
         kind: ItemKind,
         folders: Vec<Folder>,
         vault: WeakEntity<VaultView>,
+        generate_now: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -188,6 +197,19 @@ impl ItemEditor {
             phone: input(""),
             notes: input(""),
         };
+        let generator = cx.new(|cx| Generator::new(generate_now, cx));
+        cx.subscribe_in(
+            &generator,
+            window,
+            |this, _, Generated(value), window, cx| {
+                this.inputs.password.update(cx, |input, cx| {
+                    input.set_value(value.expose().to_string(), window, cx)
+                });
+                this.generated = true;
+                cx.notify();
+            },
+        )
+        .detach();
         Self {
             account,
             editing,
@@ -199,6 +221,9 @@ impl ItemEditor {
             folder_menu_focus: cx.focus_handle(),
             new_folder: None,
             favorite: false,
+            generator,
+            generator_open: false,
+            generator_focus: cx.focus_handle(),
             generated: false,
             problem: None,
             reprompt: None,
@@ -240,20 +265,77 @@ impl ItemEditor {
         }
     }
 
-    fn generate_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.task = backend::request_in(
-            window,
-            cx,
-            |backend| backend.generate(&GeneratorOptions::default()),
-            |this, result, window, cx| {
-                let Ok(secret) = result else { return };
-                this.inputs.password.update(cx, |input, cx| {
-                    input.set_value(secret.expose().to_string(), window, cx)
-                });
-                this.generated = true;
-                cx.notify();
+    fn toggle_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generator_open = !self.generator_open;
+        window.focus(
+            if self.generator_open {
+                &self.generator_focus
+            } else {
+                &self.focus_handle
             },
+            cx,
         );
+        cx.notify();
+    }
+
+    fn close_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generator_open = false;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// The buttons at the end of the password's row: another password, and
+    /// the generator's options in a popover.
+    fn render_generator_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let options = popover(
+            "generator-options",
+            self.generator_open,
+            &self.generator_focus,
+            "Password Options",
+        )
+        .dialog()
+        .opening(Opening::BelowEnd)
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_generator(window, cx))
+                .ok();
+        })
+        .child(
+            div().w(px(282.)).child(
+                self.generator
+                    .update(cx, |generator, cx| generator.render_options(cx)),
+            ),
+        );
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                button("generate")
+                    .icon(IconName::Refresh)
+                    .size(px(26.))
+                    .accessibility_label("Generate Password")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.generator.update(cx, Generator::regenerate)
+                    })),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        button("generator-options-button")
+                            .icon(IconName::Sliders)
+                            .size(px(26.))
+                            .accessibility_label("Password Options")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.toggle_generator(window, cx)
+                                }),
+                            ),
+                    )
+                    .child(options),
+            )
+            .into_any_element()
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
@@ -446,15 +528,7 @@ impl ItemEditor {
                         .items_center()
                         .gap(px(8.))
                         .child(self.render_password(mono, window, cx))
-                        .child(
-                            button("generate")
-                                .icon(IconName::Refresh)
-                                .size(px(26.))
-                                .accessibility_label("Generate Password")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.generate_password(window, cx)
-                                })),
-                        ),
+                        .child(self.render_generator_buttons(cx)),
                     cx,
                 ));
                 rows.push(self.field("Website", &inputs.website, cx));
@@ -619,6 +693,30 @@ impl ItemEditor {
             .into_any_element()
     }
 
+    /// How strong the generated password is, under the fields.
+    fn render_generated_note(&self, cx: &App) -> AnyElement {
+        let generator = self.generator.read(cx);
+        let noun = generator.noun();
+        let (dot, note) = match generator.strength() {
+            Some(strength) => {
+                let (color, word) = generator::strength_look(strength, cx);
+                (Some(color), format!("{word} {noun}, generated for you"))
+            }
+            None => (None, format!("{noun}, generated for you")),
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .mt(px(8.))
+            .mx(px(13.))
+            .text_size(px(12.))
+            .text_color(cx.theme().colors.text_secondary)
+            .children(dot.map(|color| div().size(px(7.)).rounded_full().bg(color)))
+            .child(note)
+            .into_any_element()
+    }
+
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = &self.editing else { return };
         let (id, name) = (item.id.clone(), item.data.name.clone());
@@ -638,7 +736,7 @@ impl Render for ItemEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = &theme.colors;
-        let (dim, success, danger) = (colors.text_secondary, colors.success, colors.danger);
+        let (dim, danger) = (colors.text_secondary, colors.danger);
         let title = if self.editing.is_some() {
             "Edit Item"
         } else {
@@ -683,18 +781,7 @@ impl Render for ItemEditor {
             })
             .child(card().on_surface().rows(fields))
             .when(self.kind == ItemKind::Login && self.generated, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .mt(px(8.))
-                        .mx(px(13.))
-                        .text_size(px(12.))
-                        .text_color(dim)
-                        .child(div().size(px(7.)).rounded_full().bg(success))
-                        .child("Strong password, generated for you"),
-                )
+                d.child(self.render_generated_note(cx))
             })
             .child(
                 div()

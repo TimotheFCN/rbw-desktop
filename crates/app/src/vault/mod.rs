@@ -21,6 +21,7 @@ use rbw_desktop_ui::{Confirmation, SheetSlot, ToastSlot};
 
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
+use crate::generator::Generator;
 use crate::icons::Icons;
 use crate::secondary;
 use context_menu::ContextMenu;
@@ -45,6 +46,8 @@ actions!(
         Lock,
         /// Opens the selected item's context menu from the keyboard.
         OpenContextMenu,
+        /// Shows the password generator.
+        ShowGenerator,
     ]
 );
 
@@ -58,6 +61,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(secondary!("f"), Find, Some(CONTEXT)),
         KeyBinding::new(secondary!("r"), Sync, Some(CONTEXT)),
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
+        KeyBinding::new(secondary!("shift-g"), ShowGenerator, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some("VaultList")),
         KeyBinding::new("up", SelectPrevious, Some("VaultList")),
         KeyBinding::new("shift-f10", OpenContextMenu, Some("VaultList")),
@@ -110,6 +114,10 @@ pub struct VaultView {
     list_scroll: UniformListScrollHandle,
     context_menu: Option<ContextMenu>,
     context_menu_focus: FocusHandle,
+    /// The generator's popover, kept while it leaves.
+    generator: Option<Entity<Generator>>,
+    generator_open: bool,
+    generator_focus: FocusHandle,
     last_sync: Option<SystemTime>,
     load_task: Task<()>,
     _icons: Subscription,
@@ -161,6 +169,9 @@ impl VaultView {
             list_scroll: UniformListScrollHandle::new(),
             context_menu: None,
             context_menu_focus: cx.focus_handle(),
+            generator: None,
+            generator_open: false,
+            generator_focus: cx.focus_handle(),
             load_task: Task::ready(()),
             _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
         };
@@ -468,6 +479,24 @@ impl VaultView {
         .detach();
     }
 
+    fn show_generator(&mut self, _: &ShowGenerator, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generator_open {
+            self.close_generator(window, cx);
+            return;
+        }
+        let generator = cx.new(|cx| Generator::new(true, cx));
+        window.focus(&generator.focus_handle(cx), cx);
+        self.generator = Some(generator);
+        self.generator_open = true;
+        cx.notify();
+    }
+
+    fn close_generator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generator_open = false;
+        window.focus(&self.list_focus, cx);
+        cx.notify();
+    }
+
     pub(crate) fn show_error(&mut self, error: &Error, cx: &mut Context<Self>) {
         self.toast.show(
             backend::describe(error),
@@ -531,6 +560,7 @@ impl Render for VaultView {
             .on_action(cx.listener(Self::sync))
             .on_action(cx.listener(Self::lock))
             .on_action(cx.listener(Self::open_context_menu_from_keyboard))
+            .on_action(cx.listener(Self::show_generator))
             .relative()
             .size_full()
             .flex()

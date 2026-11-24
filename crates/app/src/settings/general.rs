@@ -5,25 +5,21 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     Subscription, Window, div, px,
 };
-use rbw_desktop_core::{AccountId, Preferences};
+use rbw_desktop_core::AccountId;
 use rbw_desktop_ui::{Select, Selected, setting_row, settings_group, switch};
 
 use super::store::Store;
 use crate::accounts::{self, Accounts};
-use crate::backend;
-use crate::clipboard::ClearAfter;
-use crate::icons::Icons;
+use crate::preferences::{self, Prefs};
 
 const LOCK_AFTER: [u64; 7] = [60, 5 * 60, 15 * 60, 30 * 60, 3600, 4 * 3600, 24 * 3600];
 const CLEAR_AFTER: [Option<u64>; 6] = [Some(10), Some(30), Some(60), Some(120), Some(300), None];
 
 pub struct GeneralPage {
     store: Entity<Store>,
-    /// `None` until read.
-    preferences: Option<Preferences>,
     clear_after: Entity<Select>,
     /// For each account, how long it stays unlocked, with the choices it
     /// offers: the usual ones and, if it is set to something else, that.
@@ -33,41 +29,32 @@ pub struct GeneralPage {
 
 impl GeneralPage {
     pub fn new(store: Entity<Store>, cx: &mut Context<Self>) -> Self {
-        let defaults = Preferences::default();
+        let prefs = Prefs::global(cx);
+        let clear = prefs.read(cx).get().clipboard_clear;
         let clear_after = cx.new(|cx| {
             Select::new(
                 "Clear copied passwords after",
                 CLEAR_AFTER.map(clear_label),
-                clear_index(defaults.clipboard_clear),
+                clear_index(clear),
                 cx,
             )
         });
         let subscriptions = vec![
-            cx.subscribe(&clear_after, |this, _, Selected(index), cx| {
+            cx.subscribe(&clear_after, |_, _, Selected(index), cx| {
                 let clear = CLEAR_AFTER[*index].map(Duration::from_secs);
-                this.save(|preferences| preferences.clipboard_clear = clear, cx);
+                preferences::update(cx, |preferences| preferences.clipboard_clear = clear);
+            }),
+            cx.observe(&prefs, |this, prefs, cx| {
+                let index = clear_index(prefs.read(cx).get().clipboard_clear);
+                this.clear_after
+                    .update(cx, |select, cx| select.set_selected(index, cx));
+                cx.notify();
             }),
             cx.observe(&store, |this, _, cx| this.follow_store(cx)),
             cx.observe(&Accounts::global(cx), |_, _, cx| cx.notify()),
         ];
-        backend::request(
-            cx,
-            |backend| backend.preferences(),
-            |this, result, cx| match result {
-                Ok(preferences) => {
-                    this.clear_after.update(cx, |select, cx| {
-                        select.set_selected(clear_index(preferences.clipboard_clear), cx)
-                    });
-                    this.preferences = Some(preferences);
-                    cx.notify();
-                }
-                Err(error) => log::warn!("reading the preferences: {error}"),
-            },
-        )
-        .detach();
         let mut this = Self {
             store,
-            preferences: None,
             clear_after,
             lock_after: HashMap::new(),
             _subscriptions: subscriptions,
@@ -133,41 +120,6 @@ impl GeneralPage {
         }
         cx.notify();
     }
-
-    /// Changes the preferences now and saves them; a failure puts them back.
-    fn save(&mut self, change: impl FnOnce(&mut Preferences), cx: &mut Context<Self>) {
-        let Some(preferences) = &mut self.preferences else {
-            return;
-        };
-        let before = preferences.clone();
-        change(preferences);
-        let saved = preferences.clone();
-        apply(&saved, cx);
-        cx.notify();
-        backend::request(
-            cx,
-            move |backend| backend.set_preferences(&saved),
-            move |this, result, cx| {
-                if let Err(error) = result {
-                    log::warn!("saving the preferences: {error}");
-                    apply(&before, cx);
-                    this.clear_after.update(cx, |select, cx| {
-                        select.set_selected(clear_index(before.clipboard_clear), cx)
-                    });
-                    this.preferences = Some(before);
-                    cx.notify();
-                }
-            },
-        )
-        .detach();
-    }
-}
-
-/// Makes the rest of the app follow the preferences.
-fn apply(preferences: &Preferences, cx: &mut App) {
-    cx.set_global(ClearAfter(preferences.clipboard_clear));
-    let website_icons = preferences.website_icons;
-    Icons::global(cx).update(cx, |icons, cx| icons.set_enabled(website_icons, cx));
 }
 
 fn clear_index(clear: Option<Duration>) -> usize {
@@ -224,11 +176,7 @@ impl Render for GeneralPage {
             .collect();
         let lock_group = (!lock_rows.is_empty())
             .then(|| settings_group(several.then(|| "Lock after".into()), lock_rows, cx));
-        let icons_on = self
-            .preferences
-            .as_ref()
-            .is_some_and(|preferences| preferences.website_icons);
-        let this = cx.entity().downgrade();
+        let icons_on = Prefs::global(cx).read(cx).get().website_icons;
         let other = settings_group(
             None,
             [
@@ -242,11 +190,8 @@ impl Render for GeneralPage {
                     "Show website icons",
                     Some("Your server fetches them for the websites of your logins.".into()),
                     switch("website-icons", icons_on, "Show website icons").on_change(
-                        move |on, _, cx| {
-                            this.update(cx, |this, cx| {
-                                this.save(|preferences| preferences.website_icons = on, cx)
-                            })
-                            .ok();
+                        |on, _, cx| {
+                            preferences::update(cx, |preferences| preferences.website_icons = on)
                         },
                     ),
                     cx,

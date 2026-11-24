@@ -21,6 +21,7 @@ use rbw_desktop_ui::{
 };
 
 use crate::backend;
+use crate::preferences::{self, Prefs};
 use crate::secondary;
 use crate::window::{self, Alerts, HasAlerts};
 use about::AboutPage;
@@ -145,6 +146,14 @@ impl SettingsWindow {
         cx.subscribe_in(&store, window, |_, _, SaveFailed(error), window, cx| {
             window::toast(backend::describe(error), window, cx);
         })
+        .detach();
+        cx.subscribe_in(
+            &Prefs::global(cx),
+            window,
+            |_, _, preferences::SaveFailed(error), window, cx| {
+                window::toast(backend::describe(error), window, cx);
+            },
+        )
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);

@@ -40,22 +40,11 @@ struct Shared(Entity<Icons>);
 
 impl Global for Shared {}
 
-/// Reads whether to show icons from the preferences.
+/// Shows no icons until the preferences allow them ([`crate::preferences`]).
 pub fn init(cx: &mut App) {
-    let icons = cx.new(|cx| {
-        backend::request(
-            cx,
-            |backend| backend.preferences(),
-            |this: &mut Icons, result, cx| match result {
-                Ok(preferences) => this.set_enabled(preferences.website_icons, cx),
-                Err(error) => log::warn!("reading the preferences: {error}"),
-            },
-        )
-        .detach();
-        Icons {
-            enabled: false,
-            icons: HashMap::new(),
-        }
+    let icons = cx.new(|_| Icons {
+        enabled: false,
+        icons: HashMap::new(),
     });
     cx.set_global(Shared(icons));
 }

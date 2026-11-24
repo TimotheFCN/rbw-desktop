@@ -8,10 +8,10 @@ use gpui::{
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, Material, Opening, avatar, button, chrome,
-    glass, menu_item, nav_row, popover, section_label,
+    glass, menu_item, menu_separator, nav_row, popover, section_label,
 };
 
-use super::{Filter, Lock, VaultView};
+use super::{Filter, Lock, ShowGenerator, VaultView};
 use crate::accounts;
 use crate::settings::{About, OpenSettings};
 
@@ -24,8 +24,8 @@ const KINDS: [(ItemKind, IconName, &str); 5] = [
 ];
 
 impl VaultView {
-    /// GNOME's primary menu: Preferences and About, which a Mac has in its
-    /// app menu.
+    /// GNOME's primary menu: the generator, Preferences and About, which a
+    /// Mac has in its menu bar.
     fn render_main_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();
         let menu = popover(
@@ -39,6 +39,11 @@ impl VaultView {
             this.update(cx, |this, cx| this.close_main_menu(window, cx))
                 .ok();
         })
+        .child(
+            menu_item("generator", "Password Generator")
+                .on_click(Self::main_menu_choice(Box::new(ShowGenerator), cx)),
+        )
+        .child(menu_separator(cx))
         .child(
             menu_item("preferences", "Preferences")
                 .on_click(Self::main_menu_choice(Box::new(OpenSettings), cx)),
