@@ -7,7 +7,7 @@
 #     RBW_NG=~/src/rbw-ng tools/e2e
 #
 # It builds rbw-ng's binaries into target/rbw-ng (the checkout is only
-# read), starts Vaultwarden in Docker on 127.0.0.1, makes two accounts (the
+# read), or with --app drives a packaged app on the rbw it bundles, starts Vaultwarden in Docker on 127.0.0.1, makes two accounts (the
 # first with items shared through an organization, among them some that ask
 # for the master password again), and runs the app with a private HOME, so
 # that no profile, ssh or systemd setup of yours is touched: a stand-in
@@ -17,30 +17,43 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: RBW_NG=path/to/rbw-ng tools/e2e [--no-build]" >&2
+	echo "usage: RBW_NG=path/to/rbw-ng tools/e2e [--no-build | --app path/to/bin/rbw-desktop]" >&2
 	exit 2
 }
 
 # The backend is the same whatever the look; the clicks are the macOS
 # look's.
-theme=macos-light scale=2 build=1
+theme=macos-light scale=2 build=1 app=""
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--no-build) build=0; shift ;;
+	--app) app=$(realpath "$2") build=0; shift 2 ;;
 	*) usage ;;
 	esac
 done
 : "${RBW_NG:?set RBW_NG to an rbw-ng checkout}"
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-shots=$root/target/shots/e2e
 export PATH="$HOME/.cargo/bin:$PATH" CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 if ((build)); then
 	CARGO_TARGET_DIR=$root/target/rbw-ng cargo build --quiet --locked --release --bins \
 		--manifest-path "$RBW_NG/Cargo.toml"
 	cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
 fi
-rbw=$root/target/rbw-ng/release/rbw
+if [[ -n $app ]]; then
+	# the package's: the app finds its rbw itself, with none on PATH
+	rbw=$(dirname "$app")/../libexec/rbw-desktop/rbw
+	rbw=$(realpath "$rbw")
+	shots=$root/target/shots/package/e2e
+	path=$(tr ':' '\n' <<<"$PATH" | while read -r dir; do [[ -x $dir/rbw ]] || echo "$dir"; done | paste -sd:)
+	export PATH=$path
+	unset RBW_DESKTOP_RBW
+else
+	app=$root/target/debug/rbw-desktop
+	rbw=$root/target/rbw-ng/release/rbw
+	shots=$root/target/shots/e2e
+	export RBW_DESKTOP_RBW=$rbw
+fi
 
 # shellcheck source=tools/lib/x11.sh
 source "$root/tools/lib/x11.sh"
@@ -104,7 +117,7 @@ EOF
 chmod +x "$home/bin/systemctl"
 export HOME=$home XDG_RUNTIME_DIR=$home/run XDG_CONFIG_HOME=$home/.config \
 	XDG_CACHE_HOME=$home/.cache XDG_DATA_HOME=$home/.local/share \
-	PATH=$home/bin:$PATH RBW_DESKTOP_RBW=$rbw
+	PATH=$home/bin:$PATH
 unset SSH_AUTH_SOCK RBW_DESKTOP_DEMO RBW_PROFILE
 
 # The command line, for one profile, to check what the app did.
@@ -172,7 +185,7 @@ settings_page() {
 	sleep 0.5
 }
 x11_tray
-RUST_BACKTRACE=1 x11_launch "$root/target/debug/rbw-desktop"
+RUST_BACKTRACE=1 x11_launch "$app"
 x11_window '^Vault$'
 sleep 1.5
 
@@ -190,6 +203,10 @@ type_text "$password"
 keys Return
 until_true "query 'j[\"status\"]' '' status --json | grep -qx unlocked" || true
 step signed-in "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
+# The agent that keeps the vault is the one beside the rbw the app runs,
+# by the program it was started as: it hides the rest of /proc/PID.
+agent() { ps -o args= -p "$(<"$home/run/rbw/pidfile")" | cut -d' ' -f1; }
+check agent-beside-rbw "[[ \$(agent) == '$(dirname "$rbw")/rbw-agent' ]]"
 
 # Items: open one, copy its username, and paste it into the search.
 keys Down

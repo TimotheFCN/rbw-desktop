@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Runs the app on a Mac where nobody watches, as CI does: the demo's
+# unlocked vault, the menu bar panel alone, then the lock screen, each for
+# ten seconds. It keeps a screenshot of the screen and the app's log of
+# each, prints the logs, and fails if the app quits on its own. See
+# docs/DEVELOPMENT.md.
+#
+#     tools/smoke-macos path/to/rbw-desktop OUT_FOLDER
+set -euo pipefail
+
+[[ $# -eq 2 ]] || { echo "usage: tools/smoke-macos path/to/rbw-desktop OUT_FOLDER" >&2; exit 2; }
+[[ $(uname -s) == Darwin ]] || { echo "tools/smoke-macos runs on macOS" >&2; exit 1; }
+binary=$1 out=$2
+mkdir -p "$out"
+# The demo keeps nothing, but the app's preferences would be this user's.
+home=$(mktemp -d)
+trap 'rm -rf "$home"' EXIT
+
+run() {
+	local name=$1 demo=$2 pid status=0
+	HOME=$home RBW_DESKTOP_DEMO=$demo RUST_LOG=info RUST_BACKTRACE=full "$binary" >"$out/$name.log" 2>&1 &
+	pid=$!
+	sleep 10
+	screencapture -x "$out/$name.png" || echo "no screenshot of $name: is screen recording allowed?" >&2
+	echo "::group::$name: the app's log"
+	cat "$out/$name.log"
+	echo "::endgroup::"
+	if ! kill -0 "$pid" 2>/dev/null; then
+		wait "$pid" || status=$?
+		echo "::error::the app quit with status $status, RBW_DESKTOP_DEMO=$demo"
+		return 1
+	fi
+	kill "$pid"
+	wait "$pid" 2>/dev/null || true
+	echo "ok   $name"
+}
+
+failed=0
+run vault unlocked || failed=1
+run panel unlocked,panel || failed=1
+run lock "" || failed=1
+((failed == 0))

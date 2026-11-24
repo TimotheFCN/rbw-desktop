@@ -95,11 +95,12 @@ options:
                 pointer that moves hides the keyboard's focus ring
   --tray        run a stand-in system tray, which shows the app's item
   --no-build    use the binaries already built
+  --binary PATH run this rbw-desktop, such as a package's, and build nothing
 EOF
 	exit 2
 }
 
-theme=macos-light size="" scale=2 record="" build=1 then=() demo="" tray=0 keyboard=0
+theme=macos-light size="" scale=2 record="" build=1 then=() demo="" tray=0 keyboard=0 binary=""
 while [[ $# -gt 0 && $1 == --* ]]; do
 	case $1 in
 	--theme) theme=$2; shift 2 ;;
@@ -111,6 +112,7 @@ while [[ $# -gt 0 && $1 == --* ]]; do
 	--tray) tray=1; shift ;;
 	--keyboard) keyboard=1; shift ;;
 	--no-build) build=0; shift ;;
+	--binary) binary=$(realpath "$2") build=0; shift 2 ;;
 	*) usage ;;
 	esac
 done
@@ -123,7 +125,7 @@ if [[ $state == gallery ]]; then
 	binary=$root/target/debug/examples/gallery title=Gallery
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop-ui --example gallery
 else
-	binary=$root/target/debug/rbw-desktop title=Vault
+	binary=${binary:-$root/target/debug/rbw-desktop} title=Vault
 	[[ $state == panel* ]] && title='rbw Desktop'
 	((build)) && cargo build --quiet --manifest-path "$root/Cargo.toml" -p rbw-desktop
 fi

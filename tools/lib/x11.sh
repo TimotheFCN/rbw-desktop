@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154 # theme and scale come from the script; app_pid goes to it
 # The private headless display that tools/shot and tools/e2e run the app
 # on: Xvfb with Mesa's software Vulkan, a wallpaper, xcompmgr, the root
 # window properties GPUI looks for before it draws its own frame, and a
@@ -20,7 +22,8 @@ x11_start() {
 	Xvfb -displayfd 3 -screen 0 "${screen_w}x${screen_h}x24" -nolisten tcp 3>"$work/display" 2>/dev/null &
 	x11_pids+=($!)
 	for _ in $(seq 50); do [[ -s $work/display ]] && break; sleep 0.1; done
-	export DISPLAY=:$(<"$work/display")
+	DISPLAY=:$(<"$work/display")
+	export DISPLAY
 
 	local colors
 	case $theme in
@@ -29,7 +32,9 @@ x11_start() {
 	gnome-*) colors=(-define gradient:angle=160 "gradient:#2c5aa0-#77459a") ;;
 	*) echo "unknown theme: $theme" >&2; return 1 ;;
 	esac
-	magick -size "${screen_w}x${screen_h}" "${colors[@]}" "$work/wallpaper.png"
+	# ImageMagick 7's magick, or 6's convert, as on Ubuntu 24.04
+	"$(command -v magick || echo convert)" -size "${screen_w}x${screen_h}" "${colors[@]}" \
+		"$work/wallpaper.png"
 	hsetroot -cover "$work/wallpaper.png" >/dev/null
 	xcompmgr -n &
 	x11_pids+=($!)

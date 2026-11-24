@@ -73,6 +73,8 @@ line() { printf '%s\n' "$setup" | sed -n "$1p"; }
 
 mkdir -m 700 "$home/run"
 cd "$workspace"
+# cargo's own folders stay this user's, under the HOME of before
+# shellcheck disable=SC2097,SC2098
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$workspace/target/core}" \
     HOME="$home" XDG_RUNTIME_DIR="$home/run" \
