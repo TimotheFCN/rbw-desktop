@@ -24,7 +24,7 @@ pub struct Preferences {
 }
 
 /// Where a window is on the screen, in points, and whether it fills it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WindowPlace {
     pub x: f32,
     pub y: f32,
@@ -32,6 +32,10 @@ pub struct WindowPlace {
     pub height: f32,
     /// Maximized, at `x`, `y`, `width` and `height` once it is no longer.
     pub maximized: bool,
+    /// The display it was on, by its UUID. On macOS `x` and `y` count
+    /// from that display's top-left corner; elsewhere from the whole
+    /// screen's.
+    pub display: Option<String>,
 }
 
 /// How the vault's item list is sorted.

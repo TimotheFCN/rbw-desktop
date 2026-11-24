@@ -226,6 +226,8 @@ struct WindowJson {
     height: f32,
     #[serde(default)]
     maximized: bool,
+    #[serde(default)]
+    display: Option<String>,
 }
 
 impl From<WindowJson> for WindowPlace {
@@ -236,6 +238,7 @@ impl From<WindowJson> for WindowPlace {
             width: saved.width,
             height: saved.height,
             maximized: saved.maximized,
+            display: saved.display,
         }
     }
 }
@@ -248,6 +251,7 @@ impl From<WindowPlace> for WindowJson {
             width: place.width,
             height: place.height,
             maximized: place.maximized,
+            display: place.display,
         }
     }
 }
@@ -824,7 +828,7 @@ impl Backend for RbwBackend {
             menu_bar: Some(preferences.menu_bar),
             list_share: preferences.list_share,
             sort: Some(preferences.sort.into()),
-            window: preferences.window.map(Into::into),
+            window: preferences.window.clone().map(Into::into),
         };
         write_json(&self.preferences, &saved)
             .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
@@ -947,10 +951,15 @@ mod tests {
             width: 900.,
             height: 600.,
             maximized: false,
+            display: Some("37D8832A-2D66-02CA-B9F7-8F30A301B230".into()),
         };
-        let json = serde_json::to_string(&WindowJson::from(place)).unwrap();
+        let json = serde_json::to_string(&WindowJson::from(place.clone())).unwrap();
         let back: WindowJson = serde_json::from_str(&json).unwrap();
         assert_eq!(WindowPlace::from(back), place);
+        // saved before the display was
+        let before: WindowJson =
+            serde_json::from_str(r#"{"x": 0, "y": 0, "width": 900, "height": 600}"#).unwrap();
+        assert_eq!(WindowPlace::from(before).display, None);
         let older: PreferencesJson =
             serde_json::from_str(r#"{"clipboard_clear": 30, "website_icons": true}"#).unwrap();
         assert!(older.window.is_none());

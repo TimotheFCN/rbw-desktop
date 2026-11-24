@@ -349,6 +349,7 @@ fn against_vaultwarden() {
             width: 960.,
             height: 640.,
             maximized: true,
+            display: None,
         }),
     };
     backend.set_preferences(&preferences).unwrap();

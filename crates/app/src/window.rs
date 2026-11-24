@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity,
+    AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
     FocusHandle, Global, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
     Size, Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, actions, div,
     point, prelude::FluentBuilder as _, px, size,
@@ -57,10 +57,11 @@ pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, En
         ..chrome::window_options("Vault", SIZE, MIN_SIZE, cx)
     };
     let saved = backend::ready(cx)
-        .then(|| Prefs::global(cx).read(cx).get().window)
+        .then(|| Prefs::global(cx).read(cx).get().window.clone())
         .flatten();
-    if let Some(bounds) = saved.and_then(|place| restored(place, cx)) {
+    if let Some((bounds, display)) = saved.and_then(|place| restored(place, cx)) {
         options.window_bounds = Some(bounds);
+        options.display_id = display;
     }
     // gpui-base's Root around the view gives the window Tab and Shift-Tab.
     let window = gpui::open_window(options, cx, |window, cx| {
@@ -77,7 +78,7 @@ pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, En
 
 /// Where a window saved at `place` opens: there, at least its smallest
 /// size, unless no display shows it any more, as after one was unplugged.
-fn restored(place: WindowPlace, cx: &App) -> Option<WindowBounds> {
+fn restored(place: WindowPlace, cx: &App) -> Option<(WindowBounds, Option<DisplayId>)> {
     let bounds = Bounds::new(
         point(px(place.x), px(place.y)),
         size(
@@ -85,20 +86,39 @@ fn restored(place: WindowPlace, cx: &App) -> Option<WindowBounds> {
             px(place.height).max(MIN_SIZE.height),
         ),
     );
-    let shown = cx
-        .displays()
-        .iter()
-        .any(|display| display.bounds().intersects(&bounds));
-    shown.then_some(if place.maximized {
+    let (shown, display) = if cfg!(target_os = "macos") {
+        // The place counts from its display's top-left corner: that
+        // display's if it is still plugged in, else the primary one's,
+        // where the window then opens.
+        let saved = place.display.as_deref().and_then(|saved| {
+            cx.displays()
+                .into_iter()
+                .find(|display| display.uuid().is_ok_and(|uuid| uuid.to_string() == saved))
+        });
+        let display = saved.or_else(|| cx.primary_display());
+        let shown = display
+            .as_ref()
+            .is_some_and(|display| display.bounds().intersects(&bounds));
+        (shown, display.map(|display| display.id()))
+    } else {
+        // The place counts on the whole screen, as the displays' bounds do.
+        let shown = cx
+            .displays()
+            .iter()
+            .any(|display| display.bounds().intersects(&bounds));
+        (shown, None)
+    };
+    let bounds = if place.maximized {
         WindowBounds::Maximized(bounds)
     } else {
         WindowBounds::Windowed(bounds)
-    })
+    };
+    shown.then_some((bounds, display))
 }
 
-/// Where a window is, to open there again; full screen, it opens as it was
-/// before.
-fn place(bounds: WindowBounds) -> WindowPlace {
+/// Where a window is, on `display`, to open there again; full screen, it
+/// opens as it was before.
+fn place(bounds: WindowBounds, display: Option<String>) -> WindowPlace {
     let (rect, maximized) = match bounds {
         WindowBounds::Windowed(rect) | WindowBounds::Fullscreen(rect) => (rect, false),
         WindowBounds::Maximized(rect) => (rect, true),
@@ -109,6 +129,7 @@ fn place(bounds: WindowBounds) -> WindowPlace {
         width: rect.size.width.into(),
         height: rect.size.height.into(),
         maximized,
+        display,
     }
 }
 
@@ -277,8 +298,11 @@ impl MainWindow {
         self.place_task = cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(SAVE_PLACE_AFTER).await;
             cx.update(|window, cx| {
-                let place = place(window.window_bounds());
-                preferences::update(cx, move |preferences| preferences.window = Some(place));
+                let display = window.display(cx).and_then(|display| display.uuid().ok());
+                let place = place(window.window_bounds(), display.map(|uuid| uuid.to_string()));
+                preferences::update(cx, move |preferences| {
+                    preferences.window = Some(place.clone())
+                });
             })
             .ok();
         });

@@ -75,8 +75,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   verification code or only the items shared with the account. What it
   shows only is written under the search field, with a button that shows
   everything again.
-* The window opens where it was last, at its size, unless no display
-  shows that place any more.
+* The window opens where it was last, on the same display, at its size,
+  unless no display shows that place any more.
 * The list takes a share of the window, which dragging its edge changes
   (remembered; a double-click puts it back).
 * Item view: every field copies on click, with a brief "Copied" confirmation.
