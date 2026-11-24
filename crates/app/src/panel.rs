@@ -1092,6 +1092,7 @@ mod tests {
             has_code,
             reprompt: false,
             editable: true,
+            modified: None,
         };
         let login = item(ItemKind::Login, Some("alex"), true);
         assert_eq!(

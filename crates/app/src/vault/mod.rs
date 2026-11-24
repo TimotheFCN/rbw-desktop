@@ -768,6 +768,7 @@ mod tests {
             has_code: false,
             reprompt: false,
             editable: true,
+            modified: None,
         }
     }
 

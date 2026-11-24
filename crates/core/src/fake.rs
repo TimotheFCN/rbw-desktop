@@ -98,6 +98,8 @@ struct FakeAccount {
     // items that ask for the password again, unlocked, with their last read
     unlocked_items: HashMap<ItemId, Instant>,
     recent: Vec<ItemId>,
+    // when items were created or last edited here
+    modified: HashMap<ItemId, SystemTime>,
 }
 
 // How long an unlocked item that asks for the password again stays
@@ -141,6 +143,7 @@ impl FakeBackend {
                 folders: demo.folders,
                 unlocked_items: HashMap::new(),
                 recent: demo.recent,
+                modified: HashMap::new(),
             })
             .collect();
         Self {
@@ -386,6 +389,25 @@ impl FakeAccount {
         self.item_mut(id)
     }
 
+    fn summaries(&self) -> Vec<ItemSummary> {
+        self.items
+            .iter()
+            .map(|item| summary(item, self.modified(&item.id)))
+            .collect()
+    }
+
+    /// When an item was last changed: when it was created or edited here,
+    /// else, for the demo's items, a time some hours to a few months ago
+    /// that follows from its id.
+    fn modified(&self, id: &ItemId) -> SystemTime {
+        self.modified.get(id).copied().unwrap_or_else(|| {
+            let hash = id.0.bytes().fold(0u64, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+            });
+            SystemTime::now() - Duration::from_secs(3600 * (1 + hash % 2000))
+        })
+    }
+
     fn editable_item_mut(&mut self, id: &ItemId) -> Result<&mut Item> {
         let item = self.item_mut(id)?;
         if !item.editable {
@@ -461,7 +483,7 @@ impl FakeAccount {
     }
 }
 
-fn summary(item: &Item) -> ItemSummary {
+fn summary(item: &Item, modified: SystemTime) -> ItemSummary {
     let (subtitle, websites, has_code) = match &item.data.content {
         ItemContent::Login(login) => (
             Some(login.username.clone()),
@@ -485,6 +507,7 @@ fn summary(item: &Item) -> ItemSummary {
         has_code,
         editable: item.editable,
         reprompt: item.reprompt,
+        modified: Some(modified),
     }
 }
 
@@ -644,6 +667,7 @@ impl Backend for FakeBackend {
             folders: vec![],
             unlocked_items: HashMap::new(),
             recent: vec![],
+            modified: HashMap::new(),
         });
         Ok(id)
     }
@@ -735,13 +759,7 @@ impl Backend for FakeBackend {
     }
 
     fn items(&self, account: &AccountId) -> Result<Vec<ItemSummary>> {
-        Ok(self
-            .call(Operation::Items)?
-            .unlocked(account)?
-            .items
-            .iter()
-            .map(summary)
-            .collect())
+        Ok(self.call(Operation::Items)?.unlocked(account)?.summaries())
     }
 
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item> {
@@ -776,7 +794,8 @@ impl Backend for FakeBackend {
             editable: true,
             reprompt: false,
         };
-        let summary = summary(&item);
+        account.modified.insert(item.id.clone(), SystemTime::now());
+        let summary = summary(&item, account.modified(&item.id));
         account.items.push(item);
         account.last_sync = Some(SystemTime::now());
         Ok(summary)
@@ -797,7 +816,10 @@ impl Backend for FakeBackend {
             return Err(Error::InvalidItem("an item's kind can't change".into()));
         }
         item.data = complete(data.clone());
-        let summary = summary(item);
+        let id = item.id.clone();
+        account.modified.insert(id.clone(), SystemTime::now());
+        let modified = account.modified(&id);
+        let summary = summary(account.item_mut(&id)?, modified);
         account.last_sync = Some(SystemTime::now());
         Ok(summary)
     }

@@ -46,6 +46,8 @@ pub struct ItemSummary {
     /// Whether the item can be edited and deleted. Every item can be marked
     /// favourite and moved between folders.
     pub editable: bool,
+    /// When the item was last changed, as its server says.
+    pub modified: Option<SystemTime>,
 }
 
 /// One item with its secrets.

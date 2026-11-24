@@ -249,6 +249,7 @@ mod tests {
             has_code: false,
             editable: true,
             reprompt: false,
+            modified: None,
         }
     }
 

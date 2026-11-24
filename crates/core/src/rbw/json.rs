@@ -196,6 +196,7 @@ impl ItemJson {
     /// doesn't know.
     pub fn summary(self) -> Option<ItemSummary> {
         let kind = kind(self.ty)?;
+        let modified = self.revision_date.as_deref().and_then(parse_time);
         let (subtitle, websites, has_code) = match kind {
             ItemKind::Login => {
                 let login = self.login.unwrap_or_default();
@@ -237,6 +238,7 @@ impl ItemJson {
             has_code,
             editable: self.edit,
             reprompt: self.reprompt != 0,
+            modified,
         })
     }
 
@@ -578,7 +580,7 @@ mod tests {
              "name":"GitHub","favorite":true,"edit":true,"revisionDate":"x","deletedDate":null,
              "login":{"username":"octo","uris":[{"match":null,"uri":"https://github.com"}],"hasTotp":true}},
             {"id":"b","organizationId":"o","type":3,"name":"Visa","favorite":false,"edit":false,
-             "reprompt":1,"card":{"brand":"Visa"}},
+             "reprompt":1,"revisionDate":"2026-11-24T09:41:07.123Z","card":{"brand":"Visa"}},
             {"id":"c","type":4,"name":"Me","identity":{"title":null,"firstName":"Alex","middleName":null,"lastName":"Martin"}},
             {"id":"d","type":5,"name":"Laptop","sshKey":{"publicKey":"ssh-ed25519 AAAA","keyFingerprint":"SHA256:x"}},
             {"id":"e","type":9,"name":"From the future"}
@@ -596,6 +598,8 @@ mod tests {
         assert_eq!(summaries[1].organization.as_deref(), Some("o"));
         assert!(!summaries[1].editable && summaries[1].reprompt);
         assert!(!login.reprompt);
+        assert_eq!(login.modified, None);
+        assert_eq!(summaries[1].modified, parse_time("2026-11-24T09:41:07Z"));
         assert_eq!(summaries[2].subtitle.as_deref(), Some("Alex Martin"));
         assert_eq!(summaries[3].subtitle.as_deref(), Some("Ed25519 key"));
     }
