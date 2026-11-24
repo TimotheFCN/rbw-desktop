@@ -27,9 +27,12 @@ use crate::secondary;
 
 /// How long a selection moved with the keys rests before its item is
 /// fetched.
-const SETTLE: Duration = Duration::from_millis(150);
+const SETTLE: Duration = Duration::from_millis(100);
 /// How often a verification code's countdown moves.
 const COUNTDOWN_STEP: Duration = Duration::from_secs(1);
+/// How a hidden value shows: always as long, so that its length says
+/// nothing and nothing moves when it arrives.
+const MASK: &str = "••••••••••";
 /// The narrowest the item gets, beside the list.
 const MIN_WIDTH: Pixels = px(220.);
 /// The widest the item's fields get: in a wide window they stay in the
@@ -41,10 +44,13 @@ pub struct ItemDetail {
     vault: WeakEntity<VaultView>,
     /// The item chosen in the list, as the list shows it.
     selected: Option<ItemSummary>,
-    /// The last item that arrived. While another one loads it stays on
-    /// screen, so changing the selection never blanks the pane.
-    loaded: Option<Load<Item>>,
+    /// The last answer for an item, with the item it answers for. Until
+    /// the selected one's arrives, the pane shows what the list knows of it.
+    loaded: Option<(ItemId, Load<Item>)>,
     revealed: Vec<SharedString>,
+    /// Something asked to be copied before the item arrived, copied once it
+    /// does.
+    pending_copy: Option<Part>,
     copied: Option<SharedString>,
     code: Option<VerificationCode>,
     /// The code shown expired: the next one is fetched once the pane is
@@ -79,6 +85,8 @@ struct Field {
     label: SharedString,
     value: Secret,
     shown: Shown,
+    /// For a value not yet fetched: what a click copies once it arrives.
+    pending: Option<Part>,
 }
 
 impl Field {
@@ -93,6 +101,16 @@ impl Field {
             label: label.into(),
             value: value.into(),
             shown,
+            pending: None,
+        }
+    }
+
+    /// A field whose value comes with the item, such as a login's password
+    /// while the list only knows the login's name.
+    fn pending(key: &'static str, label: &'static str, shown: Shown, part: Part) -> Self {
+        Self {
+            pending: Some(part),
+            ..Self::new(key, label, Secret::default(), shown)
         }
     }
 }
@@ -105,6 +123,7 @@ impl ItemDetail {
             selected: None,
             loaded: None,
             revealed: vec![],
+            pending_copy: None,
             copied: None,
             code: None,
             code_expired: false,
@@ -122,21 +141,36 @@ impl ItemDetail {
         self.selected.as_ref().map(|item| &item.id)
     }
 
+    /// The item chosen in the list, as the list shows it.
+    pub fn selected(&self) -> Option<&ItemSummary> {
+        self.selected.as_ref()
+    }
+
+    /// The answer for the selected item, once it has come.
+    fn loaded(&self) -> Option<&Load<Item>> {
+        let (id, load) = self.loaded.as_ref()?;
+        (Some(id) == self.selected_id()).then_some(load)
+    }
+
     /// The selected item, once it has arrived.
     pub fn item(&self) -> Option<&Item> {
-        let item = self.loaded.as_ref()?.ready()?;
-        (Some(&item.id) == self.selected_id()).then_some(item)
+        self.loaded()?.ready()
+    }
+
+    /// Takes another item, forgetting what was revealed or copied of the
+    /// one before.
+    fn select(&mut self, item: Option<ItemSummary>) {
+        if item.as_ref().map(|item| &item.id) != self.selected_id() {
+            self.forget_item_state();
+        }
+        self.selected = item;
     }
 
     /// Shows another item, or none. `by_pointer` says it was clicked, so
     /// that a master password it asks for takes the keyboard at once.
     pub fn show(&mut self, item: Option<ItemSummary>, by_pointer: bool, cx: &mut Context<Self>) {
-        self.selected = item;
+        self.select(item);
         self.focus_reprompt = by_pointer;
-        if self.selected.is_none() {
-            self.loaded = None;
-            self.forget_item_state();
-        }
         self.reload(cx);
     }
 
@@ -147,7 +181,7 @@ impl ItemDetail {
             self.show(None, false, cx);
             return;
         }
-        self.selected = item;
+        self.select(item);
         self.focus_reprompt = false;
         self.load_task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SETTLE).await;
@@ -176,6 +210,7 @@ impl ItemDetail {
 
     fn forget_item_state(&mut self) {
         self.revealed.clear();
+        self.pending_copy = None;
         self.copied = None;
         self.code = None;
         self.code_expired = false;
@@ -193,28 +228,19 @@ impl ItemDetail {
             cx,
             move |backend| backend.item(&account, &requested),
             move |this, result, cx| {
-                let previous = this
-                    .loaded
-                    .as_ref()
-                    .and_then(Load::ready)
-                    .map(|item| &item.id);
-                if previous != Some(&id) {
-                    this.forget_item_state();
-                }
                 let has_code = matches!(&result, Ok(item) if has_code(item));
-                this.loaded = Some(result.into());
+                this.loaded = Some((id.clone(), result.into()));
                 if has_code {
                     this.fetch_code(id, cx);
+                }
+                // A code waits for its own answer.
+                if let Some(part) = this.pending_copy.filter(|part| *part != Part::Code) {
+                    this.pending_copy = None;
+                    this.copy_part(part, cx);
                 }
                 cx.notify();
             },
         );
-    }
-
-    /// The item shown, which may not be the one selected while that one
-    /// loads.
-    fn shown_id(&self) -> Option<&ItemId> {
-        self.loaded.as_ref()?.ready().map(|item| &item.id)
     }
 
     fn fetch_code(&mut self, id: ItemId, cx: &mut Context<Self>) {
@@ -225,14 +251,14 @@ impl ItemDetail {
             move |backend| backend.verification_code(&account, &requested),
             move |this, result, cx| {
                 // Another item took its place meanwhile.
-                if this.shown_id() != Some(&id) {
+                if this.selected_id() != Some(&id) {
                     return;
                 }
                 let code = match result {
                     Ok(code) => code,
                     // The item went unread long enough to lock again.
                     Err(Error::RepromptRequired) => {
-                        this.loaded = Some(Load::Failed(Error::RepromptRequired));
+                        this.loaded = Some((id, Load::Failed(Error::RepromptRequired)));
                         this.forget_item_state();
                         cx.notify();
                         return;
@@ -256,6 +282,10 @@ impl ItemDetail {
                     })
                     .ok();
                 });
+                if this.pending_copy == Some(Part::Code) {
+                    this.pending_copy = None;
+                    this.copy_part(Part::Code, cx);
+                }
                 cx.notify();
             },
         );
@@ -285,12 +315,22 @@ impl ItemDetail {
     }
 
     /// Copies the password, username or code of the login shown, as if its
-    /// row was clicked; for a protected one, the master password field
-    /// takes the keyboard.
+    /// row was clicked: once it has arrived, if it is on the way; for a
+    /// protected one, the master password field takes the keyboard.
     pub fn copy_part(&mut self, part: Part, cx: &mut Context<Self>) {
-        let Some(item) = self.item() else {
-            self.focus_reprompt(cx);
-            return;
+        let has_code = self.selected.as_ref().is_some_and(|item| item.has_code);
+        let item = match self.loaded() {
+            Some(Load::Ready(item)) => item,
+            Some(Load::Failed(Error::RepromptRequired)) => {
+                self.focus_reprompt(cx);
+                return;
+            }
+            Some(Load::Failed(_)) => return,
+            Some(Load::Loading) | None => {
+                self.pending_copy = Some(part);
+                self.reload(cx);
+                return;
+            }
         };
         let ItemContent::Login(login) = &item.data.content else {
             return;
@@ -300,7 +340,12 @@ impl ItemDetail {
             Part::Password => ("password", login.password.clone(), true),
             Part::Code => match &self.code {
                 Some(code) => ("code", code.code.clone(), true),
-                None => return,
+                None => {
+                    if has_code {
+                        self.pending_copy = Some(Part::Code);
+                    }
+                    return;
+                }
             },
         };
         if !value.is_empty() {
@@ -380,7 +425,9 @@ impl ItemDetail {
             Look::MacOs => ButtonStyle::Normal,
             Look::Gnome => ButtonStyle::Flat,
         };
-        let editable = self.item().is_some_and(|item| item.editable);
+        // From the list's summary, which changes with the selection: the
+        // buttons never wait for the item.
+        let editable = self.selected.as_ref().is_some_and(|item| item.editable);
         // Favourites belong to the account: any item can be one, even
         // before it is unlocked.
         let favorite = self.selected.as_ref().map(|item| item.favorite);
@@ -440,7 +487,9 @@ impl ItemDetail {
             Shown::Hidden | Shown::Password if !revealed => div()
                 .text_size(px(15.))
                 .line_height(px(18.))
-                .child("•".repeat(field.value.expose().chars().count().clamp(8, 12)))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(MASK)
                 .into_any_element(),
             Shown::Link => div()
                 .truncate()
@@ -478,9 +527,10 @@ impl ItemDetail {
         )
         .copied(copied)
         .when_some(spoken, |row, spoken| row.spoken_value(spoken))
-        .on_click(
-            cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value_for_copy, hidden, cx)),
-        );
+        .on_click(cx.listener(move |this, _, _, cx| match field.pending {
+            Some(part) => this.copy_part(part, cx),
+            None => this.copy(key.clone(), &value_for_copy, hidden, cx),
+        }));
         if hidden {
             let key = field.key.clone();
             let label = if revealed {
@@ -578,9 +628,44 @@ impl ItemDetail {
         .into_any_element()
     }
 
+    /// The verification code's row, counting down; while the code is on
+    /// the way, its place.
     fn render_code(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let code = self.code.as_ref()?;
+        let has_code = self.selected.as_ref()?.has_code;
         let theme = cx.theme();
+        let tertiary = theme.colors.text_tertiary;
+        let key: SharedString = "code".into();
+        let copied = self.copied.as_ref() == Some(&key);
+        let row = |digits: AnyElement, fraction: f32, cx: &mut Context<Self>| {
+            field_row(
+                "code",
+                "Verification code",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(digits)
+                    .child(progress_ring(fraction, cx)),
+            )
+            .copied(copied)
+            .action(icon(IconName::Copy).text_color(tertiary))
+        };
+        let Some(code) = &self.code else {
+            return has_code.then(|| {
+                row(
+                    div()
+                        .text_color(tertiary)
+                        .child("––– –––")
+                        .into_any_element(),
+                    0.,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.copy_part(Part::Code, cx)))
+                .into_any_element()
+            });
+        };
         let remaining = code
             .expires_at
             .duration_since(SystemTime::now())
@@ -593,26 +678,21 @@ impl ItemDetail {
             digits.to_string()
         };
         let value = code.code.clone();
-        let key: SharedString = "code".into();
-        let copied = self.copied.as_ref() == Some(&key);
+        // Each new code fades up in place.
+        let period = code
+            .expires_at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let shown = motion::refresh(("code", period as usize), div().child(spaced.clone()))
+            .into_any_element();
         Some(
-            field_row(
-                "code",
-                "Verification code",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(spaced.clone())
-                    .child(progress_ring(fraction, cx)),
-            )
-            .copied(copied)
-            .spoken_value(spaced)
-            .action(icon(IconName::Copy).text_color(theme.colors.text_tertiary))
-            .on_click(cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value, true, cx)))
-            .into_any_element(),
+            row(shown, fraction, cx)
+                .spoken_value(spaced)
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value, true, cx)),
+                )
+                .into_any_element(),
         )
     }
 }
@@ -843,111 +923,125 @@ fn cards(item: &Item) -> Vec<Vec<Field>> {
     cards
 }
 
+impl ItemDetail {
+    /// The item's fields in their cards, the verification code in the
+    /// first.
+    fn render_cards(&self, mut cards: Vec<Vec<Field>>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let code = self.render_code(cx);
+        let mut groups = vec![];
+        let mut first: Vec<AnyElement> = if cards.is_empty() {
+            vec![]
+        } else {
+            cards
+                .remove(0)
+                .into_iter()
+                .map(|field| self.render_field(field, cx))
+                .collect()
+        };
+        first.extend(code);
+        for rows in std::iter::once(first).chain(cards.into_iter().map(|fields| {
+            fields
+                .into_iter()
+                .map(|field| self.render_field(field, cx))
+                .collect()
+        })) {
+            if !rows.is_empty() {
+                groups.push(card().rows(rows).into_any_element());
+            }
+        }
+        groups
+    }
+
+    /// The selected item: its name from the list at once, then its fields,
+    /// those the list knows of while the item is on the way.
+    fn render_item(
+        &mut self,
+        summary: &ItemSummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let dim = cx.theme().colors.text_secondary;
+        let icon = icons::icon(&self.account, summary, cx);
+        // Its cards, or why there are none.
+        let fields = match self.loaded() {
+            Some(Load::Ready(item)) => Ok(cards(item)),
+            Some(Load::Failed(Error::RepromptRequired)) => Err(None),
+            Some(Load::Failed(error)) => Err(Some(backend::describe(error))),
+            Some(Load::Loading) | None => Ok(provisional_cards(summary)),
+        };
+        let content: Vec<AnyElement> = match fields {
+            Ok(cards) => self.render_cards(cards, cx),
+            Err(None) => match self.reprompt(window, cx) {
+                Some(reprompt) => return self.render_reprompt(summary, reprompt, icon, cx),
+                None => vec![],
+            },
+            Err(Some(problem)) => vec![
+                div()
+                    .pt(px(24.))
+                    .text_center()
+                    .text_color(dim)
+                    .child(problem)
+                    .into_any_element(),
+            ],
+        };
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(13.))
+            .mb(px(4.))
+            .child(tile(&summary.name).size(px(56.)).icon(
+                ElementId::Name(format!("tile-{}", summary.id.0).into()),
+                icon,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(20.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(summary.name.clone()),
+                    )
+                    .child(div().text_color(dim).child(kind_label(summary.kind))),
+            );
+        div()
+            .flex()
+            .justify_center()
+            .child(motion::content_enter(
+                ElementId::Name(format!("detail-{}", summary.id.0).into()),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(MAX_CONTENT_WIDTH)
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .px(px(16.))
+                    .pt(px(2.))
+                    .pb(px(16.))
+                    .child(header)
+                    .children(content),
+            ))
+            .into_any_element()
+    }
+}
+
 impl Render for ItemDetail {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.code_expired
-            && let Some(id) = self.shown_id().cloned()
+            && let Some(id) = self.item().map(|item| item.id.clone())
         {
             self.fetch_code(id, cx);
         }
-        let theme = cx.theme();
-        let fill = theme.colors.window;
-        let dim = theme.colors.text_secondary;
+        let fill = cx.theme().colors.window;
         let toolbar = self.render_toolbar(window, cx);
         let corner = chrome::corner_radius(window, cx);
-        let selected = self.selected.clone();
-        let icon = selected
-            .as_ref()
-            .and_then(|item| icons::icon(&self.account, item, cx));
-        let reprompt = match self.loaded {
-            Some(Load::Failed(Error::RepromptRequired)) => self.reprompt(window, cx),
-            _ => None,
-        };
-        let body: Option<AnyElement> = match &self.loaded {
-            Some(Load::Ready(item)) => {
-                let item = item.clone();
-                let code = self.render_code(cx);
-                let mut cards = cards(&item);
-                let mut groups: Vec<AnyElement> = vec![];
-                let first = cards.remove(0);
-                let mut first_rows: Vec<AnyElement> = first
-                    .into_iter()
-                    .map(|f| self.render_field(f, cx))
-                    .collect();
-                first_rows.extend(code);
-                for rows in std::iter::once(first_rows).chain(cards.into_iter().map(|fields| {
-                    fields
-                        .into_iter()
-                        .map(|f| self.render_field(f, cx))
-                        .collect()
-                })) {
-                    if !rows.is_empty() {
-                        groups.push(card().rows(rows).into_any_element());
-                    }
-                }
-                let header = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(13.))
-                    .mb(px(4.))
-                    .child(
-                        tile(&item.data.name)
-                            .size(px(56.))
-                            .icon(ElementId::Name(format!("tile-{}", item.id.0).into()), icon),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(20.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(item.data.name.clone()),
-                            )
-                            .child(div().text_color(dim).child(kind_label(item.kind()))),
-                    );
-                Some(
-                    div()
-                        .flex()
-                        .justify_center()
-                        .child(motion::content_enter(
-                            ElementId::Name(format!("detail-{}", item.id.0).into()),
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .max_w(MAX_CONTENT_WIDTH)
-                                .flex()
-                                .flex_col()
-                                .gap(px(10.))
-                                .px(px(16.))
-                                .pt(px(2.))
-                                .pb(px(16.))
-                                .child(header)
-                                .children(groups),
-                        ))
-                        .into_any_element(),
-                )
-            }
-            Some(Load::Failed(Error::RepromptRequired)) => match (selected, reprompt) {
-                (Some(item), Some(reprompt)) => {
-                    Some(self.render_reprompt(&item, reprompt, icon, cx))
-                }
-                _ => None,
-            },
-            Some(Load::Failed(error)) => Some(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(dim)
-                    .child(backend::describe(error))
-                    .into_any_element(),
-            ),
-            Some(Load::Loading) | None => None,
-        };
+        let body = self
+            .selected
+            .clone()
+            .map(|summary| self.render_item(&summary, window, cx));
         div()
             .key_context("ItemDetail")
             .flex_1()
@@ -967,6 +1061,34 @@ impl Render for ItemDetail {
                     .children(body),
             )
     }
+}
+
+/// What the list knows of a login's fields, shown while the item is on the
+/// way: its username, a password to come, and its websites. Other kinds
+/// show their fields once they arrive.
+fn provisional_cards(summary: &ItemSummary) -> Vec<Vec<Field>> {
+    if summary.kind != ItemKind::Login {
+        return vec![];
+    }
+    let username = summary
+        .subtitle
+        .as_ref()
+        .map(|name| Field::new("username", "Username", name.as_str(), Shown::Text));
+    let password = Field::pending("password", "Password", Shown::Password, Part::Password);
+    let websites = summary
+        .websites
+        .iter()
+        .enumerate()
+        .map(|(i, website)| {
+            Field::new(
+                format!("website-{i}"),
+                "Website",
+                website.as_str(),
+                Shown::Link,
+            )
+        })
+        .collect();
+    vec![username.into_iter().chain([password]).collect(), websites]
 }
 
 #[cfg(test)]
@@ -1015,6 +1137,35 @@ mod tests {
         let cards = cards(&identity);
         assert_eq!(keys(&cards)[0], ["name", "address"]);
         assert_eq!(cards[0][1].value.expose(), "Lyon, France");
+    }
+
+    #[test]
+    fn a_login_shows_what_the_list_knows_while_it_loads() {
+        let summary = ItemSummary {
+            id: ItemId("a".into()),
+            kind: ItemKind::Login,
+            name: "Bank".into(),
+            subtitle: Some("alex".into()),
+            websites: vec!["bank.example".into()],
+            folder: None,
+            organization: None,
+            favorite: false,
+            has_code: false,
+            reprompt: false,
+            editable: true,
+            modified: None,
+        };
+        let cards = provisional_cards(&summary);
+        assert_eq!(
+            keys(&cards),
+            [vec!["username", "password"], vec!["website-0"]]
+        );
+        assert_eq!(cards[0][1].pending, Some(Part::Password));
+        let card = ItemSummary {
+            kind: ItemKind::Card,
+            ..summary
+        };
+        assert!(provisional_cards(&card).is_empty());
     }
 
     #[test]

@@ -512,11 +512,23 @@ impl VaultView {
         self.present(editor, window, cx);
     }
 
+    /// Edits the selected item, once it has arrived if it is on the way.
     fn edit_item(&mut self, _: &EditItem, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.detail.read(cx).item().cloned() else {
-            return;
-        };
-        self.open_editor(item, window, cx);
+        let detail = self.detail.read(cx);
+        if let Some(item) = detail.item().cloned() {
+            self.open_editor(item, window, cx);
+        } else if let Some(id) = detail.selected().map(|item| item.id.clone()) {
+            self.fetch_and_edit(id, window, cx);
+        }
+    }
+
+    /// Fetches the item, then edits it, unless a sheet opened meanwhile.
+    fn fetch_and_edit(&mut self, id: ItemId, window: &mut Window, cx: &mut Context<Self>) {
+        self.with_item(id, window, cx, |this, item, window, cx| {
+            if !this.sheet.is_open() {
+                this.open_editor(item, window, cx);
+            }
+        });
     }
 
     fn open_editor(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
@@ -590,8 +602,8 @@ impl VaultView {
     }
 
     fn delete_selected(&mut self, _: &DeleteItem, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(item) = self.detail.read(cx).item().filter(|item| item.editable) {
-            let (id, name) = (item.id.clone(), item.data.name.clone());
+        if let Some(item) = self.detail.read(cx).selected().filter(|item| item.editable) {
+            let (id, name) = (item.id.clone(), item.name.clone());
             self.delete_item(id, name, window, cx);
         }
     }

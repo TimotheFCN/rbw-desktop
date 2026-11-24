@@ -80,7 +80,7 @@ impl VaultView {
     /// The item with its secrets, for `then`. An item that asks for the
     /// master password again shows its prompt instead. A newer request
     /// replaces it.
-    fn with_item(
+    pub(super) fn with_item(
         &mut self,
         id: ItemId,
         window: &mut Window,
@@ -215,12 +215,7 @@ impl VaultView {
         };
         let id = menu.item.id.clone();
         self.close_context_menu(window, cx);
-        self.with_item(id, window, cx, |this, item, window, cx| {
-            // Not over a sheet opened meanwhile.
-            if !this.sheet.is_open() {
-                this.open_editor(item, window, cx)
-            }
-        });
+        self.fetch_and_edit(id, window, cx);
     }
 
     fn delete_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
