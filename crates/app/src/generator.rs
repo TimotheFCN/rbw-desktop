@@ -10,7 +10,7 @@ use gpui::base::slider::{SliderEvent, SliderState};
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     FontFeatures, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
+    Pixels, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
 use rbw_desktop_core::{Characters, GeneratorOptions, Secret, Strength};
@@ -341,7 +341,7 @@ impl Generator {
                 .mt(px(8.))
                 .text_size(px(12.))
                 .text_color(dim)
-                .child(div().size(px(7.)).rounded_full().bg(color))
+                .child(strength_dot(color))
                 .child(word)
         });
         let label = format!("Generated {}", self.noun());
@@ -459,6 +459,14 @@ impl Focusable for Generator {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.copy_focus.clone()
     }
+}
+
+/// The generator's width in a popover.
+pub const POPOVER_WIDTH: Pixels = px(282.);
+
+/// The dot before the word that says how strong a value is.
+pub fn strength_dot(color: Hsla) -> gpui::Div {
+    div().size(px(7.)).rounded_full().bg(color)
 }
 
 /// The colour of the dot and the word that say how strong a value is.

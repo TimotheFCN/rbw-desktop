@@ -11,6 +11,7 @@ use rbw_desktop_ui::{
 
 use super::{NewItem, ShowGenerator, VaultView};
 use crate::backend::{self, Load};
+use crate::generator;
 use crate::icons;
 
 impl VaultView {
@@ -144,7 +145,7 @@ impl VaultView {
         .children(
             self.generator
                 .clone()
-                .map(|generator| div().w(px(282.)).child(generator)),
+                .map(|generator| div().w(generator::POPOVER_WIDTH).child(generator)),
         );
         div()
             .relative()
