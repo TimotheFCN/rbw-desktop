@@ -86,6 +86,9 @@ fn against_vaultwarden() {
     // items
     let folder = backend.create_folder(&id, "Developer").unwrap();
     assert!(backend.folders(&id).unwrap().contains(&folder));
+    // a name that looks like an option is a name
+    let dashes = backend.create_folder(&id, "--help").unwrap();
+    assert_eq!(dashes.name, "--help");
     let mut github = login("GitHub", "first-password");
     github.folder = Some(folder.id.clone());
     let created = backend.create_item(&id, &github).unwrap();

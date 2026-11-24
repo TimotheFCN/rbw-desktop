@@ -99,7 +99,7 @@ impl RbwBackend {
     }
 
     fn item_json(&self, account: &AccountId, item: &ItemId) -> Result<ItemJson> {
-        self.json(account, &["item", "get", &item.0], None, Wait::Local)
+        self.json(account, &["item", "get", "--", &item.0], None, Wait::Local)
     }
 
     fn save(&self, account: &AccountId, args: &[&str], item: &ItemJson) -> Result<ItemSummary> {
@@ -111,7 +111,7 @@ impl RbwBackend {
     }
 
     fn set_config(&self, account: &AccountId, key: &str, value: &str) -> Result<()> {
-        self.run(account, &["config", "set", key, value], Wait::Local)
+        self.run(account, &["config", "set", "--", key, value], Wait::Local)
     }
 }
 
@@ -214,18 +214,35 @@ impl Backend for RbwBackend {
     ) -> Result<()> {
         let method;
         let mut args = vec!["login", "--password-stdin"];
-        match code {
+        // in the environment, which only this user can read, not in the
+        // arguments, which every user sees
+        let code = match code {
             Some(LoginCode::TwoStep {
                 method: chosen,
                 code,
             }) => {
                 method = process::method_id(*chosen).to_string();
-                args.extend(["--method", &method, "--code", code]);
+                args.extend(["--method", &method]);
+                Some(code)
             }
-            Some(LoginCode::NewDevice(code)) => args.extend(["--code", code]),
-            None => {}
+            Some(LoginCode::NewDevice(code)) => Some(code),
+            None => None,
+        };
+        if code.is_some() {
+            args.push("--code-env");
         }
-        self.run_with_secret(account, &args, password, Wait::Network)
+        let env: Vec<_> = code
+            .map(|code| ("RBW_CODE", code.as_str()))
+            .into_iter()
+            .collect();
+        self.rbw.run_with_env(
+            Some(account),
+            &args,
+            Some(password.expose().as_bytes()),
+            &env,
+            Wait::Network,
+        )?;
+        Ok(())
     }
 
     fn register_device(
@@ -305,7 +322,7 @@ impl Backend for RbwBackend {
     fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
         self.run_with_secret(
             account,
-            &["item", "unlock", &item.0, "--password-stdin"],
+            &["item", "unlock", "--password-stdin", "--", &item.0],
             password,
             Wait::Local,
         )
@@ -334,18 +351,18 @@ impl Backend for RbwBackend {
         let mut edited = ItemJson::from_data(data);
         edited.id = Some(item.0.clone());
         edited.organization_id = current.organization;
-        self.save(account, &["item", "edit", &item.0], &edited)
+        self.save(account, &["item", "edit", "--", &item.0], &edited)
     }
 
     fn delete_item(&self, account: &AccountId, item: &ItemId) -> Result<()> {
-        self.run(account, &["item", "delete", &item.0], Wait::Network)
+        self.run(account, &["item", "delete", "--", &item.0], Wait::Network)
     }
 
     fn set_favorite(&self, account: &AccountId, item: &ItemId, favorite: bool) -> Result<()> {
         let favorite = if favorite { "true" } else { "false" };
         self.json::<serde::de::IgnoredAny>(
             account,
-            &["item", "favorite", &item.0, favorite],
+            &["item", "favorite", "--", &item.0, favorite],
             None,
             Wait::Network,
         )
@@ -358,7 +375,7 @@ impl Backend for RbwBackend {
         item: &ItemId,
         folder: Option<&FolderId>,
     ) -> Result<()> {
-        let mut args = vec!["item", "move", &item.0];
+        let mut args = vec!["item", "move", "--", &item.0];
         args.extend(folder.map(|folder| folder.0.as_str()));
         self.json::<serde::de::IgnoredAny>(account, &args, None, Wait::Network)
             .map(drop)
@@ -371,14 +388,18 @@ impl Backend for RbwBackend {
     }
 
     fn create_folder(&self, account: &AccountId, name: &str) -> Result<Folder> {
-        let folder: json::FolderJson =
-            self.json(account, &["folder", "create", name], None, Wait::Network)?;
+        let folder: json::FolderJson = self.json(
+            account,
+            &["folder", "create", "--", name],
+            None,
+            Wait::Network,
+        )?;
         Ok(folder.into())
     }
 
     fn verification_code(&self, account: &AccountId, item: &ItemId) -> Result<VerificationCode> {
         let code: json::CodeJson =
-            self.json(account, &["item", "code", &item.0], None, Wait::Local)?;
+            self.json(account, &["item", "code", "--", &item.0], None, Wait::Local)?;
         Ok(code.into())
     }
 
@@ -394,7 +415,7 @@ impl Backend for RbwBackend {
         }
         let icon = match self
             .rbw
-            .run(Some(account), &["icon", &host], None, Wait::Network)
+            .run(Some(account), &["icon", "--", &host], None, Wait::Network)
         {
             // a web page instead of an image counts as no icon
             Ok(bytes) => IconFormat::of(&bytes).map(|format| WebsiteIcon {

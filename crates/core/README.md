@@ -80,16 +80,19 @@ Each call runs `rbw` once, with `RBW_PROFILE` set for the account,
 `RBW_NONINTERACTIVE=1` so that it never prompts, and `RBW_ERROR_FORMAT=json`
 so that its errors come with a code. The vault stays unlocked in the profile's
 `rbw-agent` between calls. Passwords and items with secrets go to `rbw` on
-stdin, never in arguments, and nothing is written to disk or logged. The API
-key goes in the environment of the one `rbw register` process, which only
-the same user can read, since `rbw` reads it from there.
+stdin, never in arguments, which every user of the computer can see, and
+nothing is written to disk or logged. Two-step codes and the API key go in the
+environment of the one `rbw` process that needs them, which only the same user
+can read. Values that come from people or the server, such as folder names,
+item ids and host names, follow a `--`, so that one starting with `-` can't
+pass for an option.
 
 | Method | Command |
 | --- | --- |
 | `accounts` | `rbw profiles --json`, then `account` for each |
 | `account` | `rbw status --json` |
 | `add_account` | `rbw config set email` and `base_url` |
-| `sign_in` | `rbw login --password-stdin [--method ID] [--code CODE]` |
+| `sign_in` | `rbw login --password-stdin [--method ID] [--code-env]`, with the code in `RBW_CODE` |
 | `send_email_code` | `rbw login --password-stdin --method 1 --code ""` |
 | `register_device` | `rbw register --api-key-env`, with the key in `RBW_CLIENT_ID` and `RBW_CLIENT_SECRET` |
 | `remove_account` | `rbw purge --all` |
