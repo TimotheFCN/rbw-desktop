@@ -56,6 +56,17 @@ impl RenderOnce for SegmentedControl {
             window,
             cx,
         );
+        // Each segment's own focus, so the arrow keys can move it.
+        let focus: Vec<FocusHandle> = (0..self.labels.len())
+            .map(|index| {
+                window
+                    .use_keyed_state((self.id.clone(), format!("focus-{index}")), cx, |_, cx| {
+                        cx.focus_handle()
+                    })
+                    .read(cx)
+                    .clone()
+            })
+            .collect();
         let theme = cx.theme();
         let colors = &theme.colors;
         let macos = theme.look == Look::MacOs;
@@ -64,6 +75,7 @@ impl RenderOnce for SegmentedControl {
         let id = self.id.clone();
         let (selected, last) = (self.selected, self.labels.len().saturating_sub(1));
         let on_arrow = on_select.clone();
+        let arrow_focus = focus.clone();
 
         div()
             .id(self.id)
@@ -77,11 +89,7 @@ impl RenderOnce for SegmentedControl {
                     _ => return,
                 };
                 cx.stop_propagation();
-                if next < selected {
-                    window.focus_prev(cx);
-                } else {
-                    window.focus_next(cx);
-                }
+                window.focus(&arrow_focus[next], cx);
                 if let Some(on_select) = &on_arrow {
                     on_select(next, window, cx);
                 }
@@ -118,6 +126,7 @@ impl RenderOnce for SegmentedControl {
                             .selected(selected)
                             // One stop of Tab, at the choice; the arrow keys
                             // move it.
+                            .track_focus(&focus[index])
                             .tab_stop(selected)
                             .relative()
                             .flex_1()

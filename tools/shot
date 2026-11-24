@@ -221,11 +221,11 @@ act() {
 	panel | panel-locked | panel-touch-id | panel-signed-out) ;;
 	panel-search) xdotool type --delay 60 git ;;
 	panel-copied) xdotool key Return ;;
-	# The Generator tab comes before the search field; then its Copy
-	# button has the keyboard, and the Passphrase choice comes after it and
-	# Generate Another.
-	panel-generator) xdotool key shift+Tab space ;;
-	panel-passphrase) xdotool key shift+Tab space sleep 0.4 key Tab Tab Tab space ;;
+	# The tabs come before the search field, one stop at the tab shown, and
+	# the arrow keys choose; then the Copy button has the keyboard, and the
+	# kinds come after it and Generate Another.
+	panel-generator) xdotool key shift+Tab Right ;;
+	panel-passphrase) xdotool key shift+Tab Right sleep 0.4 key Tab Tab Right ;;
 	main-menu) click $((sidebar - 24)) $((toolbar / 2)) ;;
 	# The Menu key: under Xvfb, xdotool's Shift-F10 arrives with Alt.
 	item-menu) xdotool key Down Down Down Menu ;;
@@ -276,17 +276,18 @@ act() {
 	lock-busy) xdotool sleep 2 type --delay 40 demo && xdotool key Return ;;
 	lock-accounts) xdotool key shift+Tab Return ;;
 	unlock) xdotool type --delay 40 demo && xdotool key Return ;;
-	self-hosted) xdotool key shift+Tab Return ;;
+	# The servers, one stop of Tab, then Self-hosted with the arrow keys.
+	self-hosted) xdotool key shift+Tab Right Right ;;
 	password) xdotool type --delay 40 alex@example.org && xdotool key Return ;;
 	sign-in-wrong | two-step | email-code)
 		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
 		xdotool type --delay 40 "$([[ $state == sign-in-wrong ]] && echo nope || echo demo)"
 		xdotool key Return sleep 0.6
 		# The Email method, then its button.
-		[[ $state == email-code ]] && xdotool key shift+Tab Return sleep 0.3 key Tab Return
+		[[ $state == email-code ]] && xdotool key shift+Tab Right sleep 0.3 key Tab Return
 		;;
 	wrong-server)
-		xdotool key shift+Tab Return
+		xdotool key shift+Tab Right Right
 		xdotool type --delay 40 vault.example.invalid && xdotool key Tab
 		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
 		xdotool type --delay 40 demo && xdotool key Return sleep 0.6

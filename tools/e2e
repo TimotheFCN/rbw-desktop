@@ -178,7 +178,8 @@ sleep 1.5
 
 # Adding the first account, on a self-hosted server.
 step first-run "[[ \$(cli '' status --json) == *unauthenticated* ]] || true"
-keys shift+Tab Return
+# The servers, one stop of Tab, then Self-hosted with the arrow keys.
+keys shift+Tab Right Right
 type_text "$server"
 keys Tab
 type_text "$first"
@@ -307,7 +308,7 @@ account_menu
 step account-menu
 keys Up Up Return
 sleep 0.5
-keys shift+Tab Return
+keys shift+Tab Right Right
 type_text "$server"
 keys Tab
 type_text "$second"
@@ -336,12 +337,12 @@ panel_open
 step panel "[[ -n \$(xdotool search --name '^rbw-desktop\$') ]]"
 # The Generator tab comes before the search field; its Copy button then has
 # the keyboard.
-keys shift+Tab space
+keys shift+Tab Right
 sleep 0.5
 keys Return
 step panel-generated "[[ \$(clipboard | wc -c) -eq 20 ]]"
 # Back to Passwords, whose search field takes the keyboard.
-keys shift+Tab shift+Tab space
+keys shift+Tab Left
 sleep 0.4
 type_text "router"
 keys Return

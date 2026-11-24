@@ -552,12 +552,13 @@ impl SignIn {
                             this.update(cx, |this, cx| {
                                 this.server = index;
                                 this.problem = None;
-                                let input = if index == SELF_HOSTED {
-                                    &this.server_url
-                                } else {
-                                    &this.email
-                                };
-                                input.update(cx, |input, cx| input.focus(window, cx));
+                                // The address's field appears, and takes the
+                                // keyboard; the other choices leave it on the
+                                // choice, which the arrow keys move.
+                                if index == SELF_HOSTED {
+                                    this.server_url
+                                        .update(cx, |input, cx| input.focus(window, cx));
+                                }
                                 cx.notify();
                             })
                             .ok();
