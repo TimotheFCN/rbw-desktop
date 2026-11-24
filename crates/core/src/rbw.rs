@@ -16,9 +16,9 @@ use process::{Rbw, Wait};
 
 use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
-    GeneratorOptions, IconFormat, Item, ItemData, ItemId, ItemKind, ItemSummary, LockState,
-    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
-    SshUses, VerificationCode, WebsiteIcon, icon,
+    GeneratorOptions, IconFormat, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
+    Preferences, Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode,
+    WebsiteIcon, icon,
 };
 
 /// The rbw-ng release with everything this backend uses.
@@ -511,18 +511,8 @@ impl Backend for RbwBackend {
             None,
             Wait::Local,
         )?;
-        let keys = match self.items(account) {
-            Ok(items) => Some(
-                items
-                    .into_iter()
-                    .filter(|item| item.kind == ItemKind::SshKey)
-                    .map(|item| SshKeySummary {
-                        item: item.id,
-                        name: item.name,
-                        fingerprint: item.subtitle.unwrap_or_default(),
-                    })
-                    .collect(),
-            ),
+        let keys = match self.json::<Vec<ItemJson>>(account, &["item", "list"], None, Wait::Local) {
+            Ok(items) => Some(items.iter().filter_map(ItemJson::ssh_key).collect()),
             Err(Error::Locked | Error::NotSignedIn | Error::PasswordRequired) => None,
             Err(error) => return Err(error),
         };

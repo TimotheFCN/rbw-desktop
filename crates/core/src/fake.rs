@@ -17,8 +17,45 @@ use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
     GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
     LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
-    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon,
+    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
+
+/// A call to the backend, to make that one fail or wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Operation {
+    Accounts,
+    Account,
+    AddAccount,
+    SignIn,
+    RegisterDevice,
+    SendEmailCode,
+    RemoveAccount,
+    Unlock,
+    UnlockWithTouchId,
+    Lock,
+    Sync,
+    Items,
+    Item,
+    UnlockItem,
+    CreateItem,
+    EditItem,
+    DeleteItem,
+    SetFavorite,
+    MoveItem,
+    Folders,
+    CreateFolder,
+    VerificationCode,
+    WebsiteIcon,
+    Generate,
+    AccountSettings,
+    SetAccountSettings,
+    Preferences,
+    SetPreferences,
+    SshAgent,
+    InstallSshAgent,
+    UninstallSshAgent,
+    RbwVersion,
+}
 
 pub struct FakeBackend {
     state: Mutex<State>,
@@ -28,11 +65,16 @@ struct State {
     accounts: Vec<FakeAccount>,
     preferences: Preferences,
     latency: Duration,
+    latencies: HashMap<Operation, Duration>,
     fail_next: Option<Error>,
+    failures: HashMap<Operation, Error>,
     offline: bool,
     touch_id: bool,
     // the account whose SSH agent is installed
     ssh_agent: Option<AccountId>,
+    ssh_supported: bool,
+    // what ssh uses instead of an installed agent
+    ssh_elsewhere: Option<SshUses>,
     next_id: u64,
 }
 
@@ -99,10 +141,14 @@ impl FakeBackend {
                 accounts,
                 preferences: Preferences::default(),
                 latency: Duration::ZERO,
+                latencies: HashMap::new(),
                 fail_next: None,
+                failures: HashMap::new(),
                 offline: false,
                 touch_id,
                 ssh_agent: Some(AccountId::new(demo::PERSONAL)),
+                ssh_supported: true,
+                ssh_elsewhere: None,
                 next_id: 1,
             }),
         }
@@ -121,9 +167,26 @@ impl FakeBackend {
         self.state().latency = latency;
     }
 
+    /// Makes every call of one operation take this long, whatever the
+    /// latency of the others.
+    pub fn set_latency_of(&self, operation: Operation, latency: Duration) {
+        self.state().latencies.insert(operation, latency);
+    }
+
     /// Makes the next call fail with this error, whatever it is.
     pub fn fail_next(&self, error: Error) {
         self.state().fail_next = Some(error);
+    }
+
+    /// Makes every call of one operation fail with this error, until
+    /// [`FakeBackend::succeed`].
+    pub fn fail(&self, operation: Operation, error: Error) {
+        self.state().failures.insert(operation, error);
+    }
+
+    /// Lets an operation that [`FakeBackend::fail`] made fail work again.
+    pub fn succeed(&self, operation: Operation) {
+        self.state().failures.remove(&operation);
     }
 
     /// While offline, calls that need the server fail with
@@ -138,6 +201,33 @@ impl FakeBackend {
         state.touch_id = available;
         for account in &mut state.accounts {
             account.settings.touch_id = available.then_some(true);
+        }
+    }
+
+    /// Whether this system can run the SSH agent as a service. When it
+    /// can't, its status says so and installing it fails with
+    /// [`Error::SshAgentUnsupported`].
+    pub fn set_ssh_supported(&self, supported: bool) {
+        let mut state = self.state();
+        state.ssh_supported = supported;
+        if !supported {
+            state.ssh_agent = None;
+        }
+    }
+
+    /// Makes `ssh` use something else than an installed agent, as when the
+    /// login session hasn't picked it up yet; `None` lets it use the agent.
+    pub fn set_ssh_uses(&self, uses: Option<SshUses>) {
+        self.state().ssh_elsewhere = uses;
+    }
+
+    /// Signs an account out, keeping it on this computer with its email
+    /// and server, as when its session ended: it needs
+    /// [`Backend::sign_in`] again.
+    pub fn sign_out_now(&self, account: &AccountId) {
+        if let Ok(account) = self.state().account_mut(account) {
+            account.lock();
+            account.state = LockState::SignedOut;
         }
     }
 
@@ -157,22 +247,32 @@ impl FakeBackend {
     }
 
     // Waits out the latency, then hands out the state, or the error that
-    // fail_next asked for.
-    fn call(&self) -> Result<std::sync::MutexGuard<'_, State>> {
-        let latency = self.state().latency;
+    // fail_next or fail asked for.
+    fn call(&self, operation: Operation) -> Result<std::sync::MutexGuard<'_, State>> {
+        let latency = {
+            let state = self.state();
+            state
+                .latencies
+                .get(&operation)
+                .copied()
+                .unwrap_or(state.latency)
+        };
         if !latency.is_zero() {
             std::thread::sleep(latency);
         }
         let mut state = self.state();
         state.lock_idle_accounts();
-        match state.fail_next.take() {
-            Some(error) => Err(error),
+        if let Some(error) = state.fail_next.take() {
+            return Err(error);
+        }
+        match state.failures.get(&operation) {
+            Some(error) => Err(error.clone()),
             None => Ok(state),
         }
     }
 
-    fn online(&self) -> Result<std::sync::MutexGuard<'_, State>> {
-        let state = self.call()?;
+    fn online(&self, operation: Operation) -> Result<std::sync::MutexGuard<'_, State>> {
+        let state = self.call(operation)?;
         if state.offline {
             return Err(Error::Offline);
         }
@@ -390,17 +490,18 @@ fn totp(secret: &str, now: SystemTime) -> VerificationCode {
     }
 }
 
-// A made-up icon for a host, a coloured tile with a white shape, so that
-// the interface shows icons without a server. One host in five has none.
+// A made-up icon for a host, a coloured shape on a clear background as
+// most websites' icons are, so that the interface shows icons without a
+// server. One host in five has none.
 fn demo_icon(host: &str) -> Option<WebsiteIcon> {
     const COLOURS: &[&str] = &[
         "#24292f", "#e24329", "#0080ff", "#2496ed", "#4285f4", "#003087", "#ff9900", "#1db954",
     ];
     const SHAPES: &[&str] = &[
-        r##"<circle cx="16" cy="16" r="7" fill="#fff"/>"##,
-        r##"<path d="M16 8l8 15H8z" fill="#fff"/>"##,
-        r##"<rect x="9" y="9" width="14" height="14" rx="3" fill="#fff"/>"##,
-        r##"<path d="M9 9h14v4H13v10H9z" fill="#fff"/>"##,
+        r#"<circle cx="16" cy="16" r="13"/>"#,
+        r#"<path d="M16 3l14 26H2z"/>"#,
+        r#"<rect x="3" y="3" width="26" height="26" rx="6"/>"#,
+        r#"<path d="M3 3h26v8H12v18H3z"/>"#,
     ];
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in host.bytes() {
@@ -412,7 +513,7 @@ fn demo_icon(host: &str) -> Option<WebsiteIcon> {
     let pick =
         |list: &[&'static str], salt: u64| list[((hash / salt) % list.len() as u64) as usize];
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="{}"/>{}</svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><g fill="{}">{}</g></svg>"#,
         pick(COLOURS, 5),
         pick(SHAPES, 41),
     );
@@ -455,7 +556,7 @@ fn generate(options: &GeneratorOptions) -> Result<Secret> {
 
 impl Backend for FakeBackend {
     fn accounts(&self) -> Result<Vec<Account>> {
-        let state = self.call()?;
+        let state = self.call(Operation::Accounts)?;
         Ok(state
             .accounts
             .iter()
@@ -464,13 +565,13 @@ impl Backend for FakeBackend {
     }
 
     fn account(&self, account: &AccountId) -> Result<Account> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::Account)?;
         let touch_id = state.touch_id;
         Ok(state.account_mut(account)?.public(touch_id))
     }
 
     fn add_account(&self, server: &Server, email: &str) -> Result<AccountId> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::AddAccount)?;
         let email = email.trim();
         if let Some(existing) = state
             .accounts
@@ -517,7 +618,9 @@ impl Backend for FakeBackend {
         password: &Secret,
         code: Option<&LoginCode>,
     ) -> Result<()> {
-        self.online()?.account_mut(account)?.sign_in(password, code)
+        self.online(Operation::SignIn)?
+            .account_mut(account)?
+            .sign_in(password, code)
     }
 
     fn register_device(
@@ -526,7 +629,7 @@ impl Backend for FakeBackend {
         client_id: &str,
         client_secret: &Secret,
     ) -> Result<()> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::RegisterDevice)?;
         let account = state.account_mut(account)?;
         if account.state != LockState::SignedOut {
             return Ok(());
@@ -539,7 +642,7 @@ impl Backend for FakeBackend {
     }
 
     fn send_email_code(&self, account: &AccountId, password: &Secret) -> Result<()> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::SendEmailCode)?;
         let account = state.account_mut(account)?;
         if account.state != LockState::SignedOut {
             return Err(Error::Other("already signed in".into()));
@@ -551,7 +654,7 @@ impl Backend for FakeBackend {
     }
 
     fn remove_account(&self, account: &AccountId) -> Result<()> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::RemoveAccount)?;
         state.account_mut(account)?;
         state.accounts.retain(|known| known.id != *account);
         if state.ssh_agent.as_ref() == Some(account) {
@@ -561,11 +664,13 @@ impl Backend for FakeBackend {
     }
 
     fn unlock(&self, account: &AccountId, password: &Secret) -> Result<()> {
-        self.call()?.account_mut(account)?.unlock(password)
+        self.call(Operation::Unlock)?
+            .account_mut(account)?
+            .unlock(password)
     }
 
     fn unlock_with_touch_id(&self, account: &AccountId) -> Result<()> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::UnlockWithTouchId)?;
         let touch_id = state.touch_id;
         let account = state.account_mut(account)?;
         if account.state == LockState::Unlocked {
@@ -580,7 +685,7 @@ impl Backend for FakeBackend {
     }
 
     fn lock(&self, account: &AccountId) -> Result<()> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::Lock)?;
         let account = state.account_mut(account)?;
         if account.state == LockState::Unlocked {
             account.lock();
@@ -589,13 +694,13 @@ impl Backend for FakeBackend {
     }
 
     fn sync(&self, account: &AccountId) -> Result<()> {
-        self.online()?.unlocked(account)?.last_sync = Some(SystemTime::now());
+        self.online(Operation::Sync)?.unlocked(account)?.last_sync = Some(SystemTime::now());
         Ok(())
     }
 
     fn items(&self, account: &AccountId) -> Result<Vec<ItemSummary>> {
         Ok(self
-            .call()?
+            .call(Operation::Items)?
             .unlocked(account)?
             .items
             .iter()
@@ -605,14 +710,14 @@ impl Backend for FakeBackend {
 
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item> {
         Ok(self
-            .call()?
+            .call(Operation::Item)?
             .unlocked(account)?
             .readable_item_mut(item)?
             .clone())
     }
 
     fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::UnlockItem)?;
         let account = state.unlocked(account)?;
         account.item_mut(item)?;
         if password.expose() != Self::PASSWORD {
@@ -623,7 +728,7 @@ impl Backend for FakeBackend {
     }
 
     fn create_item(&self, account: &AccountId, data: &ItemData) -> Result<ItemSummary> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::CreateItem)?;
         let id = ItemId(state.new_id());
         let account = state.unlocked(account)?;
         account.check(data)?;
@@ -647,7 +752,7 @@ impl Backend for FakeBackend {
         item: &ItemId,
         data: &ItemData,
     ) -> Result<ItemSummary> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::EditItem)?;
         let account = state.unlocked(account)?;
         account.check(data)?;
         account.readable_item_mut(item)?;
@@ -662,7 +767,7 @@ impl Backend for FakeBackend {
     }
 
     fn delete_item(&self, account: &AccountId, item: &ItemId) -> Result<()> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::DeleteItem)?;
         let account = state.unlocked(account)?;
         account.editable_item_mut(item)?;
         account.items.retain(|known| known.id != *item);
@@ -671,7 +776,7 @@ impl Backend for FakeBackend {
     }
 
     fn set_favorite(&self, account: &AccountId, item: &ItemId, favorite: bool) -> Result<()> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::SetFavorite)?;
         let account = state.unlocked(account)?;
         account.item_mut(item)?.favorite = favorite;
         account.last_sync = Some(SystemTime::now());
@@ -684,7 +789,7 @@ impl Backend for FakeBackend {
         item: &ItemId,
         folder: Option<&FolderId>,
     ) -> Result<()> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::MoveItem)?;
         let account = state.unlocked(account)?;
         if let Some(folder) = folder
             && !account.folders.iter().any(|known| known.id == *folder)
@@ -697,11 +802,15 @@ impl Backend for FakeBackend {
     }
 
     fn folders(&self, account: &AccountId) -> Result<Vec<Folder>> {
-        Ok(self.call()?.unlocked(account)?.folders.clone())
+        Ok(self
+            .call(Operation::Folders)?
+            .unlocked(account)?
+            .folders
+            .clone())
     }
 
     fn create_folder(&self, account: &AccountId, name: &str) -> Result<Folder> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::CreateFolder)?;
         let id = FolderId(state.new_id());
         let account = state.unlocked(account)?;
         let name = name.trim();
@@ -718,7 +827,7 @@ impl Backend for FakeBackend {
     }
 
     fn verification_code(&self, account: &AccountId, item: &ItemId) -> Result<VerificationCode> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::VerificationCode)?;
         let item = state.unlocked(account)?.readable_item_mut(item)?;
         match &item.data.content {
             ItemContent::Login(login) if !login.totp.is_empty() => {
@@ -729,7 +838,7 @@ impl Backend for FakeBackend {
     }
 
     fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>> {
-        let mut state = self.online()?;
+        let mut state = self.online(Operation::WebsiteIcon)?;
         state.account_mut(account)?;
         if !state.preferences.website_icons {
             return Ok(None);
@@ -738,16 +847,20 @@ impl Backend for FakeBackend {
     }
 
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
-        drop(self.call()?);
+        drop(self.call(Operation::Generate)?);
         generate(options)
     }
 
     fn account_settings(&self, account: &AccountId) -> Result<AccountSettings> {
-        Ok(self.call()?.account_mut(account)?.settings.clone())
+        Ok(self
+            .call(Operation::AccountSettings)?
+            .account_mut(account)?
+            .settings
+            .clone())
     }
 
     fn set_account_settings(&self, account: &AccountId, settings: &AccountSettings) -> Result<()> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::SetAccountSettings)?;
         let touch_id = state.touch_id;
         let account = state.account_mut(account)?;
         if settings.lock_timeout.is_zero() {
@@ -764,22 +877,25 @@ impl Backend for FakeBackend {
     }
 
     fn preferences(&self) -> Result<Preferences> {
-        Ok(self.call()?.preferences.clone())
+        Ok(self.call(Operation::Preferences)?.preferences.clone())
     }
 
     fn set_preferences(&self, preferences: &Preferences) -> Result<()> {
-        self.call()?.preferences = preferences.clone();
+        self.call(Operation::SetPreferences)?.preferences = preferences.clone();
         Ok(())
     }
 
     fn ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::SshAgent)?;
         state.ssh_status(account)
     }
 
     fn install_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::InstallSshAgent)?;
         state.account_mut(account)?;
+        if !state.ssh_supported {
+            return Err(Error::SshAgentUnsupported);
+        }
         match &state.ssh_agent {
             Some(other) if other != account => {
                 return Err(Error::SshAgentInstalledForOther(other.clone()));
@@ -790,7 +906,7 @@ impl Backend for FakeBackend {
     }
 
     fn uninstall_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        let mut state = self.call()?;
+        let mut state = self.call(Operation::UninstallSshAgent)?;
         if state.ssh_agent.as_ref() == Some(account) {
             state.ssh_agent = None;
         }
@@ -798,7 +914,7 @@ impl Backend for FakeBackend {
     }
 
     fn rbw_version(&self) -> Result<String> {
-        drop(self.call()?);
+        drop(self.call(Operation::RbwVersion)?);
         Ok("demo".to_string())
     }
 }
@@ -806,6 +922,7 @@ impl Backend for FakeBackend {
 impl State {
     fn ssh_status(&mut self, id: &AccountId) -> Result<SshAgentStatus> {
         let installed = self.ssh_agent.clone();
+        let (supported, elsewhere) = (self.ssh_supported, self.ssh_elsewhere.clone());
         let account = self.account_mut(id)?;
         let keys = (account.state == LockState::Unlocked).then(|| {
             account
@@ -815,6 +932,7 @@ impl State {
                     ItemContent::SshKey(key) => Some(SshKeySummary {
                         item: item.id.clone(),
                         name: item.data.name.clone(),
+                        key_type: ssh::key_type(&key.public_key),
                         fingerprint: key.fingerprint.clone(),
                     }),
                     _ => None,
@@ -826,7 +944,16 @@ impl State {
             id.profile()
         ));
         let (service, running, ssh_uses) = match installed {
-            Some(owner) if owner == *id => (SshService::Installed, true, SshUses::Rbw),
+            _ if !supported => (
+                SshService::Unsupported,
+                false,
+                SshUses::Other(PathBuf::from("/run/user/1000/keyring/ssh")),
+            ),
+            Some(owner) if owner == *id => (
+                SshService::Installed,
+                true,
+                elsewhere.unwrap_or(SshUses::Rbw),
+            ),
             Some(owner) => (
                 SshService::InstalledForOther(owner),
                 false,
@@ -1167,6 +1294,28 @@ mod tests {
         let start = Instant::now();
         fake.sync(&id).unwrap();
         assert!(start.elapsed() >= Duration::from_millis(20));
+        fake.set_latency(Duration::ZERO);
+
+        fake.fail(Operation::InstallSshAgent, Error::SshAgentUnsupported);
+        assert_eq!(fake.install_ssh_agent(&id), Err(Error::SshAgentUnsupported));
+        assert_eq!(fake.install_ssh_agent(&id), Err(Error::SshAgentUnsupported));
+        assert!(fake.items(&id).is_ok());
+        fake.succeed(Operation::InstallSshAgent);
+        assert!(fake.install_ssh_agent(&id).is_ok());
+
+        fake.set_latency_of(Operation::Lock, Duration::from_millis(20));
+        let start = Instant::now();
+        fake.items(&id).unwrap();
+        assert!(start.elapsed() < Duration::from_millis(20));
+        fake.lock(&id).unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(20));
+
+        fake.sign_out_now(&id);
+        let account = fake.account(&id).unwrap();
+        assert_eq!(account.state, LockState::SignedOut);
+        assert!(account.email.is_some());
+        assert_eq!(fake.items(&id), Err(Error::NotSignedIn));
+        fake.unlock(&id, &FakeBackend::PASSWORD.into()).unwrap_err();
     }
 
     #[test]
@@ -1185,5 +1334,18 @@ mod tests {
         let status = fake.install_ssh_agent(&work).unwrap();
         assert_eq!(status.service, SshService::Installed);
         assert_eq!(status.keys, None);
+
+        let elsewhere = SshUses::Other(PathBuf::from("/tmp/other"));
+        fake.set_ssh_uses(Some(elsewhere.clone()));
+        assert_eq!(fake.ssh_agent(&work).unwrap().ssh_uses, elsewhere);
+        fake.set_ssh_supported(false);
+        assert_eq!(
+            fake.ssh_agent(&work).unwrap().service,
+            SshService::Unsupported
+        );
+        assert_eq!(
+            fake.install_ssh_agent(&work),
+            Err(Error::SshAgentUnsupported)
+        );
     }
 }

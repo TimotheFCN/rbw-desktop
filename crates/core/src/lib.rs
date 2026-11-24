@@ -23,7 +23,7 @@ pub use account::{
     Account, AccountId, AccountSettings, LockState, LoginCode, Server, TwoStepMethod,
 };
 pub use error::{Error, Result};
-pub use fake::FakeBackend;
+pub use fake::{FakeBackend, Operation};
 pub use generator::{Characters, GeneratorOptions};
 pub use icon::{IconFormat, WebsiteIcon};
 pub use item::{

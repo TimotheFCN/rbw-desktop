@@ -5,7 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
-    ItemKind, ItemSummary, Login, Secret, Server, SshKey, UriMatch, VerificationCode, Website,
+    ItemKind, ItemSummary, Login, Secret, Server, SshKey, SshKeySummary, UriMatch,
+    VerificationCode, Website, ssh,
 };
 
 const LOGIN: u8 = 1;
@@ -233,6 +234,17 @@ impl ItemJson {
             has_code,
             editable: self.edit,
             reprompt: self.reprompt != 0,
+        })
+    }
+
+    /// The SSH key this item holds, for the keys the agent serves.
+    pub fn ssh_key(&self) -> Option<SshKeySummary> {
+        let key = self.ssh_key.as_ref().filter(|_| self.ty == SSH_KEY)?;
+        Some(SshKeySummary {
+            item: ItemId(self.id.clone().unwrap_or_default()),
+            name: self.name.clone().unwrap_or_default(),
+            key_type: ssh::key_type(key.public_key.as_deref().unwrap_or_default()),
+            fingerprint: key.key_fingerprint.clone().unwrap_or_default(),
         })
     }
 
@@ -581,6 +593,27 @@ mod tests {
         assert!(!login.reprompt);
         assert_eq!(summaries[2].subtitle.as_deref(), Some("Alex Martin"));
         assert_eq!(summaries[3].subtitle.as_deref(), Some("SHA256:x"));
+    }
+
+    #[test]
+    fn ssh_keys_with_their_type() {
+        let list: Vec<ItemJson> = serde_json::from_str(
+            r#"[
+            {"id":"a","type":1,"name":"GitHub","login":{"username":"octo"}},
+            {"id":"d","type":5,"name":"Laptop","sshKey":{"publicKey":"ssh-ed25519 AAAA","keyFingerprint":"SHA256:x"}}
+            ]"#,
+        )
+        .unwrap();
+        let keys: Vec<_> = list.iter().filter_map(ItemJson::ssh_key).collect();
+        assert_eq!(
+            keys,
+            [SshKeySummary {
+                item: ItemId("d".into()),
+                name: "Laptop".into(),
+                key_type: "Ed25519".into(),
+                fingerprint: "SHA256:x".into(),
+            }]
+        );
     }
 
     #[test]

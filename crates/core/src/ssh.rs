@@ -42,5 +42,35 @@ pub enum SshUses {
 pub struct SshKeySummary {
     pub item: ItemId,
     pub name: String,
+    /// The kind of key, as people name it: "Ed25519", "RSA", "ECDSA", or
+    /// empty when it is one this version doesn't know.
+    pub key_type: String,
     pub fingerprint: String,
+}
+
+/// The kind of key a public key in OpenSSH's format holds, from its first
+/// word, such as `ssh-ed25519`.
+pub(crate) fn key_type(public_key: &str) -> String {
+    let algorithm = public_key.split_whitespace().next().unwrap_or_default();
+    let name = match algorithm {
+        "ssh-ed25519" => "Ed25519",
+        "sk-ssh-ed25519@openssh.com" => "Ed25519 security key",
+        "ssh-rsa" => "RSA",
+        "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" => "ECDSA",
+        "sk-ecdsa-sha2-nistp256@openssh.com" => "ECDSA security key",
+        "ssh-dss" => "DSA",
+        _ => "",
+    };
+    name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn key_types() {
+        assert_eq!(super::key_type("ssh-ed25519 AAAAC3Nz me@host"), "Ed25519");
+        assert_eq!(super::key_type("ecdsa-sha2-nistp384 AAAA"), "ECDSA");
+        assert_eq!(super::key_type("ssh-rsa AAAAB3"), "RSA");
+        assert_eq!(super::key_type(""), "");
+    }
 }
