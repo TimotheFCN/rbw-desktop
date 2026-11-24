@@ -1,12 +1,12 @@
 //! The item list with its search field.
 
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, Styled as _, Window, div, px, uniform_list,
+    AnyElement, Context, ElementId, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement as _, Styled as _, Window, div, px, uniform_list,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, popover,
-    search_field,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, button, chrome, list_row, motion,
+    popover, search_field,
 };
 
 use super::{NewItem, ShowGenerator, VaultView};
@@ -111,6 +111,12 @@ impl VaultView {
             .flex_1()
             .into_any_element(),
         };
+        // Another choice in the sidebar shows other items: they fade up in
+        // place. Typing a search changes them without it.
+        let body = motion::refresh(
+            ElementId::Name(format!("items-{:?}", self.filter).into()),
+            div().flex_1().min_h_0().flex().flex_col().child(body),
+        );
 
         div()
             .id("list")

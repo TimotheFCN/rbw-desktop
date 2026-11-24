@@ -12,8 +12,8 @@ use gpui::{
 use rbw_desktop_core::ItemKind;
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Opening, Popover, button, card, field_error, form_row,
-    icon, menu_item, menu_separator, password_text, popover, row_focus_ring, segmented_control,
-    sheet_title, switch, toggle_row,
+    icon, menu_item, menu_separator, motion, password_text, popover, row_focus_ring,
+    segmented_control, sheet_title, switch, toggle_row,
 };
 
 use super::form::Key;
@@ -508,7 +508,13 @@ impl ItemEditor {
 
     /// The groups of fields, in the order they show.
     fn groups(&self, window: &Window, cx: &mut Context<Self>) -> Vec<Group> {
-        let mut groups = vec![self.render_main(window, cx)];
+        let main = self.render_main(window, cx);
+        // Another kind shows other fields: they fade up in place.
+        let mut groups = vec![Group {
+            element: motion::refresh(("item-kind", self.kind as usize), div().child(main.element))
+                .into_any_element(),
+            focus: main.focus,
+        }];
         if self.kind == ItemKind::Login && self.generated {
             groups.push(Group {
                 element: self.render_generated_note(cx),

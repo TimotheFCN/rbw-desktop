@@ -591,7 +591,6 @@ impl SignIn {
                                 "Server address",
                             )),
                             point(px(0.), px(-6.)),
-                            cx,
                         )
                         .into_any_element(),
                     );
@@ -791,7 +790,6 @@ impl Render for SignIn {
                 )
                 .child(buttons),
             point(slide, px(0.)),
-            cx,
         );
         // The column keeps its height from step to step, so that the icon
         // and the title stay where they are.

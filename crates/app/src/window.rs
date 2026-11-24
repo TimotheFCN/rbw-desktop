@@ -141,7 +141,8 @@ pub struct MainWindow {
     screen: Screen,
     /// Names the screen shown, so that each new one plays its entrance.
     generation: usize,
-    /// The screen being replaced, drawn under the new one while it fades in.
+    /// The screen being replaced, which fades out before the new one fades
+    /// in.
     leaving: Option<AnyView>,
     alerts: Alerts,
     /// The window's own focus, so that its shortcuts work while no screen
@@ -428,7 +429,7 @@ impl MainWindow {
         self.add_account(window, cx);
     }
 
-    /// Replaces the screen, fading the new one in over the old.
+    /// Replaces the screen: the old one fades out, then the new one in.
     fn show(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<Self>) {
         let old = std::mem::replace(&mut self.screen, screen);
         self.leaving = old.view();
@@ -753,13 +754,17 @@ impl Render for MainWindow {
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .relative()
             .size_full()
-            .children(leaving.map(|view| div().absolute().inset_0().child(view)))
+            .children(leaving.map(|view| {
+                motion::screen_leave(
+                    ("screen-leaving", self.generation),
+                    div().absolute().inset_0().child(view),
+                )
+            }))
             .children(current.map(|screen| {
-                motion::screen_enter(
+                motion::screen_replace(
                     ("screen", self.generation),
                     div().absolute().inset_0().child(screen),
                     point(px(0.), px(6.)),
-                    cx,
                 )
             }))
             .children(alerts.into_iter().flatten());

@@ -1,10 +1,12 @@
 //! Every duration, curve and spring the interface moves with.
 //!
 //! Motion explains a change and stays out of the way: short, eased out,
-//! interruptible from wherever it is. All of it goes through gpui-base's
-//! transition, spring and presence primitives, which follow the system's
-//! reduced-motion setting: spatial motion then jumps to its end, and fades
-//! keep their timing only where noted.
+//! interruptible from wherever it is, and it never moves the layout around
+//! what moves. Transitions, springs and presence go through gpui-base's
+//! primitives; content arriving and screens changing use GPUI's own
+//! animation, keyed by what they show. Both follow the system's
+//! reduced-motion setting: what moves or fades jumps to its end, except the
+//! fades of [`fade`] and the spinner.
 
 use std::time::Duration;
 
@@ -81,9 +83,9 @@ pub fn presence(
 
 /// Content arriving in place of other content, like the detail pane showing
 /// another item: it settles into place from a few points lower while fading
-/// up. It starts partly visible, so stepping quickly through a list never
-/// shows an empty pane. A new `id` restarts it, so pass one that names the
-/// content.
+/// up, drawn off its place rather than laid out again. It starts partly
+/// visible, so stepping quickly through a list never shows an empty pane.
+/// A new `id` restarts it, so pass one that names the content.
 pub fn content_enter<E: IntoElement + Styled + 'static>(
     id: impl Into<ElementId>,
     element: E,
@@ -92,7 +94,12 @@ pub fn content_enter<E: IntoElement + Styled + 'static>(
     element.with_animation(
         id,
         Animation::new(STANDARD).with_easing(move |t| easing.sample(t)),
-        |element, t| element.opacity(0.4 + 0.6 * t).mt(px(4.) * (1. - t)),
+        |element, t| {
+            element
+                .opacity(0.4 + 0.6 * t)
+                .relative()
+                .top(px(4.) * (1. - t))
+        },
     )
 }
 
@@ -112,33 +119,60 @@ pub fn refresh<E: IntoElement + Styled + 'static>(
     )
 }
 
-/// A screen or a step replacing another in place, such as the vault after
-/// unlocking or the next step of signing in. It is drawn over what it
-/// replaces and fades in from nothing while settling from `from`, a few
-/// points off, into place. Under reduced motion it only fades. A new `id`
-/// restarts it, so pass one that names the screen.
+/// A step replacing another in place, such as the next step of signing in,
+/// or something appearing in a form: it fades in from nothing while
+/// settling from `from`, a few points off, into place. A new `id` restarts
+/// it, so pass one that names the step.
 pub fn screen_enter<E: IntoElement + Styled + 'static>(
     id: impl Into<ElementId>,
     element: E,
     from: Point<Pixels>,
-    cx: &App,
 ) -> AnimationElement<E> {
     let easing = ease_out();
-    let from = if cx.reduce_motion() {
-        Point::default()
-    } else {
-        from
-    };
     element.with_animation(
         id,
         Animation::new(STANDARD).with_easing(move |t| easing.sample(t)),
-        move |element, t| {
-            element
-                .opacity(t)
-                .left(from.x * (1. - t))
-                .top(from.y * (1. - t))
-        },
+        move |element, t| settle(element, t, from),
     )
+}
+
+/// The share of a screen change in which the screen leaving fades out,
+/// before the new one fades in: the two are never seen at once.
+const HANDOVER: f32 = 0.4;
+
+/// A screen replacing another in the window, such as the vault after
+/// unlocking: it waits for [`screen_leave`] to clear the old one, then
+/// fades in while settling from `from`. Both last [`STANDARD`]; a new `id`
+/// restarts it.
+pub fn screen_replace<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+    from: Point<Pixels>,
+) -> AnimationElement<E> {
+    let easing = ease_out();
+    element.with_animation(id, Animation::new(STANDARD), move |element, t| {
+        let t = easing.sample(((t - HANDOVER) / (1. - HANDOVER)).clamp(0., 1.));
+        settle(element, t, from)
+    })
+}
+
+/// The screen [`screen_replace`] replaces, fading out in the first part of
+/// the change.
+pub fn screen_leave<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+) -> AnimationElement<E> {
+    let easing = ease_in();
+    element.with_animation(id, Animation::new(STANDARD), move |element, t| {
+        element.opacity(1. - easing.sample((t / HANDOVER).min(1.)))
+    })
+}
+
+fn settle<E: Styled>(element: E, t: f32, from: Point<Pixels>) -> E {
+    element
+        .opacity(t)
+        .left(from.x * (1. - t))
+        .top(from.y * (1. - t))
 }
 
 /// How far a field shakes sideways after a wrong entry, such as a wrong
