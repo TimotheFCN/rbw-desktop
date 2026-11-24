@@ -516,36 +516,26 @@ fn totp(secret: &str, now: SystemTime) -> VerificationCode {
     }
 }
 
-// A made-up icon for a host, a coloured shape on a clear background as
-// most websites' icons are, so that the interface shows icons without a
-// server. One host in five has none.
+// The icon of a demo website, drawn for the demo (design/demo-icons), so
+// that the interface shows icons without a server. Only the made-up
+// websites have one: the others show their letter.
 fn demo_icon(host: &str) -> Option<WebsiteIcon> {
-    const COLOURS: &[&str] = &[
-        "#24292f", "#e24329", "#0080ff", "#2496ed", "#4285f4", "#003087", "#ff9900", "#1db954",
-    ];
-    const SHAPES: &[&str] = &[
-        r#"<circle cx="16" cy="16" r="13"/>"#,
-        r#"<path d="M16 3l14 26H2z"/>"#,
-        r#"<rect x="3" y="3" width="26" height="26" rx="6"/>"#,
-        r#"<path d="M3 3h26v8H12v18H3z"/>"#,
-    ];
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in host.bytes() {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-    }
-    if hash.is_multiple_of(5) {
-        return None;
-    }
-    let pick =
-        |list: &[&'static str], salt: u64| list[((hash / salt) % list.len() as u64) as usize];
-    let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><g fill="{}">{}</g></svg>"#,
-        pick(COLOURS, 5),
-        pick(SHAPES, 41),
-    );
+    let bytes: &'static [u8] = match host {
+        "online.bank.example" => include_bytes!("fake/icons/bank.png"),
+        "www.airline.example" => include_bytes!("fake/icons/airline.png"),
+        "rail.example" => include_bytes!("fake/icons/rail.png"),
+        "bookshop.example" => include_bytes!("fake/icons/bookshop.png"),
+        "www.energy.example" => include_bytes!("fake/icons/energy.png"),
+        "broker.example" => include_bytes!("fake/icons/broker.png"),
+        "tax.example.gov" => include_bytes!("fake/icons/tax.png"),
+        "social.example" => include_bytes!("fake/icons/social.png"),
+        "forum.example.net" => include_bytes!("fake/icons/forum.png"),
+        "mail.studio.example" => include_bytes!("fake/icons/studio-mail.png"),
+        _ => return None,
+    };
     Some(WebsiteIcon {
-        format: IconFormat::Svg,
-        bytes: svg.into_bytes().into(),
+        format: IconFormat::Png,
+        bytes: bytes.into(),
     })
 }
 
@@ -1366,10 +1356,11 @@ mod tests {
             .iter()
             .map(|item| fake.website_icon(&id, item).unwrap())
             .collect();
-        assert!(icons.iter().flatten().count() > logins.len() / 2);
-        assert!(icons.iter().any(Option::is_none));
-        let icon = icons.into_iter().flatten().next().unwrap();
-        assert_eq!(IconFormat::of(&icon.bytes), Some(IconFormat::Svg));
+        // The made-up websites have one; the real ones show their letter.
+        assert!((8..logins.len() / 2).contains(&icons.iter().flatten().count()));
+        for icon in icons.into_iter().flatten() {
+            assert_eq!(WebsiteIcon::from_server(&icon.bytes), Some(icon));
+        }
         fake.set_preferences(&Preferences {
             website_icons: false,
             ..Preferences::default()
