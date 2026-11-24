@@ -23,6 +23,7 @@ mod sheet;
 mod text;
 mod theme;
 mod toast;
+mod tooltip;
 
 pub use button::{Button, ButtonStyle, button};
 pub use card::{Card, FieldRow, card, copied_badge, field_row, form_row, toggle_row};

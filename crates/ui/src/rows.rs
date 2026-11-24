@@ -11,6 +11,7 @@ use gpui::{
     img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, relative,
 };
 
+use crate::card::copied_badge;
 use crate::icon::{IconName, icon};
 use crate::motion as m;
 use crate::theme::{ActiveTheme, Look, mix};
@@ -292,6 +293,7 @@ pub struct ListRow {
     selected: bool,
     icon: Option<Arc<RenderImage>>,
     trailing: Option<AnyElement>,
+    copied: bool,
     compact: bool,
     accessibility_label: Option<SharedString>,
     on_click: Option<ClickHandler>,
@@ -316,6 +318,7 @@ pub fn list_row(
         selected,
         icon: None,
         trailing: None,
+        copied: false,
         compact: false,
         accessibility_label: None,
         on_click: None,
@@ -348,6 +351,13 @@ impl ListRow {
         self
     }
 
+    /// Something of the row's item was just copied: a short "Copied" takes
+    /// the place of the trailing element.
+    pub fn copied(mut self, copied: bool) -> Self {
+        self.copied = copied;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -360,6 +370,20 @@ impl ListRow {
 impl RenderOnce for ListRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let progress = selection_progress(&self.id, self.selected, window, cx);
+        let confirmation = m::presence((self.id.clone(), "copied"), self.copied, window, cx);
+        let trailing = if confirmation.should_render() {
+            let badge = copied_badge(cx).opacity(confirmation.progress);
+            // On the accent of a selected row, in the row's own colour.
+            Some(
+                badge
+                    .when(self.selected && !self.compact, |b| {
+                        b.text_color(cx.theme().colors.on_selection)
+                    })
+                    .into_any_element(),
+            )
+        } else {
+            self.trailing
+        };
         let theme = cx.theme();
         let colors = &theme.colors;
         let hover = colors.hover;
@@ -419,6 +443,6 @@ impl RenderOnce for ListRow {
                         )
                     }),
             )
-            .children(self.trailing)
+            .children(trailing)
     }
 }

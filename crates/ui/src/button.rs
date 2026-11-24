@@ -12,6 +12,7 @@ use gpui::{
 use crate::controls::spinner;
 use crate::icon::{IconName, icon};
 use crate::theme::{ActiveTheme, Look};
+use crate::tooltip::tooltip;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
@@ -190,6 +191,9 @@ impl RenderOnce for Button {
         let spinner_color = text.unwrap_or(colors.text_secondary);
         let (busy, disabled) = (self.busy, self.disabled);
         let label = self.accessibility_label.or_else(|| self.label.clone());
+        // A button with only an icon says what it does when the pointer
+        // rests on it.
+        let tip = label.clone().filter(|_| round && !link);
         let padding = match self.style {
             ButtonStyle::Link => px(2.),
             ButtonStyle::Primary | ButtonStyle::Destructive => px(18.),
@@ -211,6 +215,7 @@ impl RenderOnce for Button {
             .when_some(self.focus, |b, focus| b.track_focus(&focus))
             .disabled(disabled || busy)
             .when_some(label, |b, label| b.accessibility_label(label))
+            .when_some(tip, |b, tip| b.tooltip(tooltip(tip)))
             .when_some(self.on_click, |b, handler| b.on_click(handler))
             .relative()
             .h(height)
