@@ -10,9 +10,9 @@ use gpui::base::input::{InputEvent, InputState};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
     FocusHandle, Focusable, FontWeight, Global, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement as _, Pixels, Point, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, actions, div, point,
-    prelude::FluentBuilder as _, px, size,
+    ParentElement as _, Pixels, Point, Render, ScrollStrategy, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    Window, actions, div, point, prelude::FluentBuilder as _, px, size, uniform_list,
 };
 use rbw_desktop_core::{
     Account, AccountId, Error, ItemContent, ItemId, ItemKind, ItemSummary, LockState, Secret,
@@ -188,9 +188,10 @@ pub struct QuickPanel {
     copied: Option<ItemId>,
     copied_timer: Task<()>,
     unlocking: bool,
-    generator: Entity<Generator>,
+    /// Made when its tab is first shown.
+    generator: Option<Entity<Generator>>,
     focus: FocusHandle,
-    scroll: ScrollHandle,
+    scroll: UniformListScrollHandle,
     toast: ToastSlot,
     load_task: Task<()>,
     /// Whether the panel has had the keyboard, after which losing it
@@ -250,9 +251,9 @@ impl QuickPanel {
             copied: None,
             copied_timer: Task::ready(()),
             unlocking: false,
-            generator: cx.new(|cx| Generator::new(true, cx)),
+            generator: None,
             focus: cx.focus_handle(),
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
             toast: ToastSlot::default(),
             load_task: Task::ready(()),
             was_active: false,
@@ -343,7 +344,7 @@ impl QuickPanel {
                 .collect()
         };
         self.selected = 0;
-        self.scroll.scroll_to_item(0);
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -367,7 +368,8 @@ impl QuickPanel {
     fn select(&mut self, position: usize, cx: &mut Context<Self>) {
         if self.selected != position {
             self.selected = position;
-            self.scroll.scroll_to_item(position);
+            self.scroll
+                .scroll_to_item(position, ScrollStrategy::Nearest);
             cx.notify();
         }
     }
@@ -530,7 +532,12 @@ impl QuickPanel {
                 .search
                 .update(cx, |search, cx| search.focus(window, cx)),
             Tab::Passwords => window.focus(&self.focus, cx),
-            Tab::Generator => window.focus(&self.generator.focus_handle(cx), cx),
+            Tab::Generator => {
+                let generator = self
+                    .generator
+                    .get_or_insert_with(|| cx.new(|cx| Generator::new(true, cx)));
+                window.focus(&generator.focus_handle(cx), cx);
+            }
         }
         cx.notify();
     }
@@ -580,9 +587,6 @@ impl QuickPanel {
             }
             _ => None,
         };
-        let rows: Vec<AnyElement> = (0..self.shown.len())
-            .filter_map(|position| self.render_row(position, cx))
-            .collect();
         div()
             .flex_1()
             .min_h_0()
@@ -617,16 +621,20 @@ impl QuickPanel {
                     .text_color(dim)
                     .child(message)
                     .into_any_element(),
-                None => div()
-                    .id("panel-rows")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .flex()
-                    .flex_col()
-                    .children(rows)
-                    .into_any_element(),
+                // Only the rows on screen are built, however many match.
+                None => uniform_list(
+                    "panel-rows",
+                    self.shown.len(),
+                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .filter_map(|position| this.render_row(position, cx))
+                            .collect()
+                    }),
+                )
+                .track_scroll(&self.scroll)
+                .flex_1()
+                .min_h_0()
+                .into_any_element(),
             })
             .into_any_element()
     }
@@ -880,7 +888,7 @@ impl Render for QuickPanel {
                 .mx(px(-8.))
                 .px(px(8.))
                 .overflow_y_scroll()
-                .child(self.generator.clone())
+                .children(self.generator.clone())
                 .into_any_element(),
         };
         let this = cx.entity().downgrade();
