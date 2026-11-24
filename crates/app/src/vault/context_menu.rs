@@ -10,7 +10,7 @@ use gpui::{
 use rbw_desktop_core::{Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result};
 use rbw_desktop_ui::{IconName, Opening, menu_item, menu_separator, popover};
 
-use super::{OpenContextMenu, VaultView};
+use super::{OpenContextMenu, Part, VaultView};
 use crate::backend;
 use crate::clipboard;
 use crate::recent;
@@ -24,14 +24,6 @@ pub(super) struct ContextMenu {
     open: bool,
     /// Whether it lists the folders to move the item to.
     folders: bool,
-}
-
-/// What can be copied from the menu.
-#[derive(Clone, Copy)]
-enum Copy {
-    Username,
-    Password,
-    Code,
 }
 
 impl VaultView {
@@ -114,13 +106,13 @@ impl VaultView {
         self.select_by(Some(id), true, cx);
     }
 
-    fn copy(&mut self, what: Copy, window: &mut Window, cx: &mut Context<Self>) {
+    fn copy(&mut self, what: Part, window: &mut Window, cx: &mut Context<Self>) {
         let Some(menu) = &self.context_menu else {
             return;
         };
         let id = menu.item.id.clone();
         self.close_context_menu(window, cx);
-        if let Copy::Code = what {
+        if let Part::Code = what {
             let account = self.account_id();
             let requested = id.clone();
             backend::request(
@@ -143,15 +135,15 @@ impl VaultView {
                 return;
             };
             match what {
-                Copy::Username => {
+                Part::Username => {
                     clipboard::copy_text(&login.username, cx);
                     this.copied(&item.id, cx);
                 }
-                Copy::Password => {
+                Part::Password => {
                     clipboard::copy_secret(&login.password, Some(&this.account.id), cx);
                     this.copied(&item.id, cx);
                 }
-                Copy::Code => {}
+                Part::Code => {}
             }
         });
     }
@@ -296,7 +288,7 @@ impl VaultView {
                     rows.push(
                         menu_item("copy-username", "Copy Username")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy(Copy::Username, window, cx)
+                                this.copy(Part::Username, window, cx)
                             }))
                             .into_any_element(),
                     );
@@ -305,7 +297,7 @@ impl VaultView {
                     rows.push(
                         menu_item("copy-password", "Copy Password")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.copy(Copy::Password, window, cx)
+                                this.copy(Part::Password, window, cx)
                             }))
                             .into_any_element(),
                     );
@@ -315,7 +307,7 @@ impl VaultView {
                         menu_item("copy-code", "Copy Verification Code")
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
-                                    this.copy(Copy::Code, window, cx)
+                                    this.copy(Part::Code, window, cx)
                                 }),
                             )
                             .into_any_element(),

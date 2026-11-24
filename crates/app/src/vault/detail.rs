@@ -17,7 +17,7 @@ use rbw_desktop_ui::{
     password_text, progress_ring, tile,
 };
 
-use super::{EditItem, VaultView};
+use super::{EditItem, Part, VaultView};
 use crate::backend::{self, Load};
 use crate::clipboard;
 use crate::icons::{self, Icons};
@@ -276,6 +276,30 @@ impl ItemDetail {
             .ok();
         });
         cx.notify();
+    }
+
+    /// Copies the password, username or code of the login shown, as if its
+    /// row was clicked; for a protected one, the master password field
+    /// takes the keyboard.
+    pub fn copy_part(&mut self, part: Part, cx: &mut Context<Self>) {
+        let Some(item) = self.item() else {
+            self.focus_reprompt(cx);
+            return;
+        };
+        let ItemContent::Login(login) = &item.data.content else {
+            return;
+        };
+        let (key, value, secret) = match part {
+            Part::Username => ("username", Secret::new(login.username.clone()), false),
+            Part::Password => ("password", login.password.clone(), true),
+            Part::Code => match &self.code {
+                Some(code) => ("code", code.code.clone(), true),
+                None => return,
+            },
+        };
+        if !value.is_empty() {
+            self.copy(key.into(), &value, secret, cx);
+        }
     }
 
     fn toggle_reveal(&mut self, key: &SharedString, cx: &mut Context<Self>) {
@@ -905,6 +929,7 @@ impl Render for ItemDetail {
             Some(Load::Loading) | None => None,
         };
         div()
+            .key_context("ItemDetail")
             .flex_1()
             .min_w_0()
             .h_full()

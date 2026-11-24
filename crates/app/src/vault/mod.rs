@@ -49,6 +49,12 @@ actions!(
         OpenContextMenu,
         /// Shows the password generator.
         ShowGenerator,
+        /// Copies the selected login's password.
+        CopyPassword,
+        /// Copies the selected login's username.
+        CopyUsername,
+        /// Copies the selected login's verification code.
+        CopyCode,
     ]
 );
 
@@ -63,12 +69,26 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(secondary!("r"), Sync, Some(CONTEXT)),
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
         KeyBinding::new(secondary!("shift-g"), ShowGenerator, Some(CONTEXT)),
+        // As in the menu bar panel; Copy itself copies the password where
+        // no text field has the keyboard.
+        KeyBinding::new(secondary!("c"), CopyPassword, Some("VaultList")),
+        KeyBinding::new(secondary!("c"), CopyPassword, Some("ItemDetail")),
+        KeyBinding::new(secondary!("shift-c"), CopyUsername, Some(CONTEXT)),
+        KeyBinding::new(secondary!("alt-c"), CopyCode, Some(CONTEXT)),
         KeyBinding::new("down", SelectNext, Some("VaultList")),
         KeyBinding::new("up", SelectPrevious, Some("VaultList")),
         KeyBinding::new("shift-f10", OpenContextMenu, Some("VaultList")),
         KeyBinding::new("menu", OpenContextMenu, Some("VaultList")),
     ]);
     editor::init(cx);
+}
+
+/// Something of a login to copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    Username,
+    Password,
+    Code,
 }
 
 /// What the sidebar selected.
@@ -515,6 +535,21 @@ impl VaultView {
         .detach();
     }
 
+    fn copy_password(&mut self, _: &CopyPassword, _: &mut Window, cx: &mut Context<Self>) {
+        self.detail
+            .update(cx, |detail, cx| detail.copy_part(Part::Password, cx));
+    }
+
+    fn copy_username(&mut self, _: &CopyUsername, _: &mut Window, cx: &mut Context<Self>) {
+        self.detail
+            .update(cx, |detail, cx| detail.copy_part(Part::Username, cx));
+    }
+
+    fn copy_code(&mut self, _: &CopyCode, _: &mut Window, cx: &mut Context<Self>) {
+        self.detail
+            .update(cx, |detail, cx| detail.copy_part(Part::Code, cx));
+    }
+
     fn show_generator(&mut self, _: &ShowGenerator, window: &mut Window, cx: &mut Context<Self>) {
         if self.generator_open {
             self.close_generator(window, cx);
@@ -604,6 +639,9 @@ impl Render for VaultView {
                     .on_action(cx.listener(Self::lock))
                     .on_action(cx.listener(Self::open_context_menu_from_keyboard))
                     .on_action(cx.listener(Self::show_generator))
+                    .on_action(cx.listener(Self::copy_password))
+                    .on_action(cx.listener(Self::copy_username))
+                    .on_action(cx.listener(Self::copy_code))
                     .size_full()
                     .flex()
                     .child(sidebar)

@@ -130,6 +130,10 @@ fn menus() -> Vec<Menu> {
         ]),
         Menu::new("Vault").items([
             MenuItem::action("Find", vault::Find),
+            MenuItem::separator(),
+            MenuItem::action("Copy Password", vault::CopyPassword),
+            MenuItem::action("Copy Username", vault::CopyUsername),
+            MenuItem::action("Copy Verification Code", vault::CopyCode),
             MenuItem::action("Password Generator", vault::ShowGenerator),
             MenuItem::separator(),
             MenuItem::action("Sync Now", vault::Sync),
