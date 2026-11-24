@@ -142,8 +142,8 @@ impl SignIn {
             email: input("Email address", false),
             password: input("Master password", true),
             code: input("Verification code", false),
-            api_key_id: input("client_id", false),
-            api_key_secret: input("client_secret", true),
+            api_key_id: input("Client ID", false),
+            api_key_secret: input("Client secret", true),
             method: 0,
             email_sent: false,
             added: None,
@@ -527,10 +527,10 @@ impl SignIn {
         }
     }
 
-    /// The account's name, which opens the account menu when there are
-    /// other accounts to go to.
+    /// The account's name, which opens the account menu: other accounts to
+    /// go to, another to add, or signing out of this one.
     fn render_who(&mut self, name: String, cx: &mut Context<Self>) -> AnyElement {
-        let Some(account) = self.existing.clone().filter(|_| self.accounts.len() > 1) else {
+        let Some(account) = self.existing.clone() else {
             return div().child(name).into_any_element();
         };
         div()
@@ -541,7 +541,7 @@ impl SignIn {
                     .trailing_icon(IconName::ChevronsUpDown)
                     .style(ButtonStyle::Flat)
                     .size(px(24.))
-                    .accessibility_label(format!("{name}, switch account"))
+                    .accessibility_label(format!("{name}, accounts"))
                     .on_click(
                         cx.listener(|this, _, window, cx| accounts::toggle(this, window, cx)),
                     ),
@@ -661,12 +661,12 @@ impl SignIn {
                 fields
             }
             Step::ApiKey => vec![
-                text_field("api-key-id", &self.api_key_id, "API key client_id").into_any_element(),
+                text_field("api-key-id", &self.api_key_id, "API key client ID").into_any_element(),
                 shaking(
                     text_field(
                         "api-key-secret",
                         &self.api_key_secret,
-                        "API key client_secret",
+                        "API key client secret",
                     )
                     .into_any_element(),
                 ),

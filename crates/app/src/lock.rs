@@ -195,35 +195,31 @@ impl Render for LockScreen {
         let theme = cx.theme();
         let dim = theme.colors.text_secondary;
         let name = accounts::name(&self.account);
-        let several = self.accounts.len() > 1;
 
-        // With other accounts to go to, the name opens the account menu.
-        let who = if several {
-            div()
-                .relative()
-                .text_color(dim)
-                .child(
-                    button("account")
-                        .label(name.clone())
-                        .trailing_icon(IconName::ChevronsUpDown)
-                        .style(ButtonStyle::Flat)
-                        .size(px(24.))
-                        .accessibility_label(format!("{name}, switch account"))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| accounts::toggle(this, window, cx)),
-                        ),
-                )
-                .child(accounts::menu(
-                    self,
-                    &self.accounts,
-                    &self.account.id,
-                    Opening::BelowCentered,
-                    cx,
-                ))
-                .into_any_element()
-        } else {
-            div().text_color(dim).child(name).into_any_element()
-        };
+        // The name opens the account menu: other accounts, another to add,
+        // or signing out of this one.
+        let who = div()
+            .relative()
+            .text_color(dim)
+            .child(
+                button("account")
+                    .label(name.clone())
+                    .trailing_icon(IconName::ChevronsUpDown)
+                    .style(ButtonStyle::Flat)
+                    .size(px(24.))
+                    .accessibility_label(format!("{name}, accounts"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| accounts::toggle(this, window, cx)),
+                    ),
+            )
+            .child(accounts::menu(
+                self,
+                &self.accounts,
+                &self.account.id,
+                Opening::BelowCentered,
+                cx,
+            ))
+            .into_any_element();
 
         let field = text_field("password", &self.password, "Master password").trailing(
             button("unlock")

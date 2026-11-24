@@ -239,6 +239,17 @@ pub fn name(account: &Account) -> String {
         .unwrap_or_else(|| account.id.to_string())
 }
 
+/// The account's name where there is little room, as in the sidebar: the
+/// part of its email before the @ when it is the only account, which can't
+/// be mistaken for another.
+pub fn short_name(account: &Account, accounts: &[Account]) -> String {
+    let name = name(account);
+    match name.split_once('@') {
+        Some((local, _)) if accounts.len() <= 1 && !local.is_empty() => local.to_string(),
+        _ => name,
+    }
+}
+
 fn state(account: &Account) -> &'static str {
     match account.state {
         LockState::Unlocked => "Unlocked",

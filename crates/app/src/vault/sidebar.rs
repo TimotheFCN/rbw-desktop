@@ -198,6 +198,7 @@ impl VaultView {
         }
 
         let name = accounts::name(&self.account);
+        let shown = accounts::short_name(&self.account, &self.accounts);
         let theme = cx.theme();
         let (hover, pressed, dim, separator) = (
             theme.colors.hover,
@@ -225,7 +226,7 @@ impl VaultView {
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(name),
+                    .child(shown),
             );
         let menu = accounts::menu(self, &self.accounts, &self.account.id, Opening::Above, cx);
         // Rows scrolling under the account stop short of it; GNOME divides

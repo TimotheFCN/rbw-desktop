@@ -914,7 +914,10 @@ impl Render for QuickPanel {
             this.update(cx, |this, cx| this.show_tab(tab, window, cx))
                 .ok();
         });
-        let footer = self.render_footer(cx);
+        // Locked or signed out, the Passwords tab's own button opens the
+        // vault: the footer would say it twice.
+        let footer = (self.tab == Tab::Generator || self.loaded.is_some())
+            .then(|| self.render_footer(cx));
         let toast = self.toast.render(window, cx);
         let content = div()
             .id("quick-panel")
@@ -949,7 +952,7 @@ impl Render for QuickPanel {
                         div().flex_1().min_h_0().flex().flex_col().child(tab),
                     )),
             )
-            .child(footer)
+            .children(footer)
             .children(toast);
         chrome::window_frame(content, window, cx)
     }

@@ -220,7 +220,7 @@ impl MainWindow {
             |_, result, window, cx| {
                 if let Ok(Some(_)) = result {
                     toast(
-                        "The rbw command line needs updating. Settings, About, says why.",
+                        "The rbw command line needs an update. See Settings › About.",
                         window,
                         cx,
                     );
