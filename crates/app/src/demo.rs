@@ -8,7 +8,8 @@
 //! * `touch-id`: Touch ID ready to unlock the first account;
 //! * `slow`: every call takes two seconds, to see what waits;
 //! * `offline`: calls that need the server fail;
-//! * `no-rbw`, `old-rbw`: rbw missing, or too old;
+//! * `no-rbw`, `old-rbw`: rbw missing, or too old; `outdated-rbw`: the app
+//!   uses its own rbw, the one on `PATH` being too old;
 //! * `ssh-off`: no SSH agent set up; `ssh-unsupported`: none can be;
 //!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
 //!   setting it up fails; `ssh-slow`: setting it up takes a while;
@@ -21,7 +22,8 @@
 use std::time::Duration;
 
 use rbw_desktop_core::{
-    Backend as _, Error, FakeBackend, Operation, Preferences, REQUIRED_RBW, Result, Server, SshUses,
+    Backend as _, Error, FakeBackend, Operation, OutdatedRbw, Preferences, REQUIRED_RBW, Result,
+    Server, SshUses,
 };
 
 /// The words of `RBW_DESKTOP_DEMO`, or `None` to run on rbw.
@@ -76,6 +78,12 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
             .is_err()
     {
         log::error!("the demo's signed-out account wasn't added");
+    }
+    if wants("outdated-rbw") {
+        fake.set_outdated_rbw(Some(OutdatedRbw {
+            path: "/usr/bin/rbw".into(),
+            version: "1.13.2".into(),
+        }));
     }
     if wants("offline") {
         fake.set_offline(true);

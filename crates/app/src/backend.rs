@@ -126,7 +126,7 @@ pub fn describe(error: &Error) -> &'static str {
         Error::WrongCode => "That code isn't right. Try again.",
         Error::WrongApiKey => "That API key isn't right.",
         Error::Offline => "The server can't be reached. Check your connection.",
-        Error::WrongServer => "There's no Bitwarden server at this address. Check it.",
+        Error::WrongServer => "There's no Bitwarden server at the account's address.",
         Error::Timeout => "rbw is taking too long to answer.",
         Error::RbwNotFound => "rbw isn't installed.",
         Error::RbwTooOld { .. } => "rbw needs updating.",

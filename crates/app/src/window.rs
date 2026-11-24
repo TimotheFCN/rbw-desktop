@@ -6,8 +6,9 @@
 
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
-    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px, size,
+    FontWeight, Global, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    size,
 };
 use rbw_desktop_core::{Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW};
 use rbw_desktop_ui::{
@@ -81,6 +82,11 @@ pub fn with_main_window(
     }
     open(None, cx);
 }
+
+/// Set once the main window said the rbw command line needs updating.
+struct OutdatedMentioned;
+
+impl Global for OutdatedMentioned {}
 
 enum Screen {
     /// Until the accounts are known.
@@ -169,6 +175,7 @@ impl MainWindow {
     }
 
     fn follow_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mention_outdated_rbw(window, cx);
         let accounts = Accounts::global(cx);
         self._accounts_events = Some(cx.subscribe_in(
             &accounts,
@@ -177,6 +184,30 @@ impl MainWindow {
         ));
         self.accounts = Some(accounts);
         self.accounts_refreshed(window, cx);
+    }
+
+    /// Says once, in passing, that the rbw command line needs updating;
+    /// Settings, About, says why.
+    fn mention_outdated_rbw(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if cx.has_global::<OutdatedMentioned>() {
+            return;
+        }
+        cx.set_global(OutdatedMentioned);
+        backend::request_in(
+            window,
+            cx,
+            |backend| Ok(backend.outdated_rbw()),
+            |_, result, window, cx| {
+                if let Ok(Some(_)) = result {
+                    toast(
+                        "The rbw command line needs updating. Settings, About, says why.",
+                        window,
+                        cx,
+                    );
+                }
+            },
+        )
+        .detach();
     }
 
     fn account_list(&self, cx: &App) -> Vec<Account> {

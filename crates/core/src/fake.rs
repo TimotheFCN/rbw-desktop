@@ -16,8 +16,8 @@ use rand::seq::IndexedRandom as _;
 use crate::{
     Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
     GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
-    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
-    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
+    LoginCode, OutdatedRbw, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary,
+    SshService, SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
 
 /// A call to the backend, to make that one fail or wait.
@@ -77,6 +77,7 @@ struct State {
     ssh_supported: bool,
     // what ssh uses instead of an installed agent
     ssh_elsewhere: Option<SshUses>,
+    outdated_rbw: Option<OutdatedRbw>,
     next_id: u64,
 }
 
@@ -109,6 +110,8 @@ impl FakeBackend {
     /// The two-step and new device code the demo accepts. Signing in asks
     /// for a two-step code, or a new device code when the email has
     /// `+device@`, or to register the device first when it has `+apikey@`.
+    /// A self-hosted server whose address has `.invalid` in it is no
+    /// Bitwarden server.
     pub const CODE: &str = "123456";
     /// The API key that registers the device of every demo account.
     pub const API_KEY_ID: &str = "user.d3m0";
@@ -153,6 +156,7 @@ impl FakeBackend {
                 ssh_agent: Some(AccountId::new(demo::PERSONAL)),
                 ssh_supported: true,
                 ssh_elsewhere: None,
+                outdated_rbw: None,
                 next_id: 1,
             }),
         }
@@ -223,6 +227,11 @@ impl FakeBackend {
     /// login session hasn't picked it up yet; `None` lets it use the agent.
     pub fn set_ssh_uses(&self, uses: Option<SshUses>) {
         self.state().ssh_elsewhere = uses;
+    }
+
+    /// Makes [`Backend::outdated_rbw`] report an older rbw on `PATH`.
+    pub fn set_outdated_rbw(&self, outdated: Option<OutdatedRbw>) {
+        self.state().outdated_rbw = outdated;
     }
 
     /// Signs an account out, keeping it on this computer with its email
@@ -392,6 +401,11 @@ impl FakeAccount {
     fn sign_in(&mut self, password: &Secret, code: Option<&LoginCode>) -> Result<()> {
         if self.state != LockState::SignedOut {
             return self.unlock(password);
+        }
+        if let Server::SelfHosted(url) = &self.server
+            && url.contains(".invalid")
+        {
+            return Err(Error::WrongServer);
         }
         if password.expose() != FakeBackend::PASSWORD {
             return Err(Error::WrongPassword);
@@ -938,6 +952,10 @@ impl Backend for FakeBackend {
     fn rbw_version(&self) -> Result<String> {
         drop(self.call(Operation::RbwVersion)?);
         Ok("demo".to_string())
+    }
+
+    fn outdated_rbw(&self) -> Option<OutdatedRbw> {
+        self.state().outdated_rbw.clone()
     }
 }
 

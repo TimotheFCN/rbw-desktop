@@ -116,8 +116,9 @@ the `rbw-agent` that was running, so the account is locked afterwards.
 The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
 until `succeed`, `set_offline`, `set_touch_id`, `sign_out_now` and
-`unlock_now` an account, and `set_ssh_supported` and `set_ssh_uses` for the
-SSH agent's states.
+`unlock_now` an account, `set_ssh_supported` and `set_ssh_uses` for the
+SSH agent's states, and `set_outdated_rbw`. A self-hosted address with
+`.invalid` in it leads to no Bitwarden server.
 
 ## How it maps to rbw
 

@@ -42,6 +42,7 @@ locking and signing in:
   password       the master password step
   sign-in-wrong  a wrong master password
   offline        the server can't be reached
+  wrong-server   a self-hosted address with no Bitwarden server, back at it
   two-step       the two-step login code step
   email-code     a two-step code by email, sent
   new-device     the new device code step
@@ -49,6 +50,7 @@ locking and signing in:
   signed-out     signing in to an account that is signed out
   no-rbw         rbw isn't installed
   old-rbw        rbw is too old
+  outdated-toast the rbw on PATH is too old: said once, in passing
 
 the menu bar panel, opened alone:
   panel          its passwords: the items used last
@@ -74,6 +76,7 @@ settings, in their own window:
   ssh-unsupported    the system can't run it
   ssh-remove         asking before removing it
   settings-about     About
+  settings-outdated  About, when the rbw on PATH is too old
 
   gallery        the design system gallery
 
@@ -145,6 +148,9 @@ first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new
 	state_demo=first-run
 	;;
 offline) state_demo=first-run,offline ;;
+wrong-server) state_demo=first-run ;;
+outdated-toast) state_demo=outdated-rbw ;;
+settings-outdated) state_demo=unlocked,outdated-rbw ;;
 signed-out) state_demo=first-run,signed-out ;;
 *) state_demo=unlocked ;;
 esac
@@ -204,6 +210,7 @@ act() {
 	local footer_x=$((inset + 60)) footer_y=$((height - inset - 7 - 19))
 	case $state in
 	vault | gallery | lock | lock-touch-id | first-run | signed-out | no-rbw | old-rbw | no-icons) ;;
+	outdated-toast) ;;
 	panel | panel-locked | panel-touch-id | panel-signed-out) ;;
 	panel-search) xdotool type --delay 60 git ;;
 	panel-copied) xdotool key Return ;;
@@ -234,7 +241,7 @@ act() {
 	ssh-setting-up | ssh-fails) settings_page 2 && into_page 2 && xdotool key Return ;;
 	ssh-other) settings_page 2 && into_page 1 && xdotool key Return sleep 0.4 key Down Down Return ;;
 	ssh-remove) settings_page 2 && into_page 2 && xdotool key Return ;;
-	settings-about) settings_page 3 ;;
+	settings-about | settings-outdated) settings_page 3 ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.
 	logins) click $((sidebar / 2)) $((inset + sidebar_top + nav * 2 + 30 + nav / 2)) ;;
@@ -270,6 +277,12 @@ act() {
 		xdotool key Return sleep 0.6
 		# The Email method, then its button.
 		[[ $state == email-code ]] && xdotool key shift+Tab Return sleep 0.3 key Tab Return
+		;;
+	wrong-server)
+		xdotool key shift+Tab Return
+		xdotool type --delay 40 vault.example.invalid && xdotool key Tab
+		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4
+		xdotool type --delay 40 demo && xdotool key Return sleep 0.6
 		;;
 	offline)
 		xdotool type --delay 40 alex@example.org && xdotool key Return sleep 0.4

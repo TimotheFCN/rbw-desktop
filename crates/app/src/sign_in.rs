@@ -28,6 +28,8 @@ pub fn init(cx: &mut App) {
 }
 
 const SERVERS: [&str; 3] = ["bitwarden.com", "bitwarden.eu", "Self-hosted"];
+/// The choice of [`SERVERS`] that asks for the server's address.
+const SELF_HOSTED: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
@@ -390,6 +392,21 @@ impl SignIn {
                     .update(cx, |code, cx| code.set_value("", window, cx));
                 self.go(Step::NewDevice, false, window, cx);
             }
+            // The address was entered on the step before: back there to
+            // correct it. The account made for it goes, as on Back.
+            Error::WrongServer if self.existing.is_none() => {
+                if let Some(id) = self.added.take() {
+                    backend::forget(cx, move |backend| backend.remove_account(&id));
+                }
+                self.go(Step::Account, true, window, cx);
+                self.problem = Some("There's no Bitwarden server at this address.");
+                if self.server == SELF_HOSTED {
+                    self.server_url.update(cx, |input, cx| {
+                        input.focus(window, cx);
+                        input.select_all(window, cx);
+                    });
+                }
+            }
             error => {
                 self.problem = Some(match error {
                     Error::AccountExists(_) => "This account is already on this computer.",
@@ -527,7 +544,7 @@ impl SignIn {
                             this.update(cx, |this, cx| {
                                 this.server = index;
                                 this.problem = None;
-                                let input = if index == 2 {
+                                let input = if index == SELF_HOSTED {
                                     &this.server_url
                                 } else {
                                     &this.email
@@ -539,7 +556,7 @@ impl SignIn {
                         })
                         .into_any_element(),
                 ];
-                if self.server == 2 {
+                if self.server == SELF_HOSTED {
                     fields.push(
                         motion::screen_enter(
                             "server-url",
