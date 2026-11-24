@@ -6,7 +6,9 @@ mod icons;
 mod json;
 mod process;
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use icons::IconCache;
@@ -20,6 +22,9 @@ use crate::{
     Result, Secret, Server, SshAgentStatus, SshService, SshUses, VerificationCode, WebsiteIcon,
     icon,
 };
+
+/// How many recently used items each account keeps.
+const RECENT: usize = 20;
 
 /// The rbw-ng release with everything this backend uses.
 pub const REQUIRED_RBW: &str = "1.19.0";
@@ -37,6 +42,10 @@ pub struct RbwBackend {
     rbw: Rbw,
     outdated: Option<OutdatedRbw>,
     preferences: PathBuf,
+    /// Each account's recently used items: ids only.
+    recent: PathBuf,
+    /// Held while the recent items are read and written back.
+    recent_lock: Mutex<()>,
     icons: IconCache,
 }
 
@@ -61,6 +70,8 @@ impl RbwBackend {
             rbw,
             outdated,
             preferences: dirs.config_dir().join("preferences.json"),
+            recent: dirs.config_dir().join("recent.json"),
+            recent_lock: Mutex::new(()),
             icons: IconCache::new(dirs.cache_dir().join("icons")),
         })
     }
@@ -112,6 +123,41 @@ impl RbwBackend {
     fn set_config(&self, account: &AccountId, key: &str, value: &str) -> Result<()> {
         self.run(account, &["config", "set", "--", key, value], Wait::Local)
     }
+
+    /// Every account's recent items, by profile. Call with `recent_lock`
+    /// held.
+    fn read_recent(&self) -> Result<HashMap<String, Vec<String>>> {
+        match std::fs::read_to_string(&self.recent) {
+            // a broken file starts the record again
+            Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(error) => Err(Error::Other(format!(
+                "can't read the recent items: {error}"
+            ))),
+        }
+    }
+
+    fn change_recent(&self, change: impl FnOnce(&mut HashMap<String, Vec<String>>)) -> Result<()> {
+        let _held = self
+            .recent_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut recent = self.read_recent()?;
+        change(&mut recent);
+        write_json(&self.recent, &recent)
+            .map_err(|error| Error::Other(format!("can't save the recent items: {error}")))
+    }
+}
+
+/// Writes `value` whole next to `path`, then moves it over the old file.
+fn write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let text = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
+    let partial = path.with_extension("json.partial");
+    std::fs::write(&partial, text)?;
+    std::fs::rename(&partial, path)
 }
 
 // The app's folders. On Linux, rbw's profiles take the folders named rbw-
@@ -121,6 +167,22 @@ impl RbwBackend {
 fn app_dirs() -> Result<directories::ProjectDirs> {
     directories::ProjectDirs::from("io.github", "TimotheFCN", "rbw desktop")
         .ok_or_else(|| Error::Other("this system has no home folder".into()))
+}
+
+/// A folder of the app's for what lasts as long as the login session, such
+/// as a socket: `$XDG_RUNTIME_DIR/rbwdesktop` on Linux, its cache folder
+/// elsewhere. It is made if missing, for this user only.
+pub fn session_dir() -> Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    let dirs = app_dirs()?;
+    let dir = dirs.runtime_dir().unwrap_or(dirs.cache_dir()).to_path_buf();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|error| Error::Other(format!("can't make {}: {error}", dir.display())))?;
+    Ok(dir)
 }
 
 #[derive(serde::Deserialize)]
@@ -139,6 +201,66 @@ struct PreferencesJson {
     // seconds; null leaves the clipboard alone
     clipboard_clear: Option<u64>,
     website_icons: bool,
+    // these came later: older files take the defaults
+    #[serde(default)]
+    generator: Option<GeneratorJson>,
+    #[serde(default)]
+    menu_bar: Option<bool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum GeneratorJson {
+    Password {
+        length: usize,
+        characters: CharactersJson,
+    },
+    Passphrase {
+        words: usize,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CharactersJson {
+    All,
+    NoSymbols,
+    DigitsOnly,
+    Unambiguous,
+}
+
+impl From<GeneratorOptions> for GeneratorJson {
+    fn from(options: GeneratorOptions) -> Self {
+        match options {
+            GeneratorOptions::Password { length, characters } => GeneratorJson::Password {
+                length,
+                characters: match characters {
+                    Characters::All => CharactersJson::All,
+                    Characters::NoSymbols => CharactersJson::NoSymbols,
+                    Characters::DigitsOnly => CharactersJson::DigitsOnly,
+                    Characters::Unambiguous => CharactersJson::Unambiguous,
+                },
+            },
+            GeneratorOptions::Passphrase { words } => GeneratorJson::Passphrase { words },
+        }
+    }
+}
+
+impl From<GeneratorJson> for GeneratorOptions {
+    fn from(json: GeneratorJson) -> Self {
+        match json {
+            GeneratorJson::Password { length, characters } => GeneratorOptions::Password {
+                length,
+                characters: match characters {
+                    CharactersJson::All => Characters::All,
+                    CharactersJson::NoSymbols => Characters::NoSymbols,
+                    CharactersJson::DigitsOnly => Characters::DigitsOnly,
+                    CharactersJson::Unambiguous => Characters::Unambiguous,
+                },
+            },
+            GeneratorJson::Passphrase { words } => GeneratorOptions::Passphrase { words },
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -292,8 +414,12 @@ impl Backend for RbwBackend {
 
     fn remove_account(&self, account: &AccountId) -> Result<()> {
         self.run(account, &["purge", "--all"], Wait::Local)?;
-        // only a cache, so failing to remove it doesn't fail the removal
+        // neither matters once the account has gone, so failing to forget
+        // them doesn't fail the removal
         let _ = self.icons.forget(account);
+        let _ = self.change_recent(|recent| {
+            recent.remove(account.profile());
+        });
         Ok(())
     }
 
@@ -498,36 +624,55 @@ impl Backend for RbwBackend {
             Err(error) => return Err(Error::Other(format!("can't read the preferences: {error}"))),
         };
         // preferences from a newer or broken file fall back to the defaults
+        let defaults = Preferences::default();
         Ok(serde_json::from_str::<PreferencesJson>(&text)
             .map(|saved| Preferences {
                 clipboard_clear: saved.clipboard_clear.map(Duration::from_secs),
                 website_icons: saved.website_icons,
+                generator: saved.generator.map_or(defaults.generator, Into::into),
+                menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
             })
-            .unwrap_or_default())
+            .unwrap_or(defaults))
     }
 
     fn set_preferences(&self, preferences: &Preferences) -> Result<()> {
         let saved = PreferencesJson {
             clipboard_clear: preferences.clipboard_clear.map(|clear| clear.as_secs()),
             website_icons: preferences.website_icons,
+            generator: Some(preferences.generator.into()),
+            menu_bar: Some(preferences.menu_bar),
         };
-        let failed =
-            |error: std::io::Error| Error::Other(format!("can't save the preferences: {error}"));
-        if let Some(dir) = self.preferences.parent() {
-            std::fs::create_dir_all(dir).map_err(failed)?;
-        }
-        let text = serde_json::to_string_pretty(&saved)
-            .map_err(|error| Error::Other(error.to_string()))?;
-        // written whole, then moved over the old file
-        let partial = self.preferences.with_extension("json.partial");
-        std::fs::write(&partial, text).map_err(failed)?;
-        std::fs::rename(&partial, &self.preferences).map_err(failed)?;
+        write_json(&self.preferences, &saved)
+            .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
         if !preferences.website_icons {
             self.icons
                 .clear()
                 .map_err(|error| Error::Other(format!("can't forget the icons: {error}")))?;
         }
         Ok(())
+    }
+
+    fn recent_items(&self, account: &AccountId) -> Result<Vec<ItemId>> {
+        let _held = self
+            .recent_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut recent = self.read_recent()?;
+        Ok(recent
+            .remove(account.profile())
+            .unwrap_or_default()
+            .into_iter()
+            .map(ItemId)
+            .collect())
+    }
+
+    fn item_used(&self, account: &AccountId, item: &ItemId) -> Result<()> {
+        self.change_recent(|recent| {
+            let items = recent.entry(account.profile().to_string()).or_default();
+            items.retain(|known| *known != item.0);
+            items.insert(0, item.0.clone());
+            items.truncate(RECENT);
+        })
     }
 
     fn ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
@@ -596,9 +741,25 @@ impl Backend for RbwBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_from_before_the_generator_take_its_defaults() {
+        let saved: PreferencesJson =
+            serde_json::from_str(r#"{"clipboard_clear": 30, "website_icons": false}"#).unwrap();
+        assert!(saved.generator.is_none() && saved.menu_bar.is_none());
+        let options = GeneratorOptions::Password {
+            length: 12,
+            characters: Characters::Unambiguous,
+        };
+        let json = serde_json::to_string(&GeneratorJson::from(options)).unwrap();
+        let back: GeneratorJson = serde_json::from_str(&json).unwrap();
+        assert_eq!(GeneratorOptions::from(back), options);
+    }
+
     #[test]
     fn the_apps_folders_are_no_rbw_profiles() {
-        let dirs = super::app_dirs().unwrap();
+        let dirs = app_dirs().unwrap();
         for dir in [dirs.config_dir(), dirs.cache_dir()] {
             let name = dir.file_name().unwrap().to_str().unwrap();
             assert!(name != "rbw" && !name.starts_with("rbw-"), "{name}");

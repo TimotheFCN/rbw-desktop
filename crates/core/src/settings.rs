@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::GeneratorOptions;
+
 /// The app's own preferences, the same for every account.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preferences {
@@ -8,6 +10,10 @@ pub struct Preferences {
     /// Whether to show websites' icons, which asks the account's server for
     /// them. Turning it off also forgets the icons kept on disk.
     pub website_icons: bool,
+    /// What the generator made last, to make the same kind next time.
+    pub generator: GeneratorOptions,
+    /// Whether the app has an item in the menu bar or the system tray.
+    pub menu_bar: bool,
 }
 
 impl Default for Preferences {
@@ -15,6 +21,8 @@ impl Default for Preferences {
         Self {
             clipboard_clear: Some(Duration::from_secs(30)),
             website_icons: true,
+            generator: GeneratorOptions::default(),
+            menu_bar: true,
         }
     }
 }

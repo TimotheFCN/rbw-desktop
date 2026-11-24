@@ -46,6 +46,8 @@ pub enum Operation {
     CreateFolder,
     VerificationCode,
     WebsiteIcon,
+    RecentItems,
+    ItemUsed,
     Generate,
     AccountSettings,
     SetAccountSettings,
@@ -94,6 +96,7 @@ struct FakeAccount {
     folders: Vec<Folder>,
     // items that ask for the password again, unlocked, with their last read
     unlocked_items: HashMap<ItemId, Instant>,
+    recent: Vec<ItemId>,
 }
 
 // How long an unlocked item that asks for the password again stays
@@ -134,6 +137,7 @@ impl FakeBackend {
                 items: demo.items,
                 folders: demo.folders,
                 unlocked_items: HashMap::new(),
+                recent: demo.recent,
             })
             .collect();
         Self {
@@ -608,6 +612,7 @@ impl Backend for FakeBackend {
             items: vec![],
             folders: vec![],
             unlocked_items: HashMap::new(),
+            recent: vec![],
         });
         Ok(id)
     }
@@ -844,6 +849,23 @@ impl Backend for FakeBackend {
             return Ok(None);
         }
         Ok(icon::icon_host(item).and_then(|host| demo_icon(&host)))
+    }
+
+    fn recent_items(&self, account: &AccountId) -> Result<Vec<ItemId>> {
+        Ok(self
+            .call(Operation::RecentItems)?
+            .account_mut(account)?
+            .recent
+            .clone())
+    }
+
+    fn item_used(&self, account: &AccountId, item: &ItemId) -> Result<()> {
+        let mut state = self.call(Operation::ItemUsed)?;
+        let recent = &mut state.account_mut(account)?.recent;
+        recent.retain(|known| known != item);
+        recent.insert(0, item.clone());
+        recent.truncate(20);
+        Ok(())
     }
 
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret> {
@@ -1217,6 +1239,19 @@ mod tests {
         fake.lock(&id).unwrap();
         fake.unlock(&id, &FakeBackend::PASSWORD.into()).unwrap();
         assert_eq!(fake.item(&id, &bank.id), Err(Error::RepromptRequired));
+    }
+
+    #[test]
+    fn recent_items_come_newest_first() {
+        let fake = FakeBackend::new();
+        let id = personal();
+        let recent = fake.recent_items(&id).unwrap();
+        assert!(recent.len() >= 2);
+        fake.item_used(&id, &recent[1]).unwrap();
+        let after = fake.recent_items(&id).unwrap();
+        assert_eq!(after[0], recent[1]);
+        assert_eq!(after[1], recent[0]);
+        assert_eq!(after.len(), recent.len());
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub struct DemoAccount {
     pub server: Server,
     pub folders: Vec<Folder>,
     pub items: Vec<Item>,
+    /// The items used last, as the app notes them.
+    pub recent: Vec<ItemId>,
 }
 
 pub fn accounts() -> Vec<DemoAccount> {
@@ -69,6 +71,15 @@ impl Vault {
             folders,
             items: vec![],
         }
+    }
+
+    /// The ids of the items with these names, in this order.
+    fn ids(&self, names: &[&str]) -> Vec<ItemId> {
+        names
+            .iter()
+            .filter_map(|name| self.items.iter().find(|item| item.data.name == *name))
+            .map(|item| item.id.clone())
+            .collect()
     }
 
     fn folder(&self, name: &str) -> Option<FolderId> {
@@ -475,6 +486,7 @@ fn personal() -> DemoAccount {
         profile: PERSONAL,
         email: me,
         server: Server::BitwardenCom,
+        recent: vault.ids(&["Amazon", "Netflix", "GitHub", "PayPal", "Bank"]),
         folders: vault.folders,
         items: vault.items,
     }
@@ -536,6 +548,7 @@ fn work() -> DemoAccount {
         profile: WORK,
         email: me,
         server: Server::SelfHosted("https://vault.studio.example".into()),
+        recent: vault.ids(&["Studio mail"]),
         folders: vault.folders,
         items: vault.items,
     }

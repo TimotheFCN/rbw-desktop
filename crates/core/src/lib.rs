@@ -24,13 +24,13 @@ pub use account::{
 };
 pub use error::{Error, Result};
 pub use fake::{FakeBackend, Operation};
-pub use generator::{Characters, GeneratorOptions};
+pub use generator::{Characters, GeneratorOptions, Strength};
 pub use icon::{IconFormat, WebsiteIcon};
 pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
     ItemKind, ItemSummary, Login, Revision, SshKey, UriMatch, VerificationCode, Website,
 };
-pub use rbw::{OutdatedRbw, RBW_ENV, REQUIRED_RBW, RbwBackend};
+pub use rbw::{OutdatedRbw, RBW_ENV, REQUIRED_RBW, RbwBackend, session_dir};
 pub use secret::Secret;
 pub use settings::Preferences;
 pub use ssh::{SshAgentStatus, SshKeySummary, SshService, SshUses};
@@ -153,6 +153,19 @@ pub trait Backend: Send + Sync {
     /// [`Error::Offline`], aren't kept: a later call tries again.
     fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>>;
 
+    /// The items of the account used last in the app on this computer,
+    /// most recent first, as [`Backend::item_used`] noted them: their ids
+    /// only, kept with the preferences. Items deleted since are still
+    /// listed.
+    fn recent_items(&self, account: &AccountId) -> Result<Vec<ItemId>>;
+
+    /// Notes that something of the item was just copied or the item was
+    /// opened, for [`Backend::recent_items`]. Removing the account forgets
+    /// its items.
+    fn item_used(&self, account: &AccountId, item: &ItemId) -> Result<()>;
+
+    /// A new password or passphrase. It needs no account, and works while
+    /// every account is locked.
     fn generate(&self, options: &GeneratorOptions) -> Result<Secret>;
 
     fn account_settings(&self, account: &AccountId) -> Result<AccountSettings>;

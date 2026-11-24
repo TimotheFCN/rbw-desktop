@@ -16,7 +16,7 @@ main thread. Errors are `Error` values, never text to parse.
 | --- | --- |
 | Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `register_device`, `remove_account` |
 | Locking | `unlock`, `unlock_with_touch_id`, `lock` |
-| Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code`, `website_icon` |
+| Vault | `sync`, `items`, `item`, `unlock_item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code`, `website_icon`, `recent_items`, `item_used` |
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
@@ -76,11 +76,22 @@ account was unlocked with its password since its agent started.
 
 Account settings (lock timeout, Touch ID, SSH confirmation) are rbw's, per
 profile; changing them doesn't lock. Preferences (clipboard clearing, website
-icons) are the app's, in `preferences.json` in its configuration folder:
+icons, the generator's last options, the menu bar item) are the app's, in
+`preferences.json` in its configuration folder:
 `~/.config/rbwdesktop` on Linux and
 `~/Library/Application Support/io.github.TimotheFCN.rbw-desktop` on macOS.
 On Linux, `rbw-desktop` would be the folder of an rbw profile called
-`desktop`, which `rbw purge --all` removes.
+`desktop`, which `rbw purge --all` removes. `session_dir` gives the app a
+folder for what lasts as long as the login session, such as a socket.
+
+`item_used` notes that an item was copied from or opened in the app, and
+`recent_items` lists each account's last 20, newest first: their ids only,
+in `recent.json` next to the preferences. Removing the account forgets them.
+
+`GeneratorOptions::strength` says how hard what the options make is to
+guess, from the options alone: rbw draws each character or word at random,
+so the bits of randomness are known exactly (`entropy`), whatever the
+result looks like. Under 45 bits is weak, 60 and over strong.
 
 `website_icon` gives a login's website icon, to show instead of its letter.
 It picks the website as the official clients do (the first one, when it is a
@@ -139,6 +150,7 @@ pass for an option.
 | `verification_code` | `rbw item code ID` |
 | `website_icon` | `rbw icon HOST`, then the cache |
 | `generate` | `rbw generate LENGTH [--no-symbols\|--only-numbers\|--nonconfusables\|--diceware]` |
+| `recent_items`, `item_used` | none: `recent.json` |
 | `account_settings`, `set_account_settings` | `rbw config show`, `rbw config set` |
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |
 | `install_ssh_agent`, `uninstall_ssh_agent` | `rbw ssh-agent install`, `rbw ssh-agent uninstall` |

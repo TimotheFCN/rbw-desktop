@@ -272,9 +272,20 @@ fn against_vaultwarden() {
     let preferences = Preferences {
         clipboard_clear: None,
         website_icons: false,
+        generator: GeneratorOptions::Passphrase { words: 6 },
+        menu_bar: false,
     };
     backend.set_preferences(&preferences).unwrap();
     assert_eq!(backend.preferences().unwrap(), preferences);
+
+    assert_eq!(backend.recent_items(&id).unwrap(), vec![]);
+    backend.item_used(&id, &created.id).unwrap();
+    backend.item_used(&id, &saved_key.id).unwrap();
+    backend.item_used(&id, &created.id).unwrap();
+    assert_eq!(
+        backend.recent_items(&id).unwrap(),
+        vec![created.id.clone(), saved_key.id.clone()]
+    );
     assert!(!cache.exists());
     assert_eq!(backend.website_icon(&id, &github).unwrap(), None);
     assert!(!cache.exists());
@@ -363,8 +374,9 @@ fn against_vaultwarden() {
     );
 
     assert_eq!(backend.accounts().unwrap().len(), 3);
-    for account in [registering, other, id] {
+    for account in [registering, other, id.clone()] {
         backend.remove_account(&account).unwrap();
     }
     assert!(backend.accounts().unwrap().is_empty());
+    assert_eq!(backend.recent_items(&id).unwrap(), vec![]);
 }
