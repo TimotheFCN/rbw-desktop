@@ -20,6 +20,7 @@ mod platform;
 mod rows;
 mod select;
 mod sheet;
+mod text;
 mod theme;
 mod toast;
 
@@ -37,6 +38,7 @@ pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
 pub use rows::{ListRow, NavRow, Tile, app_icon, avatar, list_row, nav_row, section_label, tile};
 pub use select::{Select, Selected};
 pub use sheet::{SheetSlot, surface};
+pub use text::{screen_title, sheet_title};
 pub use theme::{ActiveTheme, Appearance, Colors, Look, Metrics, Theme};
 pub use toast::ToastSlot;
 

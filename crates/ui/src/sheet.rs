@@ -72,6 +72,9 @@ impl SheetSlot {
         // and any alert rise into the middle.
         let from_top = look == Look::MacOs && !self.alert;
         let offset = if from_top { px(-14.) } else { px(12.) } * (1. - p);
+        let margin = if from_top { px(34.) } else { px(24.) };
+        // A sheet taller than the window scrolls inside.
+        let max_height = window.viewport_size().height - margin - px(24.);
         Some(
             div()
                 .id(if self.alert {
@@ -83,7 +86,7 @@ impl SheetSlot {
                 .inset_0()
                 .flex()
                 .justify_center()
-                .when(from_top, |d| d.items_start().pt(px(34.)))
+                .when(from_top, |d| d.items_start().pt(margin))
                 .when(!from_top, |d| d.items_center())
                 .bg(scrim.opacity(p))
                 .occlude()
@@ -91,9 +94,11 @@ impl SheetSlot {
                 .child(
                     surface(id, Material::Sheet)
                         .w(width)
+                        .max_h(max_height)
                         .rounded(radius)
                         .p(px(16.))
-                        .mt(offset)
+                        .relative()
+                        .top(offset)
                         .opacity(p)
                         .child(view),
                 )

@@ -206,12 +206,14 @@ pub fn copied_badge(cx: &App) -> gpui::Div {
         .child("Copied")
 }
 
-/// A row of a form: a fixed-width label and the control it names.
-pub fn form_row(label: impl Into<SharedString>, control: impl IntoElement, cx: &App) -> AnyElement {
+/// A row of a form: a fixed-width label and the control it names. The
+/// label is usually text; a custom field's is the field naming it.
+pub fn form_row(label: impl IntoElement, control: impl IntoElement, cx: &App) -> AnyElement {
     let theme = cx.theme();
+    // Room for "Security code" in either look.
     let label_width = match theme.look {
-        Look::MacOs => px(76.),
-        Look::Gnome => px(84.),
+        Look::MacOs => px(86.),
+        Look::Gnome => px(96.),
     };
     div()
         .flex()
@@ -224,7 +226,7 @@ pub fn form_row(label: impl Into<SharedString>, control: impl IntoElement, cx: &
                 .w(label_width)
                 .flex_none()
                 .text_color(theme.colors.text_secondary)
-                .child(label.into()),
+                .child(label),
         )
         .child(
             div()

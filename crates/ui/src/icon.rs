@@ -63,6 +63,7 @@ icons! {
     Maximize => "maximize",
     Menu => "menu",
     Minimize => "minimize",
+    Minus => "minus",
     Note => "note",
     Plus => "plus",
     Refresh => "sync",
