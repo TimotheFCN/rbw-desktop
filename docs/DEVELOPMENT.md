@@ -496,19 +496,23 @@ The macOS-only code is small and type-checked from Linux by
 `tools/check-macos`; CI builds and runs it on a macOS runner
 (`tools/smoke-macos`), but nobody has used it on a Mac yet:
 
-- `ui/src/sidebar.rs`: the sidebar's `NSVisualEffectView` (the sidebar
-  material, blending with what is behind the window, grey while the window
-  is inactive, in the app's light or dark appearance), placed below GPUI's
-  view and moved with the sidebar's bounds. GPUI paints nothing there.
+- `ui/src/material.rs`: the system's materials under what GPUI draws, an
+  `NSVisualEffectView` placed below GPUI's view and moved with an element's
+  bounds, blending with what is behind the window, in the app's light or
+  dark appearance; GPUI paints nothing there. The sidebar and the screens
+  of their own (lock, sign-in) are on the sidebar material, grey while the
+  window is inactive; the menu bar panel is on the popover material. With
+  Reduce Transparency, or on a Mac that draws no blur, such as CI's, the
+  views are the materials' solid colours.
 - `ui/src/platform.rs`: the accent colour from `NSColor.controlAccentColor`.
 - `ui/src/chrome.rs`: transparent title bar, traffic lights at (19, 18) over
   the sidebar, in the middle of the toolbars' height, the `Blurred` window
   background.
 - Fonts: `.SystemUIFont` and Menlo.
-- The window's blur adds no colour of its own (GPUI strips the system
-  material's tint), so the lock and sign-in screens and the panel tint it
-  with `chrome::material`. The sidebar needs no tint: its own view is the
-  system's material, tint and all.
+- GPUI's `Blurred` window background strips the system material's tint and
+  saturation, and blurs nothing where the system doesn't, leaving the
+  desktop sharp behind the window; it only shows while one screen replaces
+  another. Surfaces that show a material use `ui::backdrop` instead.
 - The Settings window's title bar and traffic lights over its sidebar, the
   app menu's About and Settings… items, Touch ID's switch on the Accounts
   page, and the SSH page's advice to add `IdentityAgent` to `~/.ssh/config`.

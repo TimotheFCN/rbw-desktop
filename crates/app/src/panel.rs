@@ -20,8 +20,8 @@ use rbw_desktop_core::{
     LockState, Secret,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, ToastSlot, button, chrome, icon, list_row, motion,
-    scroll_area, scrollbar, search_field, section_label, segmented_control,
+    ActiveTheme as _, ButtonStyle, IconName, Material, ToastSlot, backdrop, button, chrome, icon,
+    list_row, motion, scroll_area, scrollbar, search_field, section_label, segmented_control,
 };
 
 use crate::CloseWindow;
@@ -948,7 +948,6 @@ impl Render for QuickPanel {
             .flex()
             .flex_col()
             .p(px(12.))
-            .bg(chrome::material(cx.theme().colors.frost))
             .rounded(chrome::corner_radius(window, cx))
             .child(tabs)
             .child(
@@ -965,6 +964,12 @@ impl Render for QuickPanel {
             )
             .children(footer)
             .children(toast);
+        // On macOS the system's popover material, as under the menu bar's
+        // own panels; elsewhere the colour of popovers.
+        let content = match backdrop("panel-material", Material::Popover, window, cx) {
+            Some(material) => content.child(material),
+            None => content.bg(cx.theme().colors.frost),
+        };
         chrome::window_frame(content, window, cx)
     }
 }

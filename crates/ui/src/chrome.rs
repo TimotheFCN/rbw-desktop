@@ -5,7 +5,7 @@
 //! asks for.
 
 use gpui::{
-    AnyElement, App, Background, Bounds, CursorStyle, Decorations, Div, ElementId, HitboxBehavior,
+    AnyElement, App, Bounds, CursorStyle, Decorations, Div, ElementId, HitboxBehavior,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, ResizeEdge, Size,
     Stateful, StatefulInteractiveElement, Styled, TitlebarOptions, Window,
     WindowBackgroundAppearance, WindowBounds, WindowButton, WindowDecorations, WindowOptions,
@@ -14,6 +14,7 @@ use gpui::{
 
 use crate::button::{ButtonStyle, button};
 use crate::icon::IconName;
+use crate::material::{Material, backdrop};
 use crate::theme::{ActiveTheme, Look};
 
 /// Where the macOS traffic lights sit, from the window's top-left corner:
@@ -50,10 +51,10 @@ pub fn window_options(
             appears_transparent: true,
             traffic_light_position: Some(TRAFFIC_LIGHTS),
         }),
-        // macOS: the window blurs what is behind it, for screens that tint
-        // it with `material`, and lets the sidebar's material through.
-        // Linux: the drawn frame's rounded corners and shadow need a
-        // see-through window.
+        // macOS: the window lets the system's materials under GPUI's view
+        // through, and blurs what is behind it where none is, as while one
+        // screen replaces another. Linux: the drawn frame's rounded corners
+        // and shadow need a see-through window.
         window_background: if cfg!(target_os = "macos") {
             WindowBackgroundAppearance::Blurred
         } else {
@@ -365,23 +366,9 @@ pub fn traffic_lights(cx: &App) -> Option<AnyElement> {
     )
 }
 
-/// `fill` as the background of a whole window that shows its material, such
-/// as the lock screen or the menu bar panel. On macOS the window blurs what
-/// is behind it and adds no colour of its own, so the fill goes over the blur
-/// thin enough to let it show and thick enough to keep text readable over a
-/// dark desktop in the light look, and the other way round. Elsewhere
-/// nothing is blurred and the fill stays as it is.
-pub fn material(fill: impl Into<Background>) -> Background {
-    let fill = fill.into();
-    if cfg!(target_os = "macos") {
-        fill.opacity(0.86)
-    } else {
-        fill
-    }
-}
-
-/// A screen of its own in the window, such as the lock screen: the window's
-/// material, a bar to drag the window by with its buttons, and `content` in
+/// A screen of its own in the window, such as the lock screen: on macOS the
+/// system's sidebar material over the whole window, elsewhere the window's
+/// colour; a bar to drag the window by with its buttons, and `content` in
 /// the middle.
 pub fn plain_screen(
     id: &'static str,
@@ -415,16 +402,29 @@ pub fn plain_screen(
         window,
         cx,
     );
-    div()
+    let screen = div()
         .id(id)
         .relative()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .bg(material(fill))
-        .rounded(corner)
-        .child(bar)
-        .child(content)
-        .into_any_element()
+        .rounded(corner);
+    let material = (look == Look::MacOs)
+        .then(|| {
+            backdrop(
+                (ElementId::from(id), "material"),
+                Material::Sidebar,
+                window,
+                cx,
+            )
+        })
+        .flatten();
+    match material {
+        Some(material) => screen.child(material),
+        None => screen.bg(fill),
+    }
+    .child(bar)
+    .child(content)
+    .into_any_element()
 }
