@@ -42,6 +42,8 @@ actions!(
         DeleteItem,
         /// Moves the keyboard to the search field.
         Find,
+        /// Clears the search, or leaves its field for the list.
+        ClearSearch,
         SelectNext,
         SelectPrevious,
         /// Syncs the vault with the server now.
@@ -83,6 +85,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(secondary!("e"), EditItem, Some(CONTEXT)),
         KeyBinding::new(secondary!("backspace"), DeleteItem, Some("VaultList")),
         KeyBinding::new(secondary!("f"), Find, Some(CONTEXT)),
+        KeyBinding::new("escape", ClearSearch, Some("Vault > Input")),
+        KeyBinding::new("escape", ClearSearch, Some("VaultList")),
         KeyBinding::new(secondary!("r"), Sync, Some(CONTEXT)),
         KeyBinding::new(secondary!("l"), Lock, Some(CONTEXT)),
         KeyBinding::new(secondary!("shift-g"), ShowGenerator, Some(CONTEXT)),
@@ -551,6 +555,18 @@ impl VaultView {
             .update(cx, |search, cx| search.focus(window, cx));
     }
 
+    /// Escape: empties the search, showing every item again with the
+    /// selection kept; with nothing to clear, the list takes the keyboard.
+    fn clear_search(&mut self, _: &ClearSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.query(cx).is_empty() {
+            window.focus(&self.list_focus, cx);
+        } else {
+            self.search
+                .update(cx, |search, cx| search.set_value("", window, cx));
+            self.refilter(cx);
+        }
+    }
+
     fn new_item(&mut self, _: &NewItem, window: &mut Window, cx: &mut Context<Self>) {
         let vault = cx.entity().downgrade();
         let folder = match &self.filter {
@@ -888,6 +904,7 @@ impl Render for VaultView {
                     .on_action(cx.listener(Self::edit_item))
                     .on_action(cx.listener(Self::delete_selected))
                     .on_action(cx.listener(Self::find))
+                    .on_action(cx.listener(Self::clear_search))
                     .on_action(cx.listener(Self::select_next))
                     .on_action(cx.listener(Self::select_previous))
                     .on_action(cx.listener(Self::sync))
