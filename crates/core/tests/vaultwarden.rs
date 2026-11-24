@@ -5,9 +5,9 @@
 use std::time::{Duration, SystemTime};
 
 use rbw_desktop_core::{
-    Backend, Card, Characters, CustomField, Error, FieldValue, GeneratorOptions, Identity,
-    ItemContent, ItemData, ItemKind, LockState, Login, LoginCode, Preferences, RbwBackend, Secret,
-    Server, SshKey, TwoStepMethod, UriMatch, Website,
+    Backend, Card, Characters, CustomField, Error, FieldValue, FolderId, GeneratorOptions,
+    Identity, ItemContent, ItemData, ItemKind, LockState, Login, LoginCode, Preferences,
+    RbwBackend, Secret, Server, SshKey, TwoStepMethod, UriMatch, Website,
 };
 
 // an unencrypted ed25519 key, made for this test
@@ -111,6 +111,17 @@ fn against_vaultwarden() {
     let edited = backend.item(&id, &created.id).unwrap();
     assert_eq!(edited.data, github);
     assert!(edited.favorite);
+    backend.move_item(&id, &created.id, None).unwrap();
+    let moved = backend.item(&id, &created.id).unwrap();
+    assert_eq!(moved.data.folder, None);
+    assert!(moved.favorite);
+    backend
+        .move_item(&id, &created.id, Some(&folder.id))
+        .unwrap();
+    assert_eq!(
+        backend.move_item(&id, &created.id, Some(&FolderId("0".repeat(36)))),
+        Err(Error::NotFound)
+    );
 
     let mut card = ItemData::new(ItemKind::Card);
     card.name = "Visa".into();

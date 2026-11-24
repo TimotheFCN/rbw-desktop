@@ -13,9 +13,10 @@ pub use process::RBW_ENV;
 use process::{Rbw, Wait};
 
 use crate::{
-    Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, GeneratorOptions,
-    Item, ItemData, ItemId, ItemKind, ItemSummary, LockState, LoginCode, Preferences, Result,
-    Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses, VerificationCode,
+    Account, AccountId, AccountSettings, Backend, Characters, Error, Folder, FolderId,
+    GeneratorOptions, Item, ItemData, ItemId, ItemKind, ItemSummary, LockState, LoginCode,
+    Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses,
+    VerificationCode,
 };
 
 /// The rbw-ng release with everything this backend uses.
@@ -306,9 +307,25 @@ impl Backend for RbwBackend {
     }
 
     fn set_favorite(&self, account: &AccountId, item: &ItemId, favorite: bool) -> Result<()> {
-        let mut current = self.item_json(account, item)?;
-        current.favorite = Some(favorite);
-        self.save(account, &["item", "edit", &item.0], &current)
+        let favorite = if favorite { "true" } else { "false" };
+        self.json::<serde::de::IgnoredAny>(
+            account,
+            &["item", "favorite", &item.0, favorite],
+            None,
+            Wait::Network,
+        )
+        .map(drop)
+    }
+
+    fn move_item(
+        &self,
+        account: &AccountId,
+        item: &ItemId,
+        folder: Option<&FolderId>,
+    ) -> Result<()> {
+        let mut args = vec!["item", "move", &item.0];
+        args.extend(folder.map(|folder| folder.0.as_str()));
+        self.json::<serde::de::IgnoredAny>(account, &args, None, Wait::Network)
             .map(drop)
     }
 

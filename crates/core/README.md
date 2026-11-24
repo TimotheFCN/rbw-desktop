@@ -16,7 +16,7 @@ main thread. Errors are `Error` values, never text to parse.
 | --- | --- |
 | Accounts | `accounts`, `account`, `add_account`, `sign_in`, `send_email_code`, `remove_account` |
 | Locking | `unlock`, `unlock_with_touch_id`, `lock` |
-| Vault | `sync`, `items`, `item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `folders`, `create_folder`, `verification_code` |
+| Vault | `sync`, `items`, `item`, `create_item`, `edit_item`, `delete_item`, `set_favorite`, `move_item`, `folders`, `create_folder`, `verification_code` |
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
@@ -30,8 +30,10 @@ email.
 
 `items` lists summaries without secrets. Secrets come only from `item` and
 `verification_code`, in `Secret` values that wipe their memory when dropped.
-`ItemSummary::editable` and `Item::editable` say whether an item can change:
-items in read-only collections can't. Item kinds this version doesn't know are
+`ItemSummary::editable` and `Item::editable` say whether an item can be
+edited and deleted: items in read-only collections can't. Every item can be
+marked favourite and moved between folders, which change only what belongs to
+the account and send no secrets. Item kinds this version doesn't know are
 left out of the list.
 
 `account` is cheap (a few milliseconds): poll it every second or two to notice
@@ -64,7 +66,7 @@ or logged.
 | `sync` | `rbw sync` |
 | `items`, `item` | `rbw item list`, `rbw item get ID` |
 | `create_item`, `edit_item`, `delete_item` | `rbw item create`, `rbw item edit ID`, `rbw item delete ID` |
-| `set_favorite` | `rbw item get ID`, then `rbw item edit ID` with `favorite` |
+| `set_favorite`, `move_item` | `rbw item favorite ID true\|false`, `rbw item move ID [FOLDER]` |
 | `folders`, `create_folder` | `rbw folder list`, `rbw folder create NAME` |
 | `verification_code` | `rbw item code ID` |
 | `generate` | `rbw generate LENGTH [--no-symbols\|--only-numbers\|--nonconfusables\|--diceware]` |

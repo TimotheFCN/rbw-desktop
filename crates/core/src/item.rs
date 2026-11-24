@@ -40,7 +40,8 @@ pub struct ItemSummary {
     pub favorite: bool,
     /// Whether the item has a verification code.
     pub has_code: bool,
-    /// Whether the item can be edited, deleted and marked favourite.
+    /// Whether the item can be edited and deleted. Every item can be marked
+    /// favourite and moved between folders.
     pub editable: bool,
 }
 

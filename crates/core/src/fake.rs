@@ -570,6 +570,24 @@ impl Backend for FakeBackend {
         Ok(())
     }
 
+    fn move_item(
+        &self,
+        account: &AccountId,
+        item: &ItemId,
+        folder: Option<&FolderId>,
+    ) -> Result<()> {
+        let mut state = self.online()?;
+        let account = state.unlocked(account)?;
+        if let Some(folder) = folder
+            && !account.folders.iter().any(|known| known.id == *folder)
+        {
+            return Err(Error::NotFound);
+        }
+        account.item_mut(item)?.data.folder = folder.cloned();
+        account.last_sync = Some(SystemTime::now());
+        Ok(())
+    }
+
     fn folders(&self, account: &AccountId) -> Result<Vec<Folder>> {
         Ok(self.call()?.unlocked(account)?.folders.clone())
     }
@@ -882,6 +900,18 @@ mod tests {
         assert_eq!(fake.delete_item(&id, &read_only.id), Err(Error::ReadOnly));
 
         let folder = fake.create_folder(&id, "Games").unwrap();
+        fake.set_favorite(&id, &read_only.id, true).unwrap();
+        fake.move_item(&id, &read_only.id, Some(&folder.id))
+            .unwrap();
+        let moved = fake.item(&id, &read_only.id).unwrap();
+        assert!(moved.favorite);
+        assert_eq!(moved.data.folder, Some(folder.id.clone()));
+        assert_eq!(
+            fake.move_item(&id, &read_only.id, Some(&FolderId("nope".into()))),
+            Err(Error::NotFound)
+        );
+        fake.move_item(&id, &read_only.id, None).unwrap();
+        assert_eq!(fake.item(&id, &read_only.id).unwrap().data.folder, None);
         let mut key = ItemData::new(ItemKind::SshKey);
         key.name = "Laptop".into();
         key.folder = Some(folder.id);

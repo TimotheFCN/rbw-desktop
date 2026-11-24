@@ -89,7 +89,20 @@ pub trait Backend: Send + Sync {
     /// Moves the item to the trash.
     fn delete_item(&self, account: &AccountId, item: &ItemId) -> Result<()>;
 
+    /// Marks or unmarks the item as a favourite. It sends no secrets and
+    /// works for read-only items too: favourites belong to the account.
     fn set_favorite(&self, account: &AccountId, item: &ItemId, favorite: bool) -> Result<()>;
+
+    /// Moves the item into a folder, or out of any folder with `None`. Like
+    /// favourites, folders belong to the account: it sends no secrets and
+    /// works for read-only items too. Fails with [`Error::NotFound`] for an
+    /// unknown folder.
+    fn move_item(
+        &self,
+        account: &AccountId,
+        item: &ItemId,
+        folder: Option<&FolderId>,
+    ) -> Result<()>;
 
     fn folders(&self, account: &AccountId) -> Result<Vec<Folder>>;
 

@@ -32,7 +32,7 @@ pub struct ItemJson {
     pub organization_id: Option<String>,
     // left out of an edit, it stays as it is
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub favorite: Option<bool>,
+    favorite: Option<bool>,
     #[serde(default = "yes", skip_serializing)]
     edit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
