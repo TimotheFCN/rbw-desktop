@@ -126,18 +126,7 @@ pub fn open(anchor: Anchor, cx: &mut App) {
 /// Where the panel's top-left corner goes, kept on the display.
 fn origin(anchor: Anchor, cx: &App) -> Option<(Point<Pixels>, Option<DisplayId>)> {
     let margin = px(8.);
-    let keep = |at: Point<Pixels>, display: Bounds<Pixels>| {
-        point(
-            at.x.clamp(
-                display.left() + margin,
-                display.right() - SIZE.width - margin,
-            ),
-            at.y.clamp(
-                display.top() + margin,
-                display.bottom() - SIZE.height - margin,
-            ),
-        )
-    };
+    let keep = |at, display| keep_on(at, display, margin);
     match anchor {
         #[cfg(target_os = "macos")]
         Anchor::Item(item, display) => {
@@ -164,6 +153,21 @@ fn origin(anchor: Anchor, cx: &App) -> Option<(Point<Pixels>, Option<DisplayId>)
         }
         Anchor::Centered => None,
     }
+}
+
+/// The panel's corner at `at`, moved as little as needed for the panel to
+/// stay `margin` inside the display.
+fn keep_on(at: Point<Pixels>, display: Bounds<Pixels>, margin: Pixels) -> Point<Pixels> {
+    point(
+        at.x.clamp(
+            display.left() + margin,
+            display.right() - SIZE.width - margin,
+        ),
+        at.y.clamp(
+            display.top() + margin,
+            display.bottom() - SIZE.height - margin,
+        ),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -955,5 +959,25 @@ impl Render for QuickPanel {
             .children(footer)
             .children(toast);
         chrome::window_frame(content, window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_panel_stays_on_its_display() {
+        let display = Bounds::new(point(px(1920.), px(0.)), size(px(1280.), px(800.)));
+        let margin = px(8.);
+        // Inside, it stays.
+        let at = point(px(2400.), px(100.));
+        assert_eq!(keep_on(at, display, margin), at);
+        // Past a corner, it comes back inside.
+        let corner = keep_on(point(px(3190.), px(790.)), display, margin);
+        assert_eq!(corner.x, px(3200.) - SIZE.width - margin);
+        assert_eq!(corner.y, px(800.) - SIZE.height - margin);
+        let start = keep_on(point(px(1900.), px(-20.)), display, margin);
+        assert_eq!(start, point(px(1928.), px(8.)));
     }
 }

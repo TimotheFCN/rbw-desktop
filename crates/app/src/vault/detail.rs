@@ -960,7 +960,51 @@ impl Render for ItemDetail {
 
 #[cfg(test)]
 mod tests {
+    use rbw_desktop_core::{Identity, ItemData, Login};
+
     use super::*;
+
+    fn item(content: ItemContent) -> Item {
+        Item {
+            id: ItemId("a".into()),
+            data: ItemData {
+                content,
+                ..ItemData::new(ItemKind::SecureNote)
+            },
+            organization: None,
+            favorite: false,
+            editable: true,
+            reprompt: false,
+        }
+    }
+
+    fn keys(cards: &[Vec<Field>]) -> Vec<Vec<&str>> {
+        cards
+            .iter()
+            .map(|fields| fields.iter().map(|field| field.key.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn empty_fields_are_left_out() {
+        let login = item(ItemContent::Login(Login {
+            password: Secret::new("hunter2"),
+            ..Login::default()
+        }));
+        assert_eq!(
+            keys(&cards(&login)),
+            [vec!["password"], vec![], vec![], vec![]]
+        );
+        let identity = item(ItemContent::Identity(Identity {
+            first_name: "Alex".into(),
+            city: "Lyon".into(),
+            country: "France".into(),
+            ..Identity::default()
+        }));
+        let cards = cards(&identity);
+        assert_eq!(keys(&cards)[0], ["name", "address"]);
+        assert_eq!(cards[0][1].value.expose(), "Lyon, France");
+    }
 
     #[test]
     fn only_web_addresses_open() {

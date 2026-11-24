@@ -520,14 +520,10 @@ impl VaultView {
                     }
                     // The next item takes its place, or the one before it at
                     // the end of the list.
-                    let position = this.selected_index();
-                    let neighbour = position.and_then(|index| {
+                    let neighbour = this.selected_index().and_then(|index| {
                         let items: Vec<_> =
                             this.visible_items().map(|item| item.id.clone()).collect();
-                        items
-                            .get(index + 1)
-                            .or_else(|| index.checked_sub(1).and_then(|before| items.get(before)))
-                            .cloned()
+                        neighbour(&items, index)
                     });
                     if this.selected.as_ref() == Some(&deleted) {
                         this.select(neighbour, cx);
@@ -592,6 +588,15 @@ impl VaultView {
             cx,
         );
     }
+}
+
+/// The item that takes the place of the one at `index` when it goes: the
+/// next, or the one before it at the end of the list.
+fn neighbour(items: &[ItemId], index: usize) -> Option<ItemId> {
+    items
+        .get(index + 1)
+        .or_else(|| index.checked_sub(1).and_then(|before| items.get(before)))
+        .cloned()
 }
 
 /// Whether a search, in lower case, finds the item.
@@ -668,5 +673,64 @@ impl Render for VaultView {
             )
             .children(sheet)
             .children(toast)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(name: &str, kind: ItemKind) -> ItemSummary {
+        ItemSummary {
+            id: ItemId(name.to_lowercase()),
+            kind,
+            name: name.into(),
+            subtitle: None,
+            websites: vec![],
+            folder: None,
+            organization: None,
+            favorite: false,
+            has_code: false,
+            reprompt: false,
+            editable: true,
+        }
+    }
+
+    #[test]
+    fn a_search_finds_names_subtitles_and_websites() {
+        let login = ItemSummary {
+            subtitle: Some("Alex.Martin".into()),
+            websites: vec!["https://Bank.example".into()],
+            ..item("Bank", ItemKind::Login)
+        };
+        for query in ["", "ban", "alex.m", "bank.example"] {
+            assert!(matches(&login, query), "{query}");
+        }
+        assert!(!matches(&login, "github"));
+    }
+
+    #[test]
+    fn the_sidebar_admits_its_items() {
+        let folder = FolderId("travel".into());
+        let card = ItemSummary {
+            favorite: true,
+            folder: Some(folder.clone()),
+            ..item("Visa", ItemKind::Card)
+        };
+        let note = item("Codes", ItemKind::SecureNote);
+        assert!(Filter::All.admits(&card) && Filter::All.admits(&note));
+        assert!(Filter::Favorites.admits(&card) && !Filter::Favorites.admits(&note));
+        assert!(Filter::Kind(ItemKind::Card).admits(&card));
+        assert!(!Filter::Kind(ItemKind::Card).admits(&note));
+        assert!(Filter::Folder(folder.clone()).admits(&card));
+        assert!(!Filter::Folder(folder).admits(&note));
+    }
+
+    #[test]
+    fn a_deleted_item_gives_its_place_to_the_next() {
+        let items: Vec<_> = ["a", "b", "c"].map(|id| ItemId(id.into())).into();
+        assert_eq!(neighbour(&items, 0), Some(ItemId("b".into())));
+        assert_eq!(neighbour(&items, 2), Some(ItemId("b".into())));
+        assert_eq!(neighbour(&items[..1], 0), None);
     }
 }

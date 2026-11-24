@@ -176,3 +176,37 @@ pub fn describe(error: &Error) -> &'static str {
         _ => "Something went wrong.",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_error_people_meet_has_its_sentence() {
+        let generic = describe(&Error::Other(String::new()));
+        let errors = [
+            Error::Locked,
+            Error::NotSignedIn,
+            Error::WrongPassword,
+            Error::WrongCode,
+            Error::WrongApiKey,
+            Error::Offline,
+            Error::WrongServer,
+            Error::Timeout,
+            Error::RbwNotFound,
+            Error::NotFound,
+            Error::Conflict,
+            Error::ReadOnly,
+            Error::InvalidItem(String::new()),
+            Error::Server(String::new()),
+            Error::PasswordRequired,
+            Error::RepromptRequired,
+        ];
+        let mut sentences: Vec<_> = errors.iter().map(describe).collect();
+        assert!(sentences.iter().all(|sentence| *sentence != generic));
+        assert!(sentences.iter().all(|sentence| sentence.ends_with('.')));
+        sentences.dedup();
+        // the two that ask for the master password say the same
+        assert_eq!(sentences.len(), errors.len() - 1);
+    }
+}

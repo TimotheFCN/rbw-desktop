@@ -103,16 +103,7 @@ impl Accounts {
     /// The account the windows show: the one chosen last if it still
     /// exists, else the first unlocked one, else the first.
     pub fn current(&self) -> Option<&Account> {
-        let accounts = self.list();
-        self.chosen
-            .as_ref()
-            .and_then(|id| self.get(id))
-            .or_else(|| {
-                accounts
-                    .iter()
-                    .find(|account| account.state == LockState::Unlocked)
-            })
-            .or_else(|| accounts.first())
+        current(self.list(), self.chosen.as_ref())
     }
 
     /// The account the windows show from now on, which may not be listed
@@ -176,6 +167,19 @@ fn any_window_shows(cx: &mut App) -> bool {
             .update(cx, |_, window, _| window.is_visible())
             .unwrap_or(false)
     })
+}
+
+/// The account the windows show: `chosen` if it is listed, else the first
+/// unlocked one, else the first.
+fn current<'a>(accounts: &'a [Account], chosen: Option<&AccountId>) -> Option<&'a Account> {
+    chosen
+        .and_then(|id| accounts.iter().find(|account| account.id == *id))
+        .or_else(|| {
+            accounts
+                .iter()
+                .find(|account| account.state == LockState::Unlocked)
+        })
+        .or_else(|| accounts.first())
 }
 
 /// [`Accounts::refresh`] from anywhere.
@@ -336,4 +340,60 @@ fn choose<V: AccountMenu>(
         close(this, window, cx);
         cx.emit(request.clone());
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rbw_desktop_core::Server;
+
+    use super::*;
+
+    fn account(profile: &str, state: LockState) -> Account {
+        Account {
+            id: AccountId::new(profile),
+            email: Some(format!("{profile}@example.com")),
+            server: Server::BitwardenCom,
+            state,
+            touch_id_ready: false,
+            last_sync: None,
+        }
+    }
+
+    #[test]
+    fn the_current_account_is_the_chosen_then_an_unlocked_one() {
+        let accounts = [
+            account("home", LockState::Locked),
+            account("work", LockState::Unlocked),
+        ];
+        let id = |account: Option<&Account>| account.map(|account| account.id.clone());
+        assert_eq!(id(current(&accounts, None)), Some(accounts[1].id.clone()));
+        assert_eq!(
+            id(current(&accounts, Some(&accounts[0].id))),
+            Some(accounts[0].id.clone())
+        );
+        let gone = AccountId::new("gone");
+        assert_eq!(
+            id(current(&accounts, Some(&gone))),
+            Some(accounts[1].id.clone())
+        );
+        assert_eq!(
+            id(current(&accounts[..1], None)),
+            Some(accounts[0].id.clone())
+        );
+        assert!(current(&[], None).is_none());
+    }
+
+    #[test]
+    fn the_only_account_goes_by_its_name() {
+        let home = account("alex.martin", LockState::Unlocked);
+        let work = account("alex", LockState::Locked);
+        assert_eq!(
+            short_name(&home, std::slice::from_ref(&home)),
+            "alex.martin"
+        );
+        assert_eq!(
+            short_name(&home, &[home.clone(), work]),
+            "alex.martin@example.com"
+        );
+    }
 }

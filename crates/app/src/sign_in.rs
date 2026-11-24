@@ -197,23 +197,7 @@ impl SignIn {
     }
 
     fn chosen_server(&self, cx: &App) -> Option<Server> {
-        match self.server {
-            0 => Some(Server::BitwardenCom),
-            1 => Some(Server::BitwardenEu),
-            _ => {
-                let url = self.text(&self.server_url, cx);
-                let url = url.trim_end_matches('/');
-                let host = url.split_once("://").map_or(url, |(_, host)| host);
-                if host.is_empty() || host.contains(char::is_whitespace) {
-                    return None;
-                }
-                Some(Server::SelfHosted(if url.contains("://") {
-                    url.to_string()
-                } else {
-                    format!("https://{url}")
-                }))
-            }
-        }
+        server(self.server, &self.text(&self.server_url, cx))
     }
 
     fn go(&mut self, step: Step, back: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -695,6 +679,26 @@ impl AccountMenu for SignIn {
     }
 }
 
+/// The server of a choice of [`SERVERS`], with the address typed for a
+/// self-hosted one; `None` for an address that is no address.
+fn server(choice: usize, url: &str) -> Option<Server> {
+    match choice {
+        0 => Some(Server::BitwardenCom),
+        1 => Some(Server::BitwardenEu),
+        _ => {
+            let (scheme, rest) = url
+                .trim()
+                .split_once("://")
+                .map_or(("https", url.trim()), |(scheme, rest)| (scheme, rest));
+            let rest = rest.trim_end_matches('/');
+            if rest.is_empty() || rest.contains(char::is_whitespace) {
+                return None;
+            }
+            Some(Server::SelfHosted(format!("{scheme}://{rest}")))
+        }
+    }
+}
+
 fn valid_email(email: &str) -> bool {
     email
         .split_once('@')
@@ -798,5 +802,35 @@ impl Render for SignIn {
             .child(app_icon(cx))
             .child(div().mt(px(16.)).w_full().child(step));
         chrome::plain_screen("sign-in", content, window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_self_hosted_address_takes_https_by_default() {
+        let hosted = |url| server(SELF_HOSTED, url);
+        assert_eq!(server(0, "ignored"), Some(Server::BitwardenCom));
+        assert_eq!(
+            hosted("vault.example.com/"),
+            Some(Server::SelfHosted("https://vault.example.com".into()))
+        );
+        assert_eq!(
+            hosted("http://10.0.0.2:8080"),
+            Some(Server::SelfHosted("http://10.0.0.2:8080".into()))
+        );
+        for nothing in ["", "https://", "vault example.com"] {
+            assert_eq!(hosted(nothing), None, "{nothing}");
+        }
+    }
+
+    #[test]
+    fn an_email_has_a_name_and_a_domain() {
+        assert!(valid_email("alex@example.com"));
+        for invalid in ["alex", "@example.com", "alex@", "alex @example.com"] {
+            assert!(!valid_email(invalid), "{invalid}");
+        }
     }
 }
