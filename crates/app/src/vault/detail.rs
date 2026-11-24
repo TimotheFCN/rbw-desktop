@@ -410,7 +410,7 @@ impl ItemDetail {
             Shown::Link => div()
                 .truncate()
                 .text_color(colors.accent_text)
-                .child(field.value.expose().to_string())
+                .child(website_host(field.value.expose()))
                 .into_any_element(),
             Shown::Password => div()
                 .font_family(theme.mono_font_family.clone())
@@ -431,37 +431,52 @@ impl ItemDetail {
         let key = field.key.clone();
         let copied = self.copied.as_ref() == Some(&field.key);
         let value_for_copy = field.value.clone();
-        let mut row = field_row(ElementId::Name(field.key.clone()), field.label, value)
-            .copied(copied)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.copy(key.clone(), &value_for_copy, hidden, cx)
-            }));
+        let mut row = field_row(
+            ElementId::Name(field.key.clone()),
+            field.label.clone(),
+            value,
+        )
+        .copied(copied)
+        .on_click(
+            cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value_for_copy, hidden, cx)),
+        );
         if hidden {
             let key = field.key.clone();
+            let label = if revealed {
+                format!("Hide {}", field.label)
+            } else {
+                format!("Show {}", field.label)
+            };
             row = row.action(
                 div()
-                    .id(ElementId::Name(format!("reveal-{}", field.key).into()))
                     .when(revealed, |d| d.text_color(colors.accent_text))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_reveal(&key, cx);
-                    }))
-                    .child(icon(IconName::Eye)),
+                    .child(
+                        row_button(format!("reveal-{}", field.key), IconName::Eye, label).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_reveal(&key, cx);
+                            }),
+                        ),
+                    ),
             );
         }
-        if field.shown == Shown::Link {
-            let url = website_url(field.value.expose());
+        let url = (field.shown == Shown::Link)
+            .then(|| website_url(field.value.expose()))
+            .flatten();
+        if let Some(url) = url {
             row = row.action(
-                div()
-                    .id(ElementId::Name(format!("open-{}", field.key).into()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.open_url(&url);
-                        if let Some(item) = this.selected_id() {
-                            recent::used(&this.account, item, cx);
-                        }
-                    }))
-                    .child(icon(IconName::External)),
+                row_button(
+                    format!("open-{}", field.key),
+                    IconName::External,
+                    "Open Website",
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(&url);
+                    if let Some(item) = this.selected_id() {
+                        recent::used(&this.account, item, cx);
+                    }
+                })),
             );
         } else if hidden {
             row = row.action(icon(IconName::Copy));
@@ -564,12 +579,49 @@ fn has_code(item: &Item) -> bool {
     matches!(&item.data.content, ItemContent::Login(login) if !login.totp.is_empty())
 }
 
-fn website_url(website: &str) -> String {
-    if website.contains("://") {
-        website.to_string()
-    } else {
-        format!("https://{website}")
+/// The web address to open for a website, `https://` when it has none.
+/// `None` for an address the browser wouldn't open, such as `file:`,
+/// `smb:` or another app's: the system would hand it to that program, and
+/// an item shared by an organization can be changed by its other members.
+fn website_url(website: &str) -> Option<String> {
+    let website = website.trim();
+    match website.split_once("://") {
+        Some((scheme, rest))
+            if !rest.is_empty()
+                && (scheme.eq_ignore_ascii_case("https")
+                    || scheme.eq_ignore_ascii_case("http")) =>
+        {
+            Some(website.to_string())
+        }
+        Some(_) => None,
+        None if website.is_empty() || website.contains(char::is_whitespace) => None,
+        None => Some(format!("https://{website}")),
     }
+}
+
+/// What the item view shows of a website: its host, as a browser's address
+/// bar does, or the whole address when it isn't a web one.
+fn website_host(website: &str) -> String {
+    let Some(url) = website_url(website) else {
+        return website.to_string();
+    };
+    let rest = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// A small button at the end of a field's row, such as the eye.
+fn row_button(
+    id: String,
+    name: IconName,
+    label: impl Into<SharedString>,
+) -> rbw_desktop_ui::Button {
+    button(SharedString::from(id))
+        .icon(name)
+        .style(ButtonStyle::Flat)
+        .size(px(24.))
+        .accessibility_label(label)
 }
 
 fn kind_label(kind: ItemKind) -> &'static str {
@@ -867,5 +919,56 @@ impl Render for ItemDetail {
                     .overflow_y_scroll()
                     .children(body),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_addresses_open() {
+        assert_eq!(
+            website_url("https://bank.example/login").as_deref(),
+            Some("https://bank.example/login")
+        );
+        assert_eq!(
+            website_url(" HTTP://router.local ").as_deref(),
+            Some("HTTP://router.local")
+        );
+        assert_eq!(
+            website_url("bank.example").as_deref(),
+            Some("https://bank.example")
+        );
+        for refused in [
+            "file:///Applications/Calculator.app",
+            "smb://files.example/share",
+            "ssh://host.example",
+            "vnc://host.example",
+            "someapp://open?thing=1",
+            "https://",
+            "",
+            "bank example",
+        ] {
+            assert_eq!(website_url(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_website_shows_as_its_host() {
+        assert_eq!(
+            website_host("https://www.amazon.com/ap/signin"),
+            "amazon.com"
+        );
+        assert_eq!(website_host("http://192.168.1.1"), "192.168.1.1");
+        assert_eq!(website_host("forum.example.net"), "forum.example.net");
+        assert_eq!(
+            website_host("https://alex@mail.example:8443/#inbox"),
+            "mail.example:8443"
+        );
+        assert_eq!(
+            website_host("smb://files.example/share"),
+            "smb://files.example/share"
+        );
     }
 }
