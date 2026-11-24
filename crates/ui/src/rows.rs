@@ -84,17 +84,18 @@ impl Highlight {
     }
 }
 
-/// Where the rows of a [`selection_track`] are and which is selected, kept
-/// while they show.
+/// Where the rows of a [`selection_track`] are, kept while they show.
 #[derive(Default)]
 pub struct SelectionTrack {
     /// Each row's top and height in the window, as drawn in this frame.
     drawing: HashMap<ElementId, (Pixels, Pixels)>,
+    /// The same, as drawn in the frame before, which the highlight of this
+    /// one was placed from.
+    drawn: HashMap<ElementId, (Pixels, Pixels)>,
     /// Each row's top from the topmost row's, height and distance to the
     /// next row when it follows closely, as drawn last: the same however
     /// the rows scroll.
     rows: HashMap<ElementId, (Pixels, Pixels, Pixels)>,
-    selected: Option<ElementId>,
     /// Where the highlight is, from the topmost row's top.
     at: Option<Pixels>,
 }
@@ -109,19 +110,21 @@ impl SelectionTrack {
 }
 
 /// The sliding selection of rows of different places and gaps, such as a
-/// sidebar's with its headings: the rows say where they were drawn, and the
-/// highlight slides to the selected one, on
-/// [`motion::slide`](crate::motion::slide). Make it before the rows, and
-/// give it to each with [`NavRow::track`].
+/// sidebar's with its headings: the highlight slides to the row `selected`,
+/// on [`motion::slide`](crate::motion::slide), from where the rows were
+/// drawn last, which they record as they are drawn. Make it before the
+/// rows, and give it to each with [`NavRow::track`].
 pub fn selection_track(
     id: impl Into<ElementId>,
+    selected: Option<&ElementId>,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<SelectionTrack> {
     let id = id.into();
     let track = window.use_keyed_state(id.clone(), cx, |_, _| SelectionTrack::default());
     let target = track.update(cx, |track, _| {
-        let drawn = std::mem::take(&mut track.drawing);
+        track.drawn = std::mem::take(&mut track.drawing);
+        let drawn = &track.drawn;
         let first = drawn
             .values()
             .map(|(top, _)| *top)
@@ -129,8 +132,8 @@ pub fn selection_track(
         if let Some(first) = first {
             let tops: Vec<Pixels> = drawn.values().map(|(top, _)| *top).collect();
             track.rows = drawn
-                .into_iter()
-                .map(|(id, (top, height))| {
+                .iter()
+                .map(|(id, &(top, height))| {
                     // A row a few points under it closes the gap.
                     let next = tops
                         .iter()
@@ -141,13 +144,11 @@ pub fn selection_track(
                         .map(|next| next - top)
                         .filter(|reach| *reach <= height + px(4.))
                         .unwrap_or(height);
-                    (id, (top - first, height, reach))
+                    (id.clone(), (top - first, height, reach))
                 })
                 .collect();
         }
-        track
-            .selected
-            .as_ref()
+        selected
             .and_then(|selected| track.rows.get(selected))
             .map(|(top, height, _)| (*top, *height))
     });
@@ -158,17 +159,22 @@ pub fn selection_track(
     track
 }
 
-/// Records a row's place in its track as it is drawn.
-fn track_row(track: &Entity<SelectionTrack>, id: ElementId, selected: bool) -> impl IntoElement {
+/// Records a row's place in its track as it is drawn. A row drawn
+/// elsewhere than in the frame before, as when a heading comes in above
+/// it, draws again: the highlight was placed from where it was.
+fn track_row(track: &Entity<SelectionTrack>, id: ElementId) -> impl IntoElement {
     let track = track.clone();
     canvas(
-        move |bounds, _, cx| {
-            track.update(cx, |track, _| {
-                if selected {
-                    track.selected = Some(id.clone());
-                }
-                track.drawing.insert(id, (bounds.top(), bounds.size.height));
-            })
+        move |bounds, window, cx| {
+            let place = (bounds.top(), bounds.size.height);
+            let moved = track.update(cx, |track, _| {
+                let moved = track.drawn.get(&id) != Some(&place);
+                track.drawing.insert(id, place);
+                moved
+            });
+            if moved {
+                window.request_animation_frame();
+            }
         },
         |_, _, _, _| {},
     )
@@ -273,9 +279,7 @@ impl RenderOnce for NavRow {
             .when_some(highlight, |b, highlight| {
                 b.child(highlight.render(radius, fill))
             })
-            .when_some(self.track, |b, track| {
-                b.child(track_row(&track, id, self.selected))
-            })
+            .when_some(self.track, |b, track| b.child(track_row(&track, id)))
             .child(icon(self.icon).size(px(16.)).text_color(icon_color))
             .child(div().flex_1().min_w_0().truncate().child(self.label))
     }

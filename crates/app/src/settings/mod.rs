@@ -11,10 +11,10 @@ mod store;
 
 use gpui::base::Button as BaseButton;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle, Focusable,
+    FontWeight, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowOptions, actions,
+    div, prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::APP_ID;
 use rbw_desktop_ui::{
@@ -234,7 +234,11 @@ impl SettingsWindow {
         let metrics = theme.metrics;
         let fill = theme.colors.window;
         let corner = chrome::corner_radius(window, cx);
-        let track = selection_track("settings-selection", window, cx);
+        let shown = PAGES
+            .iter()
+            .find(|(page, ..)| *page == self.page)
+            .map(|(.., label)| ElementId::from(*label));
+        let track = selection_track("settings-selection", shown.as_ref(), window, cx);
         let rows = PAGES.map(|(page, icon_name, label)| {
             nav_row(label, icon_name, label, self.page == page)
                 .track(&track)

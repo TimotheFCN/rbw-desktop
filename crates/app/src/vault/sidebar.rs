@@ -2,8 +2,9 @@
 
 use gpui::base::Button as BaseButton;
 use gpui::{
-    AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, Context, ElementId, FontWeight, InteractiveElement as _, IntoElement,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
@@ -112,12 +113,13 @@ impl VaultView {
             })
             .collect();
 
-        let track = selection_track("sidebar-selection", window, cx);
-        let row = |id: &'static str, icon, label: &str, filter: Filter, cx: &mut Context<Self>| {
+        let track = selection_track("sidebar-selection", Some(&row_id(&self.filter)), window, cx);
+        let row = |icon, label: SharedString, filter: Filter, cx: &mut Context<Self>| {
             let selected = self.filter == filter;
-            nav_row(id, icon, label.to_string(), selected)
+            nav_row(row_id(&filter), icon, label, selected)
                 .track(&track)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_filter(filter.clone(), cx)))
+                .into_any_element()
         };
 
         let header = match look {
@@ -154,46 +156,21 @@ impl VaultView {
         };
 
         let mut rows = vec![
-            row("all", IconName::Grid, "All Items", Filter::All, cx).into_any_element(),
-            row(
-                "favorites",
-                IconName::Star,
-                "Favorites",
-                Filter::Favorites,
-                cx,
-            )
-            .into_any_element(),
+            row(IconName::Grid, "All Items".into(), Filter::All, cx),
+            row(IconName::Star, "Favorites".into(), Filter::Favorites, cx),
         ];
         if !kinds.is_empty() {
             rows.push(section_label("Types", cx).into_any_element());
         }
         for (kind, icon, label) in kinds {
-            let id = match kind {
-                ItemKind::Login => "logins",
-                ItemKind::Card => "cards",
-                ItemKind::Identity => "identities",
-                ItemKind::SecureNote => "notes",
-                ItemKind::SshKey => "ssh-keys",
-            };
-            rows.push(row(id, *icon, label, Filter::Kind(*kind), cx).into_any_element());
+            rows.push(row(*icon, (*label).into(), Filter::Kind(*kind), cx));
         }
         if !self.folders.is_empty() {
             rows.push(section_label("Folders", cx).into_any_element());
         }
         for folder in self.folders.clone() {
-            let selected = self.filter == Filter::Folder(folder.id.clone());
-            let filter = Filter::Folder(folder.id.clone());
-            rows.push(
-                nav_row(
-                    gpui::ElementId::Name(format!("folder-{}", folder.id.0).into()),
-                    IconName::Folder,
-                    folder.name,
-                    selected,
-                )
-                .track(&track)
-                .on_click(cx.listener(move |this, _, _, cx| this.set_filter(filter.clone(), cx)))
-                .into_any_element(),
-            );
+            let filter = Filter::Folder(folder.id);
+            rows.push(row(IconName::Folder, folder.name.into(), filter, cx));
         }
         // Where the items no folder holds are, once there are folders.
         let unfiled = self
@@ -201,16 +178,12 @@ impl VaultView {
             .ready()
             .is_some_and(|items| items.iter().any(|item| item.folder.is_none()));
         if !self.folders.is_empty() && unfiled {
-            rows.push(
-                row(
-                    "no-folder",
-                    IconName::Folder,
-                    "No Folder",
-                    Filter::NoFolder,
-                    cx,
-                )
-                .into_any_element(),
-            );
+            rows.push(row(
+                IconName::Folder,
+                "No Folder".into(),
+                Filter::NoFolder,
+                cx,
+            ));
         }
 
         let name = accounts::name(&self.account);
@@ -287,5 +260,23 @@ impl VaultView {
             )
             .child(account)
             .into_any_element()
+    }
+}
+
+/// The sidebar's row that shows `filter`.
+fn row_id(filter: &Filter) -> ElementId {
+    match filter {
+        Filter::All => "all".into(),
+        Filter::Favorites => "favorites".into(),
+        Filter::Kind(kind) => match kind {
+            ItemKind::Login => "logins",
+            ItemKind::Card => "cards",
+            ItemKind::Identity => "identities",
+            ItemKind::SecureNote => "notes",
+            ItemKind::SshKey => "ssh-keys",
+        }
+        .into(),
+        Filter::Folder(folder) => ElementId::Name(format!("folder-{}", folder.0).into()),
+        Filter::NoFolder => "no-folder".into(),
     }
 }
