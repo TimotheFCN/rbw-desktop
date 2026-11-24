@@ -1,6 +1,7 @@
 //! The backend of rbw-desktop. [`Backend`] is everything the interface asks
 //! of rbw: accounts, locking, the vault, the generator, settings and the SSH
-//! agent. [`FakeBackend`] implements it with demo data.
+//! agent. [`RbwBackend`] implements it with rbw-ng's command line, and
+//! [`FakeBackend`] with demo data.
 //!
 //! Every method blocks until it is done, some on the network, so call them
 //! off the interface's thread. The vault key stays in `rbw-agent`: items
@@ -12,6 +13,7 @@ mod error;
 mod fake;
 mod generator;
 mod item;
+mod rbw;
 mod secret;
 mod settings;
 mod ssh;
@@ -26,6 +28,7 @@ pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
     ItemKind, ItemSummary, Login, SshKey, UriMatch, VerificationCode, Website,
 };
+pub use rbw::{RBW_ENV, REQUIRED_RBW, RbwBackend};
 pub use secret::Secret;
 pub use settings::Preferences;
 pub use ssh::{SshAgentStatus, SshKeySummary, SshService, SshUses};

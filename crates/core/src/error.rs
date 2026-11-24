@@ -18,6 +18,10 @@ pub enum Error {
     WrongCode,
     #[error("none of the account's two-step login methods are supported")]
     TwoStepUnsupported,
+    #[error(
+        "rbw needs the master password for this, for example for an item that asks for it again"
+    )]
+    PasswordRequired,
     #[error("Touch ID was canceled")]
     TouchIdCanceled,
     #[error("Touch ID can't unlock the account now")]
