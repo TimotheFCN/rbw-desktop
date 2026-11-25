@@ -15,14 +15,16 @@ reduced motion). Nothing from the styled `gpui-component` layer is used. The
 workspace names the dependency `gpui`, because GPUI's macros expand to
 `gpui::…` paths.
 
-The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, on `PATH`, or
-bundled with the app (`crates/core/README.md` says where). When it is missing or too old the main window says so
-and offers to look again (`backend::connect`, `crate::start`).
+The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, else the one
+bundled with the app (`crates/core/README.md` says where), else, for a
+build without one, the one on `PATH`. When it is missing or too old the
+main window says so and offers to look again (`backend::connect`,
+`crate::start`).
 
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `touch-id-cancel`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `outdated-rbw`, `no-icons`, `big`, `panel`, `settings`, `new-item` and the
+`old-rbw`, `no-icons`, `big`, `panel`, `settings`, `new-item` and the
 `ssh-*` words, comma-separated, reach the other states (`demo.rs` lists
 them); `panel` opens the menu bar panel alone, as a click on the item
 would, and `settings` the Settings window over the main one. The demo's

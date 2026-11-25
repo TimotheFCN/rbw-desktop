@@ -16,8 +16,8 @@ use rand::seq::IndexedRandom as _;
 use crate::{
     Account, AccountId, AccountSettings, Backend, Error, Folder, FolderId, GeneratorOptions,
     IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    OutdatedRbw, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
-    SshUses, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
+    Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses,
+    TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
 
 /// A call to the backend, to make that one fail or wait.
@@ -77,7 +77,6 @@ struct State {
     ssh_supported: bool,
     // what ssh uses instead of an installed agent
     ssh_elsewhere: Option<SshUses>,
-    outdated_rbw: Option<OutdatedRbw>,
     next_id: u64,
 }
 
@@ -162,7 +161,6 @@ impl FakeBackend {
                 ssh_agent: Some(AccountId::new(demo::PERSONAL)),
                 ssh_supported: true,
                 ssh_elsewhere: None,
-                outdated_rbw: None,
                 next_id: 1,
             }),
         }
@@ -233,11 +231,6 @@ impl FakeBackend {
     /// login session hasn't picked it up yet; `None` lets it use the agent.
     pub fn set_ssh_uses(&self, uses: Option<SshUses>) {
         self.state().ssh_elsewhere = uses;
-    }
-
-    /// Makes [`Backend::outdated_rbw`] report an older rbw on `PATH`.
-    pub fn set_outdated_rbw(&self, outdated: Option<OutdatedRbw>) {
-        self.state().outdated_rbw = outdated;
     }
 
     /// Signs an account out, keeping it on this computer with its email
@@ -1039,10 +1032,6 @@ impl Backend for FakeBackend {
     fn rbw_version(&self) -> Result<String> {
         drop(self.call(Operation::RbwVersion)?);
         Ok("demo".to_string())
-    }
-
-    fn outdated_rbw(&self) -> Option<OutdatedRbw> {
-        self.state().outdated_rbw.clone()
     }
 }
 

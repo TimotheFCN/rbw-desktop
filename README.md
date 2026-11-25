@@ -66,11 +66,9 @@ a command line Bitwarden client, and comes with its own copy. `rbw-agent`
 holds the vault's key while it is unlocked, so the app itself never sees
 it, and locks it after the timeout you choose.
 
-Each account is an rbw profile, shared with the `rbw` command line. If you
-use it, install rbw-ng 1.19.0 or later: the app then runs yours, and the
-two share one agent. With an older `rbw` on your `PATH` the app uses its
-own and asks you to update yours, since two versions would lock each
-other's vault.
+Each account is an rbw profile. The app always runs its own copy of rbw-ng:
+an `rbw` of another version would restart its agent, which locks the
+vault.
 
 ## SSH agent
 
@@ -109,8 +107,8 @@ cargo build --release -p rbw-desktop
 target/release/rbw-desktop
 ```
 
-It runs the `rbw` of rbw-ng 1.19.0 or later on your `PATH`, or the one in
-`RBW_DESKTOP_RBW`. `RBW_DESKTOP_DEMO=` runs it on demo vaults instead.
+Built this way it has no `rbw` of its own, so it runs the `rbw` of rbw-ng
+1.19.0 or later on your `PATH`, or the one in `RBW_DESKTOP_RBW`. `RBW_DESKTOP_DEMO=` runs it on demo vaults instead.
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers the code, the tests and
 how the packages are made; [docs/PRODUCT.md](docs/PRODUCT.md) what the app
 is for.

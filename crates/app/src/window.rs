@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
-    FocusHandle, Global, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
-    Size, Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, actions, div,
-    point, prelude::FluentBuilder as _, px, size,
+    FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Size,
+    Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, actions, div, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::{
     APP_ID, APP_NAME, Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW, WindowPlace,
@@ -169,11 +169,6 @@ pub fn with_main_window(
     }
 }
 
-/// Set once the main window said the rbw command line needs updating.
-struct OutdatedMentioned;
-
-impl Global for OutdatedMentioned {}
-
 enum Screen {
     /// Until the accounts are known.
     Loading,
@@ -276,7 +271,6 @@ impl MainWindow {
     }
 
     fn follow_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mention_outdated_rbw(window, cx);
         // They may have changed while no window asked for them.
         accounts::refresh(cx);
         let accounts = Accounts::global(cx);
@@ -306,30 +300,6 @@ impl MainWindow {
             })
             .ok();
         });
-    }
-
-    /// Says once, in passing, that the rbw command line needs updating;
-    /// Settings, About, says why.
-    fn mention_outdated_rbw(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if cx.has_global::<OutdatedMentioned>() {
-            return;
-        }
-        cx.set_global(OutdatedMentioned);
-        backend::request_in(
-            window,
-            cx,
-            |backend| Ok(backend.outdated_rbw()),
-            |_, result, window, cx| {
-                if let Ok(Some(_)) = result {
-                    alerts::toast(
-                        "The rbw command line needs an update. See Settings › About.",
-                        window,
-                        cx,
-                    );
-                }
-            },
-        )
-        .detach();
     }
 
     fn account_list(&self, cx: &App) -> Vec<Account> {

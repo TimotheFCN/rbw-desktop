@@ -3,13 +3,13 @@
 
 use std::ffi::OsStr;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
-use crate::{AccountId, Error, OutdatedRbw, REQUIRED_RBW, Result, TwoStepMethod};
+use crate::{AccountId, Error, REQUIRED_RBW, Result, TwoStepMethod};
 
 /// Overrides where to find `rbw`: the path of the binary.
 pub const RBW_ENV: &str = "RBW_DESKTOP_RBW";
@@ -45,57 +45,54 @@ const BUNDLED: &str = if cfg!(target_os = "macos") {
 
 pub struct Rbw {
     path: PathBuf,
-    // the rbw-agent next to rbw, as the app's packages bundle both
-    agent: Option<PathBuf>,
 }
 
 impl Rbw {
-    /// Finds an `rbw` that is recent enough: the one in `RBW_DESKTOP_RBW`,
-    /// else the one on `PATH`, which the command line runs too, else the
-    /// one bundled with this program. With the last, it also returns the
-    /// older one on `PATH`, which would restart the account's agent.
-    pub fn find() -> Result<(Self, Option<OutdatedRbw>)> {
+    /// The `rbw` the app runs: the one in `RBW_DESKTOP_RBW`, else the one
+    /// bundled with it. Only a build without one, such as one run from
+    /// source, runs the one on `PATH`. Each must be recent enough.
+    pub fn find() -> Result<Self> {
         if let Some(path) = std::env::var_os(RBW_ENV).filter(|path| !path.is_empty()) {
-            return Ok((Self::checked(PathBuf::from(path))?, None));
+            return Self::checked(PathBuf::from(path));
         }
-        let installed = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("rbw"))
-                .find(|path| path.is_file())
-        });
-        // resolved: a link to the executable, such as one in a folder on
-        // PATH, leads to where the app was unpacked
-        let bundled = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.parent()?.join(BUNDLED).join("rbw")))
-            .filter(|path| path.is_file());
-        choose(
-            installed.map(Self::at),
-            bundled.map(Self::at),
-            Self::version,
-        )
+        if let Some(path) = bundled() {
+            return Self::checked(path);
+        }
+        let path = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join("rbw"))
+                    .find(|path| path.is_file())
+            })
+            .ok_or(Error::RbwNotFound)?;
+        Self::checked(path)
     }
 
-    /// The `rbw` at this path, if it is recent enough.
-    pub fn checked(path: PathBuf) -> Result<Self> {
-        let rbw = Self::at(path);
+    fn checked(path: PathBuf) -> Result<Self> {
+        let rbw = Self { path };
         let version = rbw.version()?;
-        enough(rbw, version)
+        if version.is_enough() {
+            Ok(rbw)
+        } else {
+            Err(Error::RbwTooOld {
+                found: version.text,
+                required: REQUIRED_RBW.to_string(),
+            })
+        }
     }
 
-    /// Whether the agent is somewhere that goes away: in an app on a disk
+    #[cfg(test)]
+    fn at(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// Whether `rbw` is somewhere that goes away: in an app on a disk
     /// image, or one that macOS runs from a temporary copy because it was
     /// opened where it was downloaded (App Translocation). A service set up
     /// with it would run nothing once the image is ejected or the Mac
     /// restarts.
-    pub fn agent_is_transient(&self) -> bool {
-        cfg!(target_os = "macos") && self.agent.as_deref().is_some_and(transient)
-    }
-
-    fn at(path: PathBuf) -> Self {
-        let agent = Some(path.with_file_name("rbw-agent")).filter(|agent| agent.is_file());
-        Self { path, agent }
+    pub fn is_transient(&self) -> bool {
+        cfg!(target_os = "macos") && transient(&self.path)
     }
 
     /// The version `rbw --version` prints.
@@ -143,6 +140,8 @@ impl Rbw {
             .env("RBW_NONINTERACTIVE", "1")
             .env("RBW_ERROR_FORMAT", "json")
             .env_remove("RBW_SESSION")
+            // rbw starts the rbw-agent beside it, which must be its own
+            .env_remove("RBW_AGENT")
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
@@ -154,9 +153,6 @@ impl Rbw {
             Some(profile) => command.env("RBW_PROFILE", profile.profile()),
             None => command.env_remove("RBW_PROFILE"),
         };
-        if let Some(agent) = &self.agent {
-            command.env("RBW_AGENT", agent);
-        }
         // from the start: a stalled rbw may not even read its input
         let deadline = Instant::now() + limit;
         let mut child = command.spawn().map_err(|error| match error.kind() {
@@ -230,52 +226,17 @@ fn read_all(pipe: Option<impl std::io::Read>) -> Zeroizing<Vec<u8>> {
     output
 }
 
-// The rbw on PATH when it is recent enough, else the bundled one, with the
-// older one on PATH.
-fn choose(
-    installed: Option<Rbw>,
-    bundled: Option<Rbw>,
-    version: impl Fn(&Rbw) -> Result<Version>,
-) -> Result<(Rbw, Option<OutdatedRbw>)> {
-    let Some(installed) = installed else {
-        let bundled = bundled.ok_or(Error::RbwNotFound)?;
-        let version = version(&bundled)?;
-        return Ok((enough(bundled, version)?, None));
-    };
-    let outdated = match version(&installed) {
-        Ok(found) if found.is_enough() => return Ok((installed, None)),
-        Ok(found) => Ok(OutdatedRbw {
-            path: installed.path,
-            version: found.text,
-        }),
-        Err(error) => Err(error),
-    };
-    match (bundled, outdated) {
-        // an rbw that can't say its version can't run an agent either
-        (Some(bundled), outdated) => {
-            let found = version(&bundled)?;
-            Ok((enough(bundled, found)?, outdated.ok()))
-        }
-        (None, Ok(outdated)) => Err(Error::RbwTooOld {
-            found: outdated.version,
-            required: REQUIRED_RBW.to_string(),
-        }),
-        (None, Err(error)) => Err(error),
-    }
+/// The `rbw` bundled with this program, if it has one. Resolved: a link to
+/// the executable, such as one in a folder on `PATH`, leads to where the
+/// app was unpacked.
+fn bundled() -> Option<PathBuf> {
+    let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .ok()?;
+    Some(exe.parent()?.parent()?.join(BUNDLED).join("rbw")).filter(|path| path.is_file())
 }
 
-fn enough(rbw: Rbw, version: Version) -> Result<Rbw> {
-    if version.is_enough() {
-        Ok(rbw)
-    } else {
-        Err(Error::RbwTooOld {
-            found: version.text,
-            required: REQUIRED_RBW.to_string(),
-        })
-    }
-}
-
-fn transient(path: &std::path::Path) -> bool {
+fn transient(path: &Path) -> bool {
     path.starts_with("/Volumes")
         || path
             .components()
@@ -472,69 +433,14 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_rbw_on_path_and_says_when_it_is_too_old() {
-        let installed = || Some(Rbw::at(PathBuf::from("/usr/bin/rbw")));
-        let bundled = || Some(Rbw::at(PathBuf::from("/usr/libexec/rbw-desktop/rbw")));
-        let versions = |on_path: &'static str, next_to_app: &'static str| {
-            move |rbw: &Rbw| match rbw.path.starts_with("/usr/bin") {
-                true if on_path.is_empty() => Err(Error::Other("broken".into())),
-                true => Ok(Version::of(on_path)),
-                false => Ok(Version::of(next_to_app)),
-            }
-        };
-        let chosen = |installed, bundled, on_path, next_to_app| {
-            choose(installed, bundled, versions(on_path, next_to_app))
-                .map(|(rbw, outdated)| (rbw.path, outdated.map(|rbw| rbw.version)))
-        };
-        let usr = PathBuf::from("/usr/bin/rbw");
-        let libexec = PathBuf::from("/usr/libexec/rbw-desktop/rbw");
-
-        assert_eq!(
-            chosen(installed(), bundled(), "rbw-ng 1.19.0", "rbw-ng 1.20.0"),
-            Ok((usr.clone(), None))
-        );
-        assert_eq!(
-            chosen(installed(), bundled(), "rbw-ng 1.18.1", "rbw-ng 1.19.0"),
-            Ok((libexec.clone(), Some("1.18.1".to_string())))
-        );
-        assert_eq!(
-            chosen(installed(), bundled(), "rbw 1.13.2", "rbw-ng 1.19.0"),
-            Ok((libexec.clone(), Some("rbw 1.13.2".to_string())))
-        );
-        assert_eq!(
-            chosen(installed(), bundled(), "", "rbw-ng 1.19.0"),
-            Ok((libexec.clone(), None))
-        );
-        assert_eq!(
-            chosen(None, bundled(), "", "rbw-ng 1.19.0"),
-            Ok((libexec, None))
-        );
-        assert_eq!(
-            chosen(installed(), None, "rbw-ng 1.18.1", ""),
-            Err(Error::RbwTooOld {
-                found: "1.18.1".into(),
-                required: REQUIRED_RBW.into()
-            })
-        );
-        assert_eq!(
-            chosen(None, bundled(), "", "rbw-ng 1.18.1"),
-            Err(Error::RbwTooOld {
-                found: "1.18.1".into(),
-                required: REQUIRED_RBW.into()
-            })
-        );
-        assert_eq!(chosen(None, None, "", ""), Err(Error::RbwNotFound));
-    }
-
-    #[test]
-    fn an_agent_on_a_disk_image_or_translocated_is_transient() {
-        let app = "Fastwarden.app/Contents/Helpers/rbw-agent";
+    fn an_app_on_a_disk_image_or_translocated_is_transient() {
+        let app = "Fastwarden.app/Contents/Helpers/rbw";
         assert!(transient(&PathBuf::from("/Volumes/Fastwarden").join(app)));
         assert!(transient(
             &PathBuf::from("/private/var/folders/x/T/AppTranslocation/1A2B/d").join(app)
         ));
         assert!(!transient(&PathBuf::from("/Applications").join(app)));
-        assert!(!transient(&PathBuf::from("/opt/homebrew/bin/rbw-agent")));
+        assert!(!transient(&PathBuf::from("/opt/homebrew/bin/rbw")));
     }
 
     #[test]

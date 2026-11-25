@@ -39,7 +39,7 @@ pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
     ItemKind, ItemSummary, Login, Revision, SshKey, UriMatch, VerificationCode, Website,
 };
-pub use rbw::{OutdatedRbw, RBW_ENV, REQUIRED_RBW, RbwBackend, session_dir};
+pub use rbw::{RBW_ENV, REQUIRED_RBW, RbwBackend, session_dir};
 pub use secret::Secret;
 pub use settings::{Preferences, SortOrder, WindowPlace};
 pub use ssh::{SshAgentStatus, SshKeySummary, SshService, SshUses};
@@ -213,13 +213,4 @@ pub trait Backend: Send + Sync {
 
     /// The version of rbw the backend uses, for the About page.
     fn rbw_version(&self) -> Result<String>;
-
-    /// An older rbw on `PATH`, when the backend uses the one bundled with
-    /// the app instead. rbw restarts an agent of another version, so the
-    /// command line and the app would each restart the account's agent,
-    /// which locks it, whenever the other used it: ask the person to update
-    /// the one on `PATH`.
-    fn outdated_rbw(&self) -> Option<OutdatedRbw> {
-        None
-    }
 }

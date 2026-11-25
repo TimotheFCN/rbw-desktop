@@ -132,7 +132,7 @@ The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
 until `succeed`, `set_offline`, `set_touch_id`, `sign_out_now` and
 `unlock_now` an account, `set_ssh_supported` and `set_ssh_uses` for the
-SSH agent's states, and `set_outdated_rbw`. A self-hosted address with
+SSH agent's states. A self-hosted address with
 `.invalid` in it leads to no Bitwarden server.
 
 ## How it maps to rbw
@@ -173,22 +173,19 @@ pass for an option.
 
 `RbwBackend::new` needs rbw-ng 1.19.0 or later (`REQUIRED_RBW`), as
 `rbw --version` says; another program called `rbw`, such as the original
-rbw, doesn't count. It uses the `rbw` in `RBW_DESKTOP_RBW` when that is set.
-Otherwise it prefers the one on `PATH`, which the command line runs too, and
-falls back to the one bundled with the app only when there is none on `PATH`
-or it is too old. The packages bundle `rbw` and `rbw-agent` off `PATH`, from
-the folder above the app's executable: in `libexec/rbw-desktop` on Linux
-(`/usr/libexec/rbw-desktop` beside `/usr/bin/rbw-desktop`) and in the
-bundle's `Contents/Helpers` on macOS. It uses the `rbw-agent` next to the
-`rbw` it picked, when there is one.
+rbw, doesn't count. It uses the `rbw` in `RBW_DESKTOP_RBW` when that is set,
+and otherwise the one bundled with the app. The packages bundle `rbw` and
+`rbw-agent` off `PATH`, from the folder above the app's executable: in
+`libexec/rbw-desktop` on Linux (`/usr/libexec/rbw-desktop` beside
+`/usr/bin/rbw-desktop`) and in the bundle's `Contents/Helpers` on macOS. Only
+a build without them, such as one run from source, uses the `rbw` on
+`PATH`. `rbw` starts the `rbw-agent` beside it. Local calls time out after
+30 seconds, calls that reach the server after 120.
 
-The reason is the agent: each profile has one `rbw-agent`, and `rbw` restarts
-an agent of another version, which locks the vault. An app and a command line
-of different versions would each lock the account whenever the other used it.
-When the app has to use its bundled `rbw` while an older one is on `PATH`,
-`Backend::outdated_rbw` returns that one (`OutdatedRbw`, with its path and
-version), so that the interface can ask the person to update it. Local calls
-time out after 30 seconds, calls that reach the server after 120.
+The app runs its own `rbw` whatever else is installed because of the agent:
+each profile has one `rbw-agent`, and `rbw` restarts an agent of another
+version, which locks the vault. An app and a command line of different
+versions would each lock the account whenever the other used it.
 
 With 300 items, `rbw status --json` takes about 2 ms, `rbw item list` 5 ms and
 `rbw item get` 2 ms.

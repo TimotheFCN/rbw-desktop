@@ -29,18 +29,8 @@ const RECENT: usize = 20;
 /// The rbw-ng release with everything this backend uses.
 pub const REQUIRED_RBW: &str = "1.19.0";
 
-/// An rbw on `PATH` older than the one the backend uses.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OutdatedRbw {
-    pub path: PathBuf,
-    /// Its `--version`: a number for rbw-ng, the whole text for another
-    /// program, such as the original rbw.
-    pub version: String,
-}
-
 pub struct RbwBackend {
     rbw: Rbw,
-    outdated: Option<OutdatedRbw>,
     preferences: PathBuf,
     /// Each account's recently used items: ids only.
     recent: PathBuf,
@@ -51,24 +41,13 @@ pub struct RbwBackend {
 
 impl RbwBackend {
     /// Finds an `rbw` that is [`REQUIRED_RBW`] or later: the one in
-    /// [`RBW_ENV`], else the one on `PATH`, else the one next to this
-    /// program.
+    /// [`RBW_ENV`], else the one bundled with this program, else, for a
+    /// build without one, the one on `PATH`.
     pub fn new() -> Result<Self> {
-        let (rbw, outdated) = Rbw::find()?;
-        Self::with_rbw(rbw, outdated)
-    }
-
-    /// Uses the `rbw` at this path, and the `rbw-agent` next to it if there
-    /// is one.
-    pub fn at(rbw: PathBuf) -> Result<Self> {
-        Self::with_rbw(Rbw::checked(rbw)?, None)
-    }
-
-    fn with_rbw(rbw: Rbw, outdated: Option<OutdatedRbw>) -> Result<Self> {
+        let rbw = Rbw::find()?;
         let dirs = app_dirs()?;
         Ok(Self {
             rbw,
-            outdated,
             preferences: dirs.config_dir().join("preferences.json"),
             recent: dirs.config_dir().join("recent.json"),
             recent_lock: Mutex::new(()),
@@ -900,7 +879,7 @@ impl Backend for RbwBackend {
     }
 
     fn install_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        if self.rbw.agent_is_transient() {
+        if self.rbw.is_transient() {
             return Err(Error::AppNotInstalled);
         }
         match self.ssh_agent(account)?.service {
@@ -923,10 +902,6 @@ impl Backend for RbwBackend {
 
     fn rbw_version(&self) -> Result<String> {
         Ok(self.rbw.version()?.text)
-    }
-
-    fn outdated_rbw(&self) -> Option<OutdatedRbw> {
-        self.outdated.clone()
     }
 }
 
