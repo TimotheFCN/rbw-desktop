@@ -137,11 +137,19 @@ impl SettingsWindow {
             Theme::follow_window_appearance(window, cx);
         })
         .detach();
-        // What the SSH agent is doing can change while the window is in
-        // the background, such as when ssh starts it.
+        // What the SSH agent is doing, or which rbw a terminal finds, can
+        // change while the window is in the background.
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() && this.page == Page::SshAgent {
-                this.ssh.update(cx, |ssh, cx| ssh.refresh(cx));
+            if !window.is_window_active() {
+                return;
+            }
+            match this.page {
+                Page::SshAgent => this.ssh.update(cx, |ssh, cx| ssh.refresh(cx)),
+                // The command line tool may have changed in a terminal.
+                Page::General => this
+                    .general
+                    .update(cx, |general, cx| general.refresh_command_line(cx)),
+                _ => {}
             }
         })
         .detach();

@@ -11,6 +11,8 @@
 //! * `slow`: every call takes two seconds, to see what waits;
 //! * `offline`: calls that need the server fail;
 //! * `no-rbw`, `old-rbw`: rbw missing, or too old;
+//! * `cli-on`: the command line tool on; `cli-off-path`: its folder isn't
+//!   on the terminal's `PATH`;
 //! * `ssh-off`: no SSH agent set up; `ssh-unsupported`: none can be;
 //!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
 //!   setting it up fails; `ssh-slow`: setting it up takes a while;
@@ -109,6 +111,12 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
     {
         fake.add_logins(id, 5000);
         fake.set_latency_of(Operation::WebsiteIcon, Duration::from_millis(300));
+    }
+    if wants("cli-on") && fake.set_command_line_tool(true).is_err() {
+        log::error!("the demo's command line tool wasn't turned on");
+    }
+    if wants("cli-off-path") {
+        fake.set_command_line_on_path(false);
     }
     if wants("offline") {
         fake.set_offline(true);

@@ -35,8 +35,8 @@ impl Wait {
 /// Where the packages put the `rbw` and `rbw-agent` that come with the app,
 /// from the folder above the one of its executable: the bundle's
 /// `Contents/Helpers` on macOS, `libexec/rbw-desktop` beside `bin`
-/// elsewhere. Neither is on `PATH`, so they never take the place of the
-/// `rbw` a terminal runs.
+/// elsewhere. Neither is on `PATH`; the command line tool links the
+/// terminal's `rbw` to this one.
 const BUNDLED: &str = if cfg!(target_os = "macos") {
     "Helpers"
 } else {
@@ -45,6 +45,8 @@ const BUNDLED: &str = if cfg!(target_os = "macos") {
 
 pub struct Rbw {
     path: PathBuf,
+    /// Whether it is the one bundled with the app.
+    bundled: bool,
 }
 
 impl Rbw {
@@ -53,10 +55,10 @@ impl Rbw {
     /// source, runs the one on `PATH`. Each must be recent enough.
     pub fn find() -> Result<Self> {
         if let Some(path) = std::env::var_os(RBW_ENV).filter(|path| !path.is_empty()) {
-            return Self::checked(PathBuf::from(path));
+            return Self::checked(PathBuf::from(path), false);
         }
         if let Some(path) = bundled() {
-            return Self::checked(path);
+            return Self::checked(path, true);
         }
         let path = std::env::var_os("PATH")
             .and_then(|path| {
@@ -65,11 +67,11 @@ impl Rbw {
                     .find(|path| path.is_file())
             })
             .ok_or(Error::RbwNotFound)?;
-        Self::checked(path)
+        Self::checked(path, false)
     }
 
-    fn checked(path: PathBuf) -> Result<Self> {
-        let rbw = Self { path };
+    fn checked(path: PathBuf, bundled: bool) -> Result<Self> {
+        let rbw = Self { path, bundled };
         let version = rbw.version()?;
         if version.is_enough() {
             Ok(rbw)
@@ -83,14 +85,22 @@ impl Rbw {
 
     #[cfg(test)]
     fn at(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            bundled: false,
+        }
+    }
+
+    /// The app's own `rbw`: the bundled one, when the app runs it.
+    pub fn own(&self) -> Option<&Path> {
+        self.bundled.then_some(self.path.as_path())
     }
 
     /// Whether `rbw` is somewhere that goes away: in an app on a disk
     /// image, or one that macOS runs from a temporary copy because it was
-    /// opened where it was downloaded (App Translocation). A service set up
-    /// with it would run nothing once the image is ejected or the Mac
-    /// restarts.
+    /// opened where it was downloaded (App Translocation). A service or a
+    /// link set up with it would run nothing once the image is ejected or
+    /// the Mac restarts.
     pub fn is_transient(&self) -> bool {
         cfg!(target_os = "macos") && transient(&self.path)
     }
@@ -234,6 +244,12 @@ fn bundled() -> Option<PathBuf> {
         .and_then(std::fs::canonicalize)
         .ok()?;
     Some(exe.parent()?.parent()?.join(BUNDLED).join("rbw")).filter(|path| path.is_file())
+}
+
+/// Whether `rbw` sits where the packages put the app's: in this app, or in
+/// a copy of it somewhere else.
+pub fn in_an_app(rbw: &Path) -> bool {
+    rbw.ends_with(Path::new(BUNDLED).join("rbw"))
 }
 
 fn transient(path: &Path) -> bool {
@@ -430,6 +446,18 @@ mod tests {
         assert!(!enough(""));
         assert_eq!(Version::of("rbw-ng 1.18.1\n").text, "1.18.1");
         assert_eq!(Version::of("rbw 1.13.2\n").text, "rbw 1.13.2");
+    }
+
+    #[test]
+    fn a_bundled_rbw_is_in_an_app() {
+        let app = if cfg!(target_os = "macos") {
+            "/Applications/Fastwarden.app/Contents/Helpers/rbw"
+        } else {
+            "/usr/libexec/rbw-desktop/rbw"
+        };
+        assert!(in_an_app(Path::new(app)));
+        assert!(!in_an_app(Path::new("/opt/homebrew/bin/rbw")));
+        assert!(!in_an_app(Path::new("/usr/bin/rbw")));
     }
 
     #[test]

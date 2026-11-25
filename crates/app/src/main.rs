@@ -2,6 +2,7 @@ mod accounts;
 mod alerts;
 mod backend;
 mod clipboard;
+mod command_line;
 mod demo;
 #[cfg(feature = "frame-stats")]
 mod frame_stats;

@@ -1,19 +1,21 @@
 //! General: how long each account stays unlocked without being used, when
-//! a copied secret leaves the clipboard, whether websites' icons show, and
-//! the menu bar item.
+//! a copied secret leaves the clipboard, whether websites' icons show, the
+//! menu bar item, and the command line tool.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Window, div, px,
+    AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, div, px,
 };
-use rbw_desktop_core::AccountId;
-use rbw_desktop_ui::{Select, Selected, setting_row, settings_group, switch};
+use rbw_desktop_core::{APP_NAME, AccountId, CommandLineTool, Error, ToolState};
+use rbw_desktop_ui::{Select, Selected, field_error, setting_row, settings_group, switch};
 
 use super::store::Store;
 use crate::accounts::{self, Accounts};
+use crate::backend;
+use crate::command_line;
 use crate::preferences::{self, Prefs};
 use crate::tray::{self, MenuBar};
 
@@ -26,6 +28,13 @@ pub struct GeneralPage {
     /// For each account, how long it stays unlocked, with the choices it
     /// offers: the usual ones and, if it is set to something else, that.
     lock_after: HashMap<AccountId, (Entity<Select>, Vec<Duration>)>,
+    /// The command line tool; `None` until known, or when the app has no
+    /// rbw of its own to link.
+    tool: Option<CommandLineTool>,
+    /// Whether the tool is being turned on or off.
+    tool_busy: Option<bool>,
+    tool_problem: Option<&'static str>,
+    tool_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,10 +74,110 @@ impl GeneralPage {
             store,
             clear_after,
             lock_after: HashMap::new(),
+            tool: None,
+            tool_busy: None,
+            tool_problem: None,
+            tool_task: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.follow_store(cx);
+        this.refresh_command_line(cx);
         this
+    }
+
+    /// Reads the command line tool again, as it may have changed in a
+    /// terminal.
+    pub fn refresh_command_line(&mut self, cx: &mut Context<Self>) {
+        if self.tool_busy.is_some() {
+            return;
+        }
+        self.tool_task = backend::request(
+            cx,
+            |backend| backend.command_line_tool(),
+            |this, result, cx| {
+                match result {
+                    Ok(tool) => this.tool = tool,
+                    Err(error) => log::warn!("reading the command line tool: {error}"),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn set_command_line(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.tool_busy.is_some() {
+            return;
+        }
+        self.tool_busy = Some(on);
+        self.tool_problem = None;
+        cx.notify();
+        self.tool_task = backend::request(
+            cx,
+            move |backend| backend.set_command_line_tool(on),
+            |this, result, cx| {
+                this.tool_busy = None;
+                match result {
+                    // also when the person canceled the administrator's
+                    // prompt, which leaves it as it was
+                    Ok(tool) => this.tool = Some(tool),
+                    Err(error) => {
+                        this.tool_problem = Some(match error {
+                            Error::AppNotInstalled => {
+                                "Move the app to the Applications folder first, then open it from there."
+                            }
+                            ref error => backend::describe(error),
+                        });
+                        this.refresh_command_line(cx);
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    fn render_command_line(&self, tool: &CommandLineTool, cx: &mut Context<Self>) -> AnyElement {
+        let path = command_line::shown(&tool.path);
+        let subtitle = match tool.state {
+            ToolState::On if !tool.on_path => {
+                let folder = tool
+                    .path
+                    .parent()
+                    .map(command_line::shown)
+                    .unwrap_or_default();
+                format!(
+                    "Installed at {path}. Your terminal won’t find it until {folder} is on your PATH."
+                )
+            }
+            ToolState::On => format!("Installed at {path}."),
+            ToolState::Off => {
+                format!("Use rbw in a terminal, with the same accounts as {APP_NAME}.")
+            }
+            ToolState::Taken => format!("Another program is already at {path}."),
+        };
+        let on = self.tool_busy.unwrap_or(tool.state == ToolState::On);
+        let set = cx.listener(|this, on: &bool, _, cx| this.set_command_line(*on, cx));
+        let group = settings_group(
+            None,
+            [setting_row(
+                "Command line tool",
+                Some(subtitle.into()),
+                switch("command-line", on, "Command line tool")
+                    .disabled(tool.state == ToolState::Taken)
+                    .on_change(move |on, window, cx| set(&on, window, cx)),
+                cx,
+            )],
+            cx,
+        );
+        let below = self
+            .tool_problem
+            .map(|problem| field_error(problem, cx).px(px(4.)));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(group)
+            .children(below)
+            .into_any_element()
     }
 
     /// Keeps a lock timeout menu for each account whose settings are known.
@@ -229,12 +338,17 @@ impl Render for GeneralPage {
             ],
             cx,
         );
+        let tool = self
+            .tool
+            .clone()
+            .map(|tool| self.render_command_line(&tool, cx));
         div()
             .flex()
             .flex_col()
             .gap(px(22.))
             .children(lock_group)
             .child(other)
+            .children(tool)
     }
 }
 

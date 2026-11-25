@@ -20,6 +20,7 @@ main thread. Errors are `Error` values, never text to parse.
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
+| Command line | `command_line_tool`, `set_command_line_tool` |
 | About | `rbw_version` |
 
 An account is an rbw profile (`RBW_PROFILE`), shared with the command line.
@@ -132,7 +133,8 @@ The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
 until `succeed`, `set_offline`, `set_touch_id`, `sign_out_now` and
 `unlock_now` an account, `set_ssh_supported` and `set_ssh_uses` for the
-SSH agent's states. A self-hosted address with
+SSH agent's states, and `set_command_line_on_path`. A self-hosted address
+with
 `.invalid` in it leads to no Bitwarden server.
 
 ## How it maps to rbw
@@ -170,6 +172,7 @@ pass for an option.
 | `account_settings`, `set_account_settings` | `rbw config show`, `rbw config set` |
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |
 | `install_ssh_agent`, `uninstall_ssh_agent` | `rbw ssh-agent install`, `rbw ssh-agent uninstall` |
+| `command_line_tool`, `set_command_line_tool` | none: a link to the bundled `rbw` |
 
 `RbwBackend::new` needs rbw-ng 1.19.0 or later (`REQUIRED_RBW`), as
 `rbw --version` says; another program called `rbw`, such as the original
@@ -185,7 +188,19 @@ a build without them, such as one run from source, uses the `rbw` on
 The app runs its own `rbw` whatever else is installed because of the agent:
 each profile has one `rbw-agent`, and `rbw` restarts an agent of another
 version, which locks the vault. An app and a command line of different
-versions would each lock the account whenever the other used it.
+versions would each lock the account whenever the other used it. So the
+terminal gets the app's own `rbw` through the command line tool
+(`command_line_tool`, `set_command_line_tool`): a link to the bundled `rbw`
+at `/usr/local/bin/rbw` on macOS, or `~/.local/bin/rbw` on Linux, which the
+two then share with its agent. Its state is read from the link: on when it
+leads to the bundled `rbw`; off when there is none, or one leading where the
+app used to be (nowhere, or another copy of the app), which turning it on
+replaces. Anything else there is another program, left alone. On macOS,
+where `/usr/local/bin` may belong to an administrator, turning it on or off
+asks for one with the system's prompt (`osascript`); a cancelled prompt
+leaves it as it was. It refuses while the app runs from its disk image or a
+temporary copy (`AppNotInstalled`). A build without a bundled `rbw` has no
+command line tool.
 
 With 300 items, `rbw status --json` takes about 2 ms, `rbw item list` 5 ms and
 `rbw item get` 2 ms.

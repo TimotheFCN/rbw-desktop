@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, the sidebar, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; `command_line.rs` names the command line tool's place; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -19,12 +19,13 @@ The app runs on `RbwBackend`: the `rbw` in `RBW_DESKTOP_RBW`, else the one
 bundled with the app (`crates/core/README.md` says where), else, for a
 build without one, the one on `PATH`. When it is missing or too old the
 main window says so and offers to look again (`backend::connect`,
-`crate::start`).
+`crate::start`). The terminal gets the bundled one through Settings,
+General, Command line tool.
 
 `RBW_DESKTOP_DEMO`, set even empty, runs it on `FakeBackend` instead
 (`demo.rs`): without words both demo accounts start locked; `first-run`,
 `unlocked`, `signed-out`, `touch-id`, `touch-id-cancel`, `slow`, `offline`, `no-rbw`,
-`old-rbw`, `no-icons`, `big`, `panel`, `settings`, `new-item` and the
+`old-rbw`, `cli-on`, `cli-off-path`, `no-icons`, `big`, `panel`, `settings`, `new-item` and the
 `ssh-*` words, comma-separated, reach the other states (`demo.rs` lists
 them); `panel` opens the menu bar panel alone, as a click on the item
 would, and `settings` the Settings window over the main one. The demo's
@@ -175,8 +176,8 @@ packaging/icon/render.py                          # after changing the icon
 
 Every package bundles `rbw` and `rbw-agent`, built from the rbw-ng checkout
 in `RBW_NG` (only read; built into `target/package/rbw-ng`) where the app
-finds them (`crates/core/README.md`): off `PATH`, so they never take the
-place of a terminal's `rbw`. Releases bundle the revision in
+finds them (`crates/core/README.md`): off `PATH`, until the command line
+tool links the terminal's `rbw` to them. Releases bundle the revision in
 `packaging/rbw-ng-revision`; the scripts say when the checkout is at
 another. `packaging/lib.sh` holds what the scripts share: the app's id, name
 and version, read from the code, the rbw-ng build, and the licences every

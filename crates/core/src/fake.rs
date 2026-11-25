@@ -14,10 +14,10 @@ use rand::Rng as _;
 use rand::seq::IndexedRandom as _;
 
 use crate::{
-    Account, AccountId, AccountSettings, Backend, Error, Folder, FolderId, GeneratorOptions,
-    IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService, SshUses,
-    TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
+    Account, AccountId, AccountSettings, Backend, CommandLineTool, Error, Folder, FolderId,
+    GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
+    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
+    SshUses, ToolState, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
 
 /// A call to the backend, to make that one fail or wait.
@@ -57,6 +57,8 @@ pub enum Operation {
     InstallSshAgent,
     UninstallSshAgent,
     RbwVersion,
+    CommandLineTool,
+    SetCommandLineTool,
 }
 
 pub struct FakeBackend {
@@ -77,6 +79,7 @@ struct State {
     ssh_supported: bool,
     // what ssh uses instead of an installed agent
     ssh_elsewhere: Option<SshUses>,
+    command_line: CommandLineTool,
     next_id: u64,
 }
 
@@ -161,6 +164,18 @@ impl FakeBackend {
                 ssh_agent: Some(AccountId::new(demo::PERSONAL)),
                 ssh_supported: true,
                 ssh_elsewhere: None,
+                command_line: CommandLineTool {
+                    path: if cfg!(target_os = "macos") {
+                        PathBuf::from("/usr/local/bin")
+                    } else {
+                        std::env::var_os("HOME")
+                            .map_or_else(|| PathBuf::from("/home/demo"), PathBuf::from)
+                            .join(".local/bin")
+                    }
+                    .join("rbw"),
+                    state: ToolState::Off,
+                    on_path: true,
+                },
                 next_id: 1,
             }),
         }
@@ -231,6 +246,11 @@ impl FakeBackend {
     /// login session hasn't picked it up yet; `None` lets it use the agent.
     pub fn set_ssh_uses(&self, uses: Option<SshUses>) {
         self.state().ssh_elsewhere = uses;
+    }
+
+    /// Whether a terminal looks in the command line tool's folder.
+    pub fn set_command_line_on_path(&self, on_path: bool) {
+        self.state().command_line.on_path = on_path;
     }
 
     /// Signs an account out, keeping it on this computer with its email
@@ -1032,6 +1052,28 @@ impl Backend for FakeBackend {
     fn rbw_version(&self) -> Result<String> {
         drop(self.call(Operation::RbwVersion)?);
         Ok("demo".to_string())
+    }
+
+    fn command_line_tool(&self) -> Result<Option<CommandLineTool>> {
+        Ok(Some(
+            self.call(Operation::CommandLineTool)?.command_line.clone(),
+        ))
+    }
+
+    fn set_command_line_tool(&self, on: bool) -> Result<CommandLineTool> {
+        let mut state = self.call(Operation::SetCommandLineTool)?;
+        let tool = &mut state.command_line;
+        match (tool.state, on) {
+            (ToolState::Taken, true) => {
+                return Err(Error::Other(format!(
+                    "{} is another program",
+                    tool.path.display()
+                )));
+            }
+            (ToolState::Taken, false) => {}
+            (_, on) => tool.state = if on { ToolState::On } else { ToolState::Off },
+        }
+        Ok(tool.clone())
     }
 }
 

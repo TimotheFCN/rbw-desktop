@@ -171,7 +171,8 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
 
 ### Settings
 
-* General (lock timeout, clipboard clearing, website icons), Accounts,
+* General (lock timeout, clipboard clearing, website icons, the command
+  line tool), Accounts,
   SSH Agent, About.
 
 ## What it does not do

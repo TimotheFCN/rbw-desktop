@@ -66,9 +66,13 @@ a command line Bitwarden client, and comes with its own copy. `rbw-agent`
 holds the vault's key while it is unlocked, so the app itself never sees
 it, and locks it after the timeout you choose.
 
-Each account is an rbw profile. The app always runs its own copy of rbw-ng:
-an `rbw` of another version would restart its agent, which locks the
-vault.
+Each account is an rbw profile. To use `rbw` in a terminal too, turn on
+Settings, General, Command line tool: it puts the app's own `rbw` at
+`/usr/local/bin/rbw` on macOS (asking for an administrator's password if
+that folder needs one) or `~/.local/bin/rbw` on Linux. The terminal and the
+app then share the accounts, the unlocked vaults and the SSH agent. Don't
+install rbw-ng separately next to the app: two versions lock each other's
+vault. If you move the app, turn the command line tool on again.
 
 ## SSH agent
 

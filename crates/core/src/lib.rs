@@ -9,6 +9,7 @@
 //! long as the caller keeps them.
 
 mod account;
+mod command_line;
 mod error;
 mod fake;
 mod generator;
@@ -31,6 +32,7 @@ pub const APP_NAME: &str = "Fastwarden";
 pub use account::{
     Account, AccountId, AccountSettings, LockState, LoginCode, Server, TwoStepMethod,
 };
+pub use command_line::{CommandLineTool, ToolState};
 pub use error::{Error, Result};
 pub use fake::{FakeBackend, Operation};
 pub use generator::{CharacterClasses, Characters, GeneratorOptions, Strength};
@@ -213,4 +215,18 @@ pub trait Backend: Send + Sync {
 
     /// The version of rbw the backend uses, for the About page.
     fn rbw_version(&self) -> Result<String>;
+
+    /// The command line tool, which puts the app's own `rbw` in a folder a
+    /// terminal looks in. `None` when the app doesn't run an `rbw` of its
+    /// own, as when it was built without one: there is nothing to link.
+    fn command_line_tool(&self) -> Result<Option<CommandLineTool>>;
+
+    /// Turns the command line tool on or off. Turning it on replaces a link
+    /// to where the app used to be, never another program; on macOS, where
+    /// `/usr/local/bin` may need an administrator, it asks for one with the
+    /// system's prompt, and the tool stays off if the person cancels. It
+    /// fails with [`Error::AppNotInstalled`] while the app runs from its disk
+    /// image or a temporary copy. Turning it off removes only the app's own
+    /// link.
+    fn set_command_line_tool(&self, on: bool) -> Result<CommandLineTool>;
 }

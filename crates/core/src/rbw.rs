@@ -2,6 +2,7 @@
 //! process per call, `RBW_PROFILE` for the account, JSON in and out. The
 //! vault stays unlocked in each profile's `rbw-agent` between calls.
 
+mod command_line;
 mod icons;
 mod json;
 mod process;
@@ -11,15 +12,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use command_line::Link;
 use icons::IconCache;
 use json::{ItemJson, ProfileJson, StatusJson};
 pub use process::RBW_ENV;
 use process::{Rbw, Wait};
 
 use crate::{
-    Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, Error, Folder,
-    FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState, LoginCode,
-    Preferences, Result, Secret, Server, SortOrder, SshAgentStatus, SshService, SshUses,
+    Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, CommandLineTool,
+    Error, Folder, FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState,
+    LoginCode, Preferences, Result, Secret, Server, SortOrder, SshAgentStatus, SshService, SshUses,
     VerificationCode, WebsiteIcon, WindowPlace, icon,
 };
 
@@ -31,6 +33,8 @@ pub const REQUIRED_RBW: &str = "1.19.0";
 
 pub struct RbwBackend {
     rbw: Rbw,
+    /// The command line tool, when the app runs its bundled `rbw`.
+    command_line: Option<Link>,
     preferences: PathBuf,
     /// Each account's recently used items: ids only.
     recent: PathBuf,
@@ -46,7 +50,17 @@ impl RbwBackend {
     pub fn new() -> Result<Self> {
         let rbw = Rbw::find()?;
         let dirs = app_dirs()?;
+        let home = directories::BaseDirs::new()
+            .ok_or_else(|| Error::Other("this system has no home folder".into()))?
+            .home_dir()
+            .to_path_buf();
+        let folder = if cfg!(target_os = "macos") {
+            PathBuf::from("/usr/local/bin")
+        } else {
+            home.join(".local/bin")
+        };
         Ok(Self {
+            command_line: rbw.own().map(|own| Link::new(&folder, own)),
             rbw,
             preferences: dirs.config_dir().join("preferences.json"),
             recent: dirs.config_dir().join("recent.json"),
@@ -902,6 +916,30 @@ impl Backend for RbwBackend {
 
     fn rbw_version(&self) -> Result<String> {
         Ok(self.rbw.version()?.text)
+    }
+
+    fn command_line_tool(&self) -> Result<Option<CommandLineTool>> {
+        Ok(self.command_line.as_ref().map(Link::status))
+    }
+
+    fn set_command_line_tool(&self, on: bool) -> Result<CommandLineTool> {
+        let link = self
+            .command_line
+            .as_ref()
+            .ok_or_else(|| Error::Other("this build has no rbw of its own to link".into()))?;
+        #[cfg(target_os = "macos")]
+        let elevate: Option<command_line::Elevate> = Some(&command_line::as_administrator);
+        #[cfg(not(target_os = "macos"))]
+        let elevate: Option<command_line::Elevate> = None;
+        if on {
+            if self.rbw.is_transient() {
+                return Err(Error::AppNotInstalled);
+            }
+            link.turn_on(elevate)?;
+        } else {
+            link.turn_off(elevate)?;
+        }
+        Ok(link.status())
     }
 }
 

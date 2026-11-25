@@ -176,6 +176,7 @@ pub struct Switch {
     id: ElementId,
     on: bool,
     label: SharedString,
+    disabled: bool,
     on_change: Option<ToggleHandler>,
 }
 
@@ -186,11 +187,18 @@ pub fn switch(id: impl Into<ElementId>, on: bool, label: impl Into<SharedString>
         id: id.into(),
         on,
         label: label.into(),
+        disabled: false,
         on_change: None,
     }
 }
 
 impl Switch {
+    /// Shown, dimmed, but not to be changed.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
     pub fn on_change(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Box::new(handler));
         self
@@ -215,6 +223,7 @@ impl RenderOnce for Switch {
 
         BaseSwitch::new(self.id)
             .checked(self.on)
+            .disabled(self.disabled)
             .accessibility_label(self.label)
             .when_some(self.on_change, |s, handler| {
                 s.on_change(move |on, _, window, cx| handler(on, window, cx))
@@ -225,6 +234,7 @@ impl RenderOnce for Switch {
             .h(height)
             .rounded_full()
             .bg(track)
+            .when(self.disabled, |s| s.opacity(0.45))
             .focus_visible(ring)
             .child(
                 div()

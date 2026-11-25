@@ -76,6 +76,8 @@ settings, in their own window:
   ssh-unsupported    the system can't run it
   ssh-remove         asking before removing it
   settings-about     About
+  settings-cli       General, with the command line tool off
+  settings-cli-on    the command line tool on
 
   gallery        the design system gallery
 
@@ -156,6 +158,7 @@ first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new
 	;;
 offline) state_demo=first-run,offline ;;
 wrong-server) state_demo=first-run ;;
+settings-cli-on) state_demo=unlocked,cli-on ;;
 signed-out) state_demo=first-run,signed-out ;;
 *) state_demo=unlocked ;;
 esac
@@ -251,6 +254,8 @@ act() {
 	ssh-other) settings_page 2 && into_page 1 && xdotool key Return sleep 0.4 key Down Down Return ;;
 	ssh-remove) settings_page 2 && into_page 2 && xdotool key Return ;;
 	settings-about) settings_page 3 ;;
+	# The page's end, where the command line tool is.
+	settings-cli | settings-cli-on) settings_page 0 ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.
 	logins) click $((sidebar / 2)) $((sidebar_top + nav * 2 + 30 + nav / 2)) ;;
