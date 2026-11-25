@@ -165,8 +165,8 @@ with Bitwarden's desktop app 2026.11.0, both from their amd64 `.deb`, on
 one x86_64 Linux machine without a GPU, on the same private display at 2x.
 Measure it again before changing the README's numbers.
 
-* Download and installed: the `.deb`'s size, and `du -sb --apparent-size`
-  of what it unpacks.
+* Download and installed: the size of each release's universal `.dmg` and
+  amd64 `.deb`, and `du -sb --apparent-size` of what the `.deb` unpacks.
 * Memory: the proportional memory (`Pss` in `/proc/PID/smaps_rollup`) of
   every process of the app, 10 to 20 seconds after its sign-in screen
   appeared. Fastwarden is one process (`RBW_DESKTOP_DEMO=first-run`),

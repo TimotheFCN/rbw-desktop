@@ -16,13 +16,15 @@ memory of Bitwarden's own desktop app and is a ninth of the download.
 
 | | Fastwarden 0.0.1 | Bitwarden 2026.11.0 |
 | --- | --- | --- |
-| Download | 14 MB | 130 MB |
-| Installed | 57 MB | 454 MB |
+| Download, macOS | 28 MB | 310 MB |
+| Download, Linux | 14 MB | 130 MB |
+| Installed, Linux | 57 MB | 454 MB |
 | Memory at the sign-in screen | 180 MB | 355 MB |
 | Launch until the window is drawn | 0.3 s | 0.7 s |
 
-Both apps measured from their `.deb` on the same Linux machine, without a
-GPU. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#size-and-start-up) says how.
+Memory and launch measured from each app's `.deb` on the same Linux
+machine, without a GPU.
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#size-and-start-up) says how.
 
 Fastwarden is unofficial. Bitwarden, Inc. doesn't make it or endorse it.
 
