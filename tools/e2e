@@ -392,6 +392,13 @@ step unlocked-again "query 'j[\"status\"]' '' status --json | grep -qx unlocked"
 keys ctrl+w
 sleep 1
 check closed-but-running "[[ -z \$(xdotool search --name '^Vault\$') ]] && kill -0 $app_pid"
+# The panel is then the only window: a click on the item opens it and
+# another closes it, which leaves the app running too.
+x11_tray_click 600 300
+until_true "[[ -n \$(xdotool search --name '^Fastwarden\$') ]]" || true
+x11_tray_click 600 300
+sleep 1
+check panel-toggled-alone "[[ -z \$(xdotool search --name '^Fastwarden\$') ]] && kill -0 $app_pid"
 x11_tray_menu "Open Vault"
 x11_window '^Vault$' 10
 main=$window

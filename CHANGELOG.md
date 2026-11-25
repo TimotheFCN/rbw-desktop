@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+* Fixed a crash when a click on the menu bar item closed its panel while
+  no other window was open.
+
 ## [0.0.1] - 2026-11-25
 
 The first release, for macOS 12 or later and Linux, with rbw-ng 1.19.0

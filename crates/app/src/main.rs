@@ -84,11 +84,15 @@ fn main() {
         #[cfg(feature = "frame-stats")]
         frame_stats::init(cx);
         // Without a menu bar item to come back to, closing the last
-        // window ends the app.
+        // window ends the app. Whoever closed it is still being updated
+        // here, and that may be the menu bar item itself, closing its
+        // panel: ask it once that update is over.
         cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() && !tray::keeps_app_running(cx) {
-                cx.quit();
-            }
+            cx.defer(|cx| {
+                if cx.windows().is_empty() && !tray::keeps_app_running(cx) {
+                    cx.quit();
+                }
+            });
         })
         .detach();
         if let Some(instance) = instance {
