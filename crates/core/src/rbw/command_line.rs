@@ -204,6 +204,7 @@ mod tests {
     use std::fs::Permissions;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
+    use super::super::process::BUNDLED;
     use super::*;
 
     /// A folder of its own for a test, removed after it.
@@ -236,7 +237,7 @@ mod tests {
     }
 
     fn app_rbw(scratch: &Scratch, app: &str) -> PathBuf {
-        scratch.file(&format!("{app}/libexec/rbw-desktop/rbw"))
+        scratch.file(&format!("{app}/{BUNDLED}/rbw"))
     }
 
     #[test]
@@ -264,7 +265,7 @@ mod tests {
         let link = Link::new(&scratch.0.join("bin"), &own);
         std::fs::create_dir(scratch.0.join("bin")).unwrap();
         // the app before it moved
-        symlink(scratch.0.join("gone/libexec/rbw-desktop/rbw"), &link.path).unwrap();
+        symlink(scratch.0.join("gone").join(BUNDLED).join("rbw"), &link.path).unwrap();
         assert_eq!(link.status().state, ToolState::Off);
         link.turn_on(None).unwrap();
         assert_eq!(link.status().state, ToolState::On);
@@ -388,7 +389,7 @@ mod tests {
         );
         assert_eq!(first_other(folders(&["cargo/bin"]), &own), Some(cargo));
         assert_eq!(
-            first_other(folders(&["bin", "app/libexec/rbw-desktop"]), &own),
+            first_other(folders(&["bin", &format!("app/{BUNDLED}")]), &own),
             None
         );
     }

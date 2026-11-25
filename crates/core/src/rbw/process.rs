@@ -37,7 +37,7 @@ impl Wait {
 /// `Contents/Helpers` on macOS, `libexec/rbw-desktop` beside `bin`
 /// elsewhere. Neither is on `PATH`; the command line tool links the
 /// terminal's `rbw` to this one.
-const BUNDLED: &str = if cfg!(target_os = "macos") {
+pub(super) const BUNDLED: &str = if cfg!(target_os = "macos") {
     "Helpers"
 } else {
     "libexec/rbw-desktop"
