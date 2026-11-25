@@ -160,6 +160,26 @@ vault open, then with only the menu bar item left. Mesa's software Vulkan
 counts towards the memory there, about 100 MB of it, which a GPU's driver
 mostly keeps elsewhere.
 
+**Against Bitwarden's app.** The README's table compares Fastwarden 0.0.1
+with Bitwarden's desktop app 2026.11.0, both from their amd64 `.deb`, on
+one x86_64 Linux machine without a GPU, on the same private display at 2x.
+Measure it again before changing the README's numbers.
+
+* Download and installed: the `.deb`'s size, and `du -sb --apparent-size`
+  of what it unpacks.
+* Memory: the proportional memory (`Pss` in `/proc/PID/smaps_rollup`) of
+  every process of the app, 10 to 20 seconds after its sign-in screen
+  appeared. Fastwarden is one process (`RBW_DESKTOP_DEMO=first-run`),
+  Bitwarden six. With a vault open Fastwarden takes 190 MB, and `rbw-agent`
+  another 10 MB. At least 85 MB of Fastwarden's figure is Mesa's software
+  renderer (libLLVM, lavapipe and its device memory), which a machine with
+  a GPU doesn't load.
+* Launch until the window is drawn: from starting the app to the first
+  frame in which the middle of its window shows 30 colours or more, the
+  median of five warm launches. That waits for Fastwarden's fade-in and
+  for Bitwarden's sign-in form. Fastwarden's first frame is there after
+  120 ms.
+
 The packages are built with the `dist` profile, the release profile with a
 whole-program LTO, which trims 7% off the binary and takes three times as
 long to build. Most of the rest is GPUI's and the menu bar item's: D-Bus
@@ -257,18 +277,29 @@ rbw-ng at the pinned revision, which must be pushed to GitHub.
 
 To release:
 
-1. Set the version in `Cargo.toml` and add a `<release>` to
-   `packaging/linux/*.metainfo.xml`. Update `packaging/rbw-ng-revision` if
+1. Set the version in `Cargo.toml` (`cargo update -w` carries it to
+   `Cargo.lock`) and add a `<release>` to `packaging/linux/*.metainfo.xml`. Update `packaging/rbw-ng-revision` if
    the app needs a newer rbw-ng.
-2. Commit, then push a tag of the bare version, such as `0.1.0`.
-3. `.github/workflows/release.yaml` builds the universal .dmg and the Linux
+2. Move what changed into a section for the version in `CHANGELOG.md`.
+   The release's notes are that section (`packaging/release-notes.sh`).
+3. Commit, wait for CI, then push a tag of the bare version, such as
+   `0.0.1`.
+4. `.github/workflows/release.yaml` builds the universal .dmg and the Linux
    packages for x86_64 and arm64, checks them (the Linux ones end to end
-   against Vaultwarden, on the rbw they bundle), and attaches them to a
-   draft release.
-4. Read the draft, then publish it.
+   against Vaultwarden, on the rbw they bundle), publishes them as a GitHub
+   release, and pushes the cask that `packaging/homebrew/cask.sh` writes to
+   `Casks/fastwarden.rb` in
+   [TimotheFCN/homebrew-tap](https://github.com/TimotheFCN/homebrew-tap).
+
+The files of a release carry no version in their names, so that the
+README's links to `releases/latest/download/…` always lead to the newest.
 
 The .dmg is signed with a Developer ID and notarized when the repository
-has the secrets the workflow lists, and signed ad hoc otherwise.
+has the secrets the workflow lists, and signed ad hoc otherwise. While it
+is ad hoc, macOS blocks the first launch of a downloaded copy, and the
+README, the release's notes and the cask say how to open it. Without the
+`HOMEBREW_TAP_TOKEN` secret the workflow keeps the cask as an artifact
+(`homebrew-cask`) to push by hand.
 
 ## Patterns
 

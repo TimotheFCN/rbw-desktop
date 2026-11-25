@@ -1,121 +1,190 @@
 # Fastwarden
 
-A fast desktop app for Bitwarden and Vaultwarden vaults, on macOS and Linux.
-Find a password, copy it and save a new one in a window that opens at once.
-It is unofficial: Bitwarden, Inc. doesn't make it. Fastwarden is the app of
-the rbw-desktop project, which is why its files and packages are named
-`rbw-desktop`.
+A fast desktop client for [Bitwarden](https://bitwarden.com) and
+[Vaultwarden](https://github.com/dani-garcia/vaultwarden), for macOS and
+Linux.
 
-![The vault on macOS](docs/screenshots/macos-vault.png)
+Fastwarden is written in Rust and draws its interface on the GPU with
+[GPUI](https://www.gpui.rs), the framework behind the Zed editor. There is
+no browser engine inside. It starts in a third of a second, uses half the
+memory of Bitwarden's own desktop app and is a ninth of the download.
 
-![The vault on Linux, in GNOME's style](docs/screenshots/linux-vault.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/macos-vault-dark.png">
+  <img alt="The vault on macOS" src="docs/screenshots/macos-vault.png">
+</picture>
+
+| | Fastwarden 0.0.1 | Bitwarden 2026.11.0 |
+| --- | --- | --- |
+| Download | 14 MB | 130 MB |
+| Installed | 57 MB | 454 MB |
+| Memory at the sign-in screen | 180 MB | 355 MB |
+| Launch until the window is drawn | 0.3 s | 0.7 s |
+
+Both apps measured from their `.deb` on the same Linux machine, without a
+GPU. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#size-and-start-up) says how.
+
+Fastwarden is unofficial. Bitwarden, Inc. doesn't make it or endorse it.
+
+## What it does
 
 * Several accounts side by side, on bitwarden.com, bitwarden.eu or your own
   server.
-* Logins, cards, identities, notes and SSH keys: search, copy, create, edit.
-  Verification codes count down as you look.
+* Logins, cards, identities, notes and SSH keys. Search, sort, copy, create,
+  edit and delete them. Verification codes count down as you look.
 * A generator for passwords, passphrases and PINs.
-* A menu bar item, or a tray item on Linux desktops that show one, with the
-  items you used last and the generator.
-* A copied password is cleared from the clipboard after a while, and when
-  the vault locks.
-* Unlock with Touch ID on a Mac that has it.
-* rbw's SSH agent, set up from Settings, serves the SSH keys in your vault.
+* A menu bar item with the items you used last and the generator. On Linux
+  it is a tray item, on desktops that show one.
+* Touch ID unlock on a Mac that has it.
+* A copied password leaves the clipboard after a while, and when the vault
+  locks.
+* An SSH agent for the SSH keys in your vault, and the `rbw` command line.
+  Both are off until you turn them on.
+* The look of the system it runs on, in light and dark. It follows macOS
+  conventions on a Mac and GNOME's on Linux.
+
+<p>
+  <img alt="A login on Linux, in GNOME's dark style" src="docs/screenshots/linux-item-dark.png" height="330">
+  <img alt="The menu bar item's panel" src="docs/screenshots/macos-panel.png" height="330">
+</p>
+
+It doesn't do attachments, Sends, passkeys or organization administration
+yet, and it doesn't fill in forms in your browser. Keep the Bitwarden
+browser extension for that. There is no Windows version.
 
 ## Install
 
-Download the file for your system from the
-[releases](https://github.com/TimotheFCN/rbw-desktop/releases).
+### macOS
 
-**macOS** 12 or later: open `rbw-desktop-VERSION-macos-universal.dmg` and
-drag Fastwarden to Applications. If macOS says it can't check the app,
-that release isn't notarized: open System Settings, Privacy & Security, and
-choose Open Anyway next to Fastwarden.
-
-**Ubuntu, Debian** and their derivatives (Ubuntu 24.04, Debian 13 or later):
+macOS 12 or later, on Apple Silicon or Intel. With
+[Homebrew](https://brew.sh):
 
 ```sh
-sudo apt install ./rbw-desktop_VERSION_amd64.deb
+brew install --cask timothefcn/tap/fastwarden
 ```
 
-**Other Linux systems**, such as Fedora or Arch: the tarball is laid out
-like `/usr`, so it unpacks into `~/.local`:
+Or download
+[rbw-desktop-macos-universal.dmg](https://github.com/TimotheFCN/rbw-desktop/releases/latest/download/rbw-desktop-macos-universal.dmg),
+open it and drag Fastwarden to Applications.
+
+**macOS blocks the first launch, and that is expected for now.** Apple
+hasn't notarized Fastwarden yet, so the first time you open it macOS says it
+could not verify the app. Choose Done, then open System Settings, Privacy &
+Security, scroll down to Security and choose Open Anyway next to Fastwarden.
+You do this once.
+
+### Linux
+
+On Ubuntu 24.04, Debian 13 and later, download the `.deb` for
+[x86_64](https://github.com/TimotheFCN/rbw-desktop/releases/latest/download/rbw-desktop_amd64.deb)
+or
+[arm64](https://github.com/TimotheFCN/rbw-desktop/releases/latest/download/rbw-desktop_arm64.deb)
+and install it:
 
 ```sh
-tar -xJf rbw-desktop-VERSION-x86_64-linux.tar.xz -C ~/.local --strip-components=1
+sudo apt install ./rbw-desktop_amd64.deb
 ```
 
-The app shows in your applications once `~/.local/bin` is on your `PATH`,
-which most systems set up at login when the folder exists. To remove it,
-delete what the tarball lists from `~/.local`.
+On other distributions with glibc 2.39 or later, such as Fedora or Arch,
+download the tarball for
+[x86_64](https://github.com/TimotheFCN/rbw-desktop/releases/latest/download/rbw-desktop-x86_64-linux.tar.xz)
+or
+[arm64](https://github.com/TimotheFCN/rbw-desktop/releases/latest/download/rbw-desktop-aarch64-linux.tar.xz).
+It is laid out like `/usr`, so it unpacks into `~/.local`:
 
-Packages for arm64 Linux are there too. There's no Windows version, as
-rbw-ng runs only on Unix.
+```sh
+tar -xJf rbw-desktop-x86_64-linux.tar.xz -C ~/.local --strip-components=1
+```
 
-## First run
+Fastwarden shows up in your applications once `~/.local/bin` is on your
+`PATH`, which most systems set up at login when the folder exists. To remove
+it, delete the files the tarball lists.
 
-Choose your server (bitwarden.com, bitwarden.eu or the address of your
-own), then enter your email, your master password and, if your account has
-two-step login, the code. Add more accounts from the account button at the
-bottom of the sidebar.
+Every file, with its checksum, is on the
+[releases page](https://github.com/TimotheFCN/rbw-desktop/releases).
 
-## rbw-ng
+## Getting started
 
-The app keeps your vault with [rbw-ng](https://github.com/TimotheFCN/rbw-ng),
-a command line Bitwarden client, and comes with its own copy. `rbw-agent`
-holds the vault's key while it is unlocked, so the app itself never sees
-it, and locks it after the timeout you choose.
+1. Open Fastwarden and choose your server: bitwarden.com, bitwarden.eu or
+   the address of your own.
+2. Enter your email and master password, then the two-step code if your
+   account has one. bitwarden.com can also ask for your account's
+   [personal API key](https://bitwarden.com/help/personal-api-key/) the
+   first time, because it treats clients it doesn't know as bots.
+3. Your vault opens. Add more accounts from the account button at the
+   bottom of the sidebar.
 
-Each account is an rbw profile. To use `rbw` in a terminal too, turn on
-Settings, General, Command line tool: it puts the app's own `rbw` at
-`/usr/local/bin/rbw` on macOS (asking for an administrator's password if
-that folder needs one) or `~/.local/bin/rbw` on Linux. The terminal and the
-app then share the accounts, the unlocked vaults and the SSH agent. Don't
-install rbw-ng separately next to the app: two versions lock each other's
-vault, and the app says so when it finds another `rbw`. If you move the
-app, turn the command line tool on again.
+Settings holds the lock timeout, Touch ID, the SSH agent and the command
+line tool.
 
-## SSH agent
+## Built on rbw-ng
 
-Settings, SSH Agent, sets up rbw's agent as a login service: it serves the
-SSH keys stored in your vault to `ssh`, and asks for your master password
-when the vault is locked. On macOS the page shows the line to add to
-`~/.ssh/config`; on Linux the login session points `SSH_AUTH_SOCK` at it.
-On a Mac, set it up again if you move the app, since the service runs the
-agent inside it.
+Fastwarden is a window onto
+[rbw-ng](https://github.com/TimotheFCN/rbw-ng), a command line Bitwarden
+client, and comes with its own copy. You don't install anything else.
+rbw-ng's agent holds the vault's key while the vault is unlocked and locks
+it after the timeout you choose. The app never sees the key, and it asks
+the agent for a password only to show or copy it.
+
+Two more things come with it. Turn them on in Settings if you want them.
+
+* **The command line.** General, Command line tool, puts the app's `rbw` on
+  your `PATH`, at `/usr/local/bin/rbw` on macOS and `~/.local/bin/rbw` on
+  Linux. `rbw get github` in a terminal then uses the same accounts and the
+  same unlocked vault as the app.
+* **An SSH agent.** SSH Agent sets up rbw-ng's agent as a login service that
+  serves the SSH keys in your vault to `ssh` and `git`. On macOS the page
+  shows the line to add to `~/.ssh/config`. On Linux your session's
+  `SSH_AUTH_SOCK` points to it.
+
+Don't install rbw-ng separately next to the app. Two different versions
+lock each other's vault, and Fastwarden tells you when it finds another
+`rbw`. If you move the app, turn both on again, since they point inside it.
 
 ## Privacy
 
-* The app, through rbw, talks only to your Bitwarden or Vaultwarden
-  server: to sign in, to sync (rbw-agent does every hour, and when you
-  choose Sync Now), and to save what you change.
-* Website icons: for a login with a website, the app asks your server's
-  icon service for that website's icon, which sends the website's name to
-  your server, and the server fetches the icon from the website. Icons are
-  kept on your computer for 30 days. Settings, General, turns this off.
-* Nothing else: no analytics, no crash reports, no update checks. A
-  website opens in your browser only when you open it.
-* On your computer, rbw keeps the vault encrypted. The app keeps its
+* Fastwarden talks only to your Bitwarden or Vaultwarden server, to sign
+  in, to sync and to save what you change. The agent syncs every hour and
+  when you choose Sync Now.
+* For a login with a website, the app asks your server's icon service for
+  the website's icon. That sends the website's name to your server, which
+  fetches the icon. Icons stay on your computer for 30 days. Settings,
+  General, turns this off.
+* There are no analytics, no crash reports and no update checks.
+* rbw-ng keeps the vault encrypted on your computer. The app keeps its
   preferences, the ids of the items you used last and the icons in its own
-  folders (`~/.config/rbwdesktop` and `~/.cache/rbwdesktop` on Linux,
-  `~/Library/Application Support/io.github.timothefcn.RbwDesktop` and
-  `~/Library/Caches/io.github.timothefcn.RbwDesktop` on macOS). Signing out
-  of an account removes it from this computer.
+  folders: `~/.config/rbwdesktop` and `~/.cache/rbwdesktop` on Linux,
+  `io.github.timothefcn.RbwDesktop` under `~/Library/Application Support`
+  and `~/Library/Caches` on macOS. Signing out of an account removes it
+  from the computer.
 
-## Building from source
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-With the current stable Rust, and on Linux the libraries
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) lists:
+## Contributing
+
+Fastwarden is young, and reports from real vaults and real desktops are
+what it needs most. If something breaks or looks wrong,
+[open an issue](https://github.com/TimotheFCN/rbw-desktop/issues/new/choose)
+with your system and whether your server is Bitwarden's or Vaultwarden.
+Ideas and pull requests are welcome. For anything larger than a fix, open
+an issue first so we agree on the shape before you write it.
+
+To run it from source you need a current stable Rust and, on Linux, the
+libraries [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#build-and-run) lists:
 
 ```sh
-cargo build --release -p rbw-desktop
-target/release/rbw-desktop
+git clone https://github.com/TimotheFCN/rbw-desktop
+cd rbw-desktop
+RBW_DESKTOP_DEMO= cargo run -p rbw-desktop   # demo vaults, no account needed
 ```
 
-Built this way it has no `rbw` of its own, so it runs the `rbw` of rbw-ng
-1.19.0 or later on your `PATH`, or the one in `RBW_DESKTOP_RBW`. `RBW_DESKTOP_DEMO=` runs it on demo vaults instead.
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers the code, the tests and
-how the packages are made; [docs/PRODUCT.md](docs/PRODUCT.md) what the app
-is for.
+Without `RBW_DESKTOP_DEMO` a source build runs the `rbw` on your `PATH`,
+which has to be rbw-ng 1.19.0 or later. [CONTRIBUTING.md](CONTRIBUTING.md)
+covers the checks to run and how to send a change,
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) the code, the tests and the
+packages, and [docs/PRODUCT.md](docs/PRODUCT.md) what the app is for and
+what it leaves out.
 
-MIT License.
+## License
+
+MIT. See [LICENSE](LICENSE).

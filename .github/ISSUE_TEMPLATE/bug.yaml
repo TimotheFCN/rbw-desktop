@@ -1,0 +1,34 @@
+name: Bug report
+description: Something breaks or looks wrong
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: >-
+        What you did, what you expected and what you saw. Hide your email and
+        item names in screenshots, and never paste a password or a key.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Fastwarden version
+      description: From Settings, About
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: System
+      placeholder: macOS 27 on Apple Silicon, Ubuntu 26.04 with GNOME, …
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Server
+      options:
+        - bitwarden.com
+        - bitwarden.eu
+        - Vaultwarden
+        - Self-hosted Bitwarden
+    validations:
+      required: true

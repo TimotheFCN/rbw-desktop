@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/TimotheFCN/rbw-desktop/security/advisories/new
+    about: In private, not as a public issue
+  - name: rbw on the command line
+    url: https://github.com/TimotheFCN/rbw-ng/issues
+    about: Problems with the rbw or rbw-agent commands themselves go to rbw-ng
