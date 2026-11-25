@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime};
 use rbw_desktop_core::{
     Backend, Card, CharacterClasses, Characters, CustomField, Error, FieldValue, FolderId,
     GeneratorOptions, Identity, ItemContent, ItemData, ItemKind, LockState, Login, LoginCode,
-    Preferences, RbwBackend, Secret, Server, SortOrder, SshKey, TwoStepMethod, UriMatch, Website,
-    WindowPlace,
+    OtherRbw, Preferences, RbwBackend, Secret, Server, SortOrder, SshKey, TwoStepMethod, UriMatch,
+    Website, WindowPlace,
 };
 
 // an unencrypted ed25519 key, made for this test
@@ -350,6 +350,10 @@ fn against_vaultwarden() {
             height: 640.,
             maximized: true,
             display: None,
+        }),
+        dismissed_rbw: Some(OtherRbw {
+            path: "/opt/homebrew/bin/rbw".into(),
+            version: Some("1.18.1".into()),
         }),
     };
     backend.set_preferences(&preferences).unwrap();

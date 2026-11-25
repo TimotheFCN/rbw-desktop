@@ -21,8 +21,8 @@ use process::{Rbw, Wait};
 use crate::{
     Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, CommandLineTool,
     Error, Folder, FolderId, GeneratorOptions, Item, ItemData, ItemId, ItemSummary, LockState,
-    LoginCode, Preferences, Result, Secret, Server, SortOrder, SshAgentStatus, SshService, SshUses,
-    VerificationCode, WebsiteIcon, WindowPlace, icon,
+    LoginCode, OtherRbw, Preferences, Result, Secret, Server, SortOrder, SshAgentStatus,
+    SshService, SshUses, VerificationCode, WebsiteIcon, WindowPlace, icon,
 };
 
 /// How many recently used items each account keeps.
@@ -33,6 +33,7 @@ pub const REQUIRED_RBW: &str = "1.19.0";
 
 pub struct RbwBackend {
     rbw: Rbw,
+    home: PathBuf,
     /// The command line tool, when the app runs its bundled `rbw`.
     command_line: Option<Link>,
     preferences: PathBuf,
@@ -62,6 +63,7 @@ impl RbwBackend {
         Ok(Self {
             command_line: rbw.own().map(|own| Link::new(&folder, own)),
             rbw,
+            home,
             preferences: dirs.config_dir().join("preferences.json"),
             recent: dirs.config_dir().join("recent.json"),
             recent_lock: Mutex::new(()),
@@ -209,6 +211,14 @@ struct PreferencesJson {
     sort: Option<SortJson>,
     #[serde(default)]
     window: Option<WindowJson>,
+    #[serde(default)]
+    dismissed_rbw: Option<OtherRbwJson>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OtherRbwJson {
+    path: PathBuf,
+    version: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -809,6 +819,10 @@ impl Backend for RbwBackend {
                 list_share: saved.list_share,
                 sort: saved.sort.map_or(defaults.sort, Into::into),
                 window: saved.window.map(Into::into),
+                dismissed_rbw: saved.dismissed_rbw.map(|other| OtherRbw {
+                    path: other.path,
+                    version: other.version,
+                }),
             })
             .unwrap_or(defaults))
     }
@@ -822,6 +836,10 @@ impl Backend for RbwBackend {
             list_share: preferences.list_share,
             sort: Some(preferences.sort.into()),
             window: preferences.window.clone().map(Into::into),
+            dismissed_rbw: preferences.dismissed_rbw.clone().map(|other| OtherRbwJson {
+                path: other.path,
+                version: other.version,
+            }),
         };
         write_json(&self.preferences, &saved)
             .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
@@ -940,6 +958,29 @@ impl Backend for RbwBackend {
             link.turn_off(elevate)?;
         }
         Ok(link.status())
+    }
+
+    fn other_rbw(&self) -> Result<Option<OtherRbw>> {
+        let Some(own) = self.rbw.own() else {
+            return Ok(None);
+        };
+        let Some(path) = command_line::first_other(command_line::terminal_folders(&self.home), own)
+        else {
+            return Ok(None);
+        };
+        let own = self.rbw.version()?;
+        // one that can't say its version is no rbw-ng
+        let version = Rbw::at(path.clone()).version().ok();
+        if version
+            .as_ref()
+            .is_some_and(|version| version.same_release(&own))
+        {
+            return Ok(None);
+        }
+        Ok(Some(OtherRbw {
+            path,
+            version: version.and_then(|version| version.rbw_ng().map(str::to_string)),
+        }))
     }
 }
 

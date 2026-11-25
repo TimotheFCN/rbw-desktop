@@ -11,8 +11,9 @@
 //! * `slow`: every call takes two seconds, to see what waits;
 //! * `offline`: calls that need the server fail;
 //! * `no-rbw`, `old-rbw`: rbw missing, or too old;
-//! * `cli-on`: the command line tool on; `cli-off-path`: its folder isn't
-//!   on the terminal's `PATH`;
+//! * `other-rbw`: another rbw, of another version, where a terminal finds
+//!   it; `cli-on`: the command line tool on; `cli-off-path`: its folder
+//!   isn't on the terminal's `PATH`;
 //! * `ssh-off`: no SSH agent set up; `ssh-unsupported`: none can be;
 //!   `ssh-elsewhere`: set up, but `ssh` uses another agent; `ssh-fails`:
 //!   setting it up fails; `ssh-slow`: setting it up takes a while;
@@ -30,7 +31,8 @@
 use std::time::Duration;
 
 use rbw_desktop_core::{
-    Backend as _, Error, FakeBackend, Operation, Preferences, REQUIRED_RBW, Result, Server, SshUses,
+    Backend as _, Error, FakeBackend, Operation, OtherRbw, Preferences, REQUIRED_RBW, Result,
+    Server, SshUses,
 };
 
 /// How long the demo's Touch ID waits, as for a finger on the sensor.
@@ -111,6 +113,17 @@ pub fn backend(demo: &str) -> Result<FakeBackend> {
     {
         fake.add_logins(id, 5000);
         fake.set_latency_of(Operation::WebsiteIcon, Duration::from_millis(300));
+    }
+    if wants("other-rbw") {
+        fake.set_other_rbw(Some(OtherRbw {
+            path: if cfg!(target_os = "macos") {
+                "/opt/homebrew/bin/rbw"
+            } else {
+                "/usr/bin/rbw"
+            }
+            .into(),
+            version: Some("1.18.1".into()),
+        }));
     }
     if wants("cli-on") && fake.set_command_line_tool(true).is_err() {
         log::error!("the demo's command line tool wasn't turned on");

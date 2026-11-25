@@ -83,8 +83,9 @@ impl Rbw {
         }
     }
 
-    #[cfg(test)]
-    fn at(path: PathBuf) -> Self {
+    /// An `rbw` that may not be recent enough, or not rbw-ng at all, to ask
+    /// its version.
+    pub fn at(path: PathBuf) -> Self {
         Self {
             path,
             bundled: false,
@@ -287,6 +288,18 @@ impl Version {
         self.numbers
             .is_some_and(|numbers| Some(numbers) >= self::numbers(REQUIRED_RBW))
     }
+
+    /// rbw-ng's version number; `None` for another program.
+    pub fn rbw_ng(&self) -> Option<&str> {
+        self.numbers.map(|_| self.text.as_str())
+    }
+
+    /// Whether both are the same release of rbw-ng, whose agent protocol
+    /// version comes from the release's numbers: their agents are the same
+    /// to either.
+    pub fn same_release(&self, other: &Self) -> bool {
+        self.numbers.is_some() && self.numbers == other.numbers
+    }
 }
 
 // The major, minor and patch numbers, without a pre-release or build part.
@@ -446,6 +459,17 @@ mod tests {
         assert!(!enough(""));
         assert_eq!(Version::of("rbw-ng 1.18.1\n").text, "1.18.1");
         assert_eq!(Version::of("rbw 1.13.2\n").text, "rbw 1.13.2");
+    }
+
+    #[test]
+    fn the_same_release_shares_its_agent() {
+        let same = |a: &str, b: &str| Version::of(a).same_release(&Version::of(b));
+        assert!(same("rbw-ng 1.19.0", "rbw-ng 1.19.0\n"));
+        assert!(same("rbw-ng 1.19.0-dev", "rbw-ng 1.19.0"));
+        assert!(!same("rbw-ng 1.18.1", "rbw-ng 1.19.0"));
+        assert!(!same("rbw 1.13.2", "rbw 1.13.2"));
+        assert_eq!(Version::of("rbw-ng 1.18.1").rbw_ng(), Some("1.18.1"));
+        assert_eq!(Version::of("rbw 1.13.2").rbw_ng(), None);
     }
 
     #[test]

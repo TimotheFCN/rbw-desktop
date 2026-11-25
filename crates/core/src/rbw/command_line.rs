@@ -1,4 +1,5 @@
-//! The command line tool's link to the app's own `rbw`.
+//! The command line tool's link, and the other `rbw`s a terminal may run
+//! instead of the app's own.
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
@@ -176,6 +177,27 @@ fn in_path(folder: &Path, path: Option<&OsStr>) -> bool {
     })
 }
 
+/// The first `rbw` in these folders that isn't the app's own, through a
+/// link or not.
+pub fn first_other(folders: impl IntoIterator<Item = PathBuf>, own: &Path) -> Option<PathBuf> {
+    let own = std::fs::canonicalize(own).ok();
+    folders
+        .into_iter()
+        .map(|folder| folder.join("rbw"))
+        .find(|rbw| rbw.is_file() && std::fs::canonicalize(rbw).ok() != own)
+}
+
+/// Where a terminal may find an `rbw`: the folders of the app's `PATH`,
+/// then where package managers and the command line tool put theirs, which
+/// an app opened from the Finder or the Dock doesn't have on its `PATH`.
+pub fn terminal_folders(home: &Path) -> Vec<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .chain([home.join(".cargo/bin"), home.join(".local/bin")])
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -340,5 +362,34 @@ mod tests {
         assert!(in_path(&bin, Some(&path(&["alias"]))));
         assert!(!in_path(&bin, Some(&path(&["other"]))));
         assert!(!in_path(&bin, None));
+    }
+
+    #[test]
+    fn finds_the_first_rbw_that_isnt_the_apps() {
+        let scratch = Scratch::new("first-other");
+        let own = app_rbw(&scratch, "app");
+        std::fs::create_dir(scratch.0.join("bin")).unwrap();
+        symlink(&own, scratch.0.join("bin/rbw")).unwrap();
+        let homebrew = scratch.file("homebrew/bin/rbw");
+        let cargo = scratch.file("cargo/bin/rbw");
+        let folders = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| scratch.0.join(name))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            first_other(
+                folders(&["empty", "bin", "homebrew/bin", "cargo/bin"]),
+                &own
+            ),
+            Some(homebrew)
+        );
+        assert_eq!(first_other(folders(&["cargo/bin"]), &own), Some(cargo));
+        assert_eq!(
+            first_other(folders(&["bin", "app/libexec/rbw-desktop"]), &own),
+            None
+        );
     }
 }

@@ -145,7 +145,8 @@ impl SettingsWindow {
             }
             match this.page {
                 Page::SshAgent => this.ssh.update(cx, |ssh, cx| ssh.refresh(cx)),
-                // The command line tool may have changed in a terminal.
+                // The command line tool or another rbw may have changed in a
+                // terminal.
                 Page::General => this
                     .general
                     .update(cx, |general, cx| general.refresh_command_line(cx)),

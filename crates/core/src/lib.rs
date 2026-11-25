@@ -32,7 +32,7 @@ pub const APP_NAME: &str = "Fastwarden";
 pub use account::{
     Account, AccountId, AccountSettings, LockState, LoginCode, Server, TwoStepMethod,
 };
-pub use command_line::{CommandLineTool, ToolState};
+pub use command_line::{CommandLineTool, OtherRbw, ToolState};
 pub use error::{Error, Result};
 pub use fake::{FakeBackend, Operation};
 pub use generator::{CharacterClasses, Characters, GeneratorOptions, Strength};
@@ -229,4 +229,12 @@ pub trait Backend: Send + Sync {
     /// image or a temporary copy. Turning it off removes only the app's own
     /// link.
     fn set_command_line_tool(&self, on: bool) -> Result<CommandLineTool>;
+
+    /// An `rbw` a terminal may run instead of the app's own, of another
+    /// version or not rbw-ng: the first in the app's `PATH` or where package
+    /// managers put theirs. The app's agent and that one's would restart
+    /// each other, which locks the vault, so ask the person to remove it and
+    /// use the command line tool. `None` while the app runs no `rbw` of its
+    /// own, or when the one found is the same release.
+    fn other_rbw(&self) -> Result<Option<OtherRbw>>;
 }

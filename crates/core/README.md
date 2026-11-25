@@ -20,7 +20,7 @@ main thread. Errors are `Error` values, never text to parse.
 | Generator | `generate` |
 | Settings | `account_settings`, `set_account_settings`, `preferences`, `set_preferences` |
 | SSH agent | `ssh_agent`, `install_ssh_agent`, `uninstall_ssh_agent` |
-| Command line | `command_line_tool`, `set_command_line_tool` |
+| Command line | `command_line_tool`, `set_command_line_tool`, `other_rbw` |
 | About | `rbw_version` |
 
 An account is an rbw profile (`RBW_PROFILE`), shared with the command line.
@@ -133,8 +133,8 @@ The fake backend has knobs for the interface's states: `set_latency` and
 `set_latency_of` one `Operation`, `fail_next` and `fail` one `Operation`
 until `succeed`, `set_offline`, `set_touch_id`, `sign_out_now` and
 `unlock_now` an account, `set_ssh_supported` and `set_ssh_uses` for the
-SSH agent's states, and `set_command_line_on_path`. A self-hosted address
-with
+SSH agent's states, `set_other_rbw` and `set_command_line_on_path`. A
+self-hosted address with
 `.invalid` in it leads to no Bitwarden server.
 
 ## How it maps to rbw
@@ -173,6 +173,7 @@ pass for an option.
 | `ssh_agent` | `rbw ssh-agent status --json`, and the SSH keys of `rbw item list` |
 | `install_ssh_agent`, `uninstall_ssh_agent` | `rbw ssh-agent install`, `rbw ssh-agent uninstall` |
 | `command_line_tool`, `set_command_line_tool` | none: a link to the bundled `rbw` |
+| `other_rbw` | `rbw --version` of the one found |
 
 `RbwBackend::new` needs rbw-ng 1.19.0 or later (`REQUIRED_RBW`), as
 `rbw --version` says; another program called `rbw`, such as the original
@@ -200,7 +201,12 @@ where `/usr/local/bin` may belong to an administrator, turning it on or off
 asks for one with the system's prompt (`osascript`); a cancelled prompt
 leaves it as it was. It refuses while the app runs from its disk image or a
 temporary copy (`AppNotInstalled`). A build without a bundled `rbw` has no
-command line tool.
+command line tool. `other_rbw` looks for an `rbw` a terminal may run
+instead, in the app's `PATH` and where package managers put theirs
+(`/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`),
+skipping the app's own, and returns the first one when it isn't the same
+release of rbw-ng (`OtherRbw`), so that the interface can ask the person to
+remove it.
 
 With 300 items, `rbw status --json` takes about 2 ms, `rbw item list` 5 ms and
 `rbw item get` 2 ms.

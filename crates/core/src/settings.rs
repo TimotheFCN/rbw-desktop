@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::GeneratorOptions;
+use crate::{GeneratorOptions, OtherRbw};
 
 /// The app's own preferences, the same for every account.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +21,9 @@ pub struct Preferences {
     pub sort: SortOrder,
     /// Where the main window was last, to open there again.
     pub window: Option<WindowPlace>,
+    /// The other `rbw` whose notice the person dismissed in the main
+    /// window, which says nothing more until another is found.
+    pub dismissed_rbw: Option<OtherRbw>,
 }
 
 /// Where a window is on the screen, in points, and whether it fills it.
@@ -60,6 +63,7 @@ impl Default for Preferences {
             list_share: None,
             sort: SortOrder::Name,
             window: None,
+            dismissed_rbw: None,
         }
     }
 }

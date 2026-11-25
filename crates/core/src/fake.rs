@@ -16,8 +16,8 @@ use rand::seq::IndexedRandom as _;
 use crate::{
     Account, AccountId, AccountSettings, Backend, CommandLineTool, Error, Folder, FolderId,
     GeneratorOptions, IconFormat, Item, ItemContent, ItemData, ItemId, ItemSummary, LockState,
-    LoginCode, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary, SshService,
-    SshUses, ToolState, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
+    LoginCode, OtherRbw, Preferences, Result, Secret, Server, SshAgentStatus, SshKeySummary,
+    SshService, SshUses, ToolState, TwoStepMethod, VerificationCode, WebsiteIcon, icon, ssh,
 };
 
 /// A call to the backend, to make that one fail or wait.
@@ -59,6 +59,7 @@ pub enum Operation {
     RbwVersion,
     CommandLineTool,
     SetCommandLineTool,
+    OtherRbw,
 }
 
 pub struct FakeBackend {
@@ -80,6 +81,7 @@ struct State {
     // what ssh uses instead of an installed agent
     ssh_elsewhere: Option<SshUses>,
     command_line: CommandLineTool,
+    other_rbw: Option<OtherRbw>,
     next_id: u64,
 }
 
@@ -176,6 +178,7 @@ impl FakeBackend {
                     state: ToolState::Off,
                     on_path: true,
                 },
+                other_rbw: None,
                 next_id: 1,
             }),
         }
@@ -246,6 +249,11 @@ impl FakeBackend {
     /// login session hasn't picked it up yet; `None` lets it use the agent.
     pub fn set_ssh_uses(&self, uses: Option<SshUses>) {
         self.state().ssh_elsewhere = uses;
+    }
+
+    /// Makes [`Backend::other_rbw`] find this one.
+    pub fn set_other_rbw(&self, other: Option<OtherRbw>) {
+        self.state().other_rbw = other;
     }
 
     /// Whether a terminal looks in the command line tool's folder.
@@ -1074,6 +1082,10 @@ impl Backend for FakeBackend {
             (_, on) => tool.state = if on { ToolState::On } else { ToolState::Off },
         }
         Ok(tool.clone())
+    }
+
+    fn other_rbw(&self) -> Result<Option<OtherRbw>> {
+        Ok(self.call(Operation::OtherRbw)?.other_rbw.clone())
     }
 }
 

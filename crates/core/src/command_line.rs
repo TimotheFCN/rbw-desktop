@@ -24,3 +24,13 @@ pub enum ToolState {
     /// Another program is there, which the app leaves alone.
     Taken,
 }
+
+/// An `rbw` that a terminal may run instead of the app's own, of another
+/// version: each restarts the other's agent, which locks the vault.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OtherRbw {
+    pub path: PathBuf,
+    /// rbw-ng's version number; `None` for another program, such as the
+    /// original rbw.
+    pub version: Option<String>,
+}

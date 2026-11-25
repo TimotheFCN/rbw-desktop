@@ -23,6 +23,7 @@ use crate::CloseWindow;
 use crate::accounts::{self, Accounts, Refreshed, Request};
 use crate::alerts::{self, Alerts};
 use crate::backend;
+use crate::command_line::OtherRbwNotice;
 use crate::lock::LockScreen;
 use crate::preferences::{self, Prefs};
 use crate::sign_in::SignIn;
@@ -213,6 +214,9 @@ pub struct MainWindow {
     /// in.
     leaving: Option<AnyView>,
     alerts: Entity<Alerts>,
+    /// Says when another rbw would lock the vault, once there is a backend
+    /// to ask.
+    other_rbw: Option<Entity<OtherRbwNotice>>,
     /// The window's own focus, so that its shortcuts work while no screen
     /// has the keyboard.
     focus: FocusHandle,
@@ -252,6 +256,7 @@ impl MainWindow {
             generation: 0,
             leaving: None,
             alerts: Alerts::new(window, cx),
+            other_rbw: None,
             focus,
             show_next: false,
             retrying: false,
@@ -271,6 +276,9 @@ impl MainWindow {
     }
 
     fn follow_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.other_rbw.is_none() {
+            self.other_rbw = Some(cx.new(OtherRbwNotice::new));
+        }
         // They may have changed while no window asked for them.
         accounts::refresh(cx);
         let accounts = Accounts::global(cx);
@@ -657,6 +665,7 @@ impl Render for MainWindow {
                     point(px(0.), px(6.)),
                 )
             }))
+            .children(self.other_rbw.clone())
             .child(self.alerts.clone());
         chrome::window_frame(content, window, cx)
     }

@@ -72,7 +72,8 @@ Settings, General, Command line tool: it puts the app's own `rbw` at
 that folder needs one) or `~/.local/bin/rbw` on Linux. The terminal and the
 app then share the accounts, the unlocked vaults and the SSH agent. Don't
 install rbw-ng separately next to the app: two versions lock each other's
-vault. If you move the app, turn the command line tool on again.
+vault, and the app says so when it finds another `rbw`. If you move the
+app, turn the command line tool on again.
 
 ## SSH agent
 

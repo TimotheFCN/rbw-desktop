@@ -51,6 +51,7 @@ locking and signing in:
   signed-out     signing in to an account that is signed out
   no-rbw         rbw isn't installed
   old-rbw        rbw is too old
+  other-rbw      another rbw, of another version, found: the notice
 
 the menu bar panel, opened alone:
   panel          its passwords: the items used last
@@ -78,6 +79,7 @@ settings, in their own window:
   settings-about     About
   settings-cli       General, with the command line tool off
   settings-cli-on    the command line tool on
+  settings-other-rbw off, with another rbw of another version found
 
   gallery        the design system gallery
 
@@ -158,7 +160,9 @@ first-run | self-hosted | password | sign-in-wrong | two-step | email-code | new
 	;;
 offline) state_demo=first-run,offline ;;
 wrong-server) state_demo=first-run ;;
+other-rbw) state_demo=unlocked,other-rbw ;;
 settings-cli-on) state_demo=unlocked,cli-on ;;
+settings-other-rbw) state_demo=unlocked,other-rbw ;;
 signed-out) state_demo=first-run,signed-out ;;
 *) state_demo=unlocked ;;
 esac
@@ -223,6 +227,7 @@ act() {
 	local footer_x=60 footer_y=$((height - 7 - 19))
 	case $state in
 	vault | gallery | lock | lock-touch-id | first-run | signed-out | no-rbw | old-rbw | no-icons) ;;
+	other-rbw) ;;
 	panel | panel-locked | panel-touch-id | panel-signed-out) ;;
 	panel-search) xdotool type --delay 60 git ;;
 	panel-copied) xdotool key Return ;;
@@ -255,7 +260,7 @@ act() {
 	ssh-remove) settings_page 2 && into_page 2 && xdotool key Return ;;
 	settings-about) settings_page 3 ;;
 	# The page's end, where the command line tool is.
-	settings-cli | settings-cli-on) settings_page 0 ;;
+	settings-cli | settings-cli-on | settings-other-rbw) settings_page 0 ;;
 	search) xdotool key ctrl+f type --delay 60 bank ;;
 	# The fourth row: All Items, Favorites, the Types heading, Logins.
 	logins) click $((sidebar / 2)) $((sidebar_top + nav * 2 + 30 + nav / 2)) ;;

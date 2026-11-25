@@ -10,8 +10,9 @@ use gpui::{
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, ConfirmDialog, Confirmation, IconName, Theme, ToastSlot,
     app_icon, avatar, button, card, chrome, copied_badge, field_error, field_row, form_row, icon,
-    list_row, menu_item, menu_separator, nav_row, password_text, progress_ring, search_field,
-    section_label, segmented_control, slider, surface, switch, text_field, tile, toggle_row,
+    list_row, menu_item, menu_separator, nav_row, notice, password_text, progress_ring,
+    search_field, section_label, segmented_control, slider, surface, switch, text_field, tile,
+    toggle_row,
 };
 
 struct Gallery {
@@ -277,6 +278,14 @@ impl Render for Gallery {
             .p(px(16.))
             .child(self.alert.clone());
 
+        let notice = notice(
+            "notice",
+            "Another rbw is installed",
+            "The rbw at /usr/bin/rbw (1.18.1) and Fastwarden lock each other’s vault.",
+        )
+        .action(button("notice-action").label("Open Settings"))
+        .on_dismiss(|_, _, _| {});
+
         let column = |children: Vec<AnyElement>| {
             div()
                 .flex()
@@ -317,6 +326,7 @@ impl Render for Gallery {
                 section("App icon", app_icon(cx), cx),
                 section("Menu", menu, cx),
                 section("Alert", alert, cx),
+                section("Notice", notice, cx),
             ]))
             .children(toast);
         chrome::window_frame(content, window, cx)

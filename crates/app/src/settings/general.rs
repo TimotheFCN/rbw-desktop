@@ -1,6 +1,7 @@
 //! General: how long each account stays unlocked without being used, when
 //! a copied secret leaves the clipboard, whether websites' icons show, the
-//! menu bar item, and the command line tool.
+//! menu bar item, and the command line tool, with what to do about another
+//! rbw that would lock the vault.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -9,9 +10,13 @@ use gpui::{
     AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
     Styled as _, Subscription, Task, Window, div, px,
 };
-use rbw_desktop_core::{APP_NAME, AccountId, CommandLineTool, Error, ToolState};
-use rbw_desktop_ui::{Select, Selected, field_error, setting_row, settings_group, switch};
+use rbw_desktop_core::{APP_NAME, AccountId, CommandLineTool, Error, OtherRbw, ToolState};
+use rbw_desktop_ui::{
+    ActiveTheme as _, IconName, Select, Selected, field_error, icon, setting_row, settings_group,
+    switch,
+};
 
+use super::note;
 use super::store::Store;
 use crate::accounts::{self, Accounts};
 use crate::backend;
@@ -34,6 +39,7 @@ pub struct GeneralPage {
     /// Whether the tool is being turned on or off.
     tool_busy: Option<bool>,
     tool_problem: Option<&'static str>,
+    other_rbw: Option<OtherRbw>,
     tool_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -77,6 +83,7 @@ impl GeneralPage {
             tool: None,
             tool_busy: None,
             tool_problem: None,
+            other_rbw: None,
             tool_task: Task::ready(()),
             _subscriptions: subscriptions,
         };
@@ -85,18 +92,18 @@ impl GeneralPage {
         this
     }
 
-    /// Reads the command line tool again, as it may have changed in a
-    /// terminal.
+    /// Reads the command line tool and looks for another rbw again, as
+    /// either may have changed in a terminal.
     pub fn refresh_command_line(&mut self, cx: &mut Context<Self>) {
         if self.tool_busy.is_some() {
             return;
         }
         self.tool_task = backend::request(
             cx,
-            |backend| backend.command_line_tool(),
+            |backend| Ok((backend.command_line_tool()?, other_rbw(backend))),
             |this, result, cx| {
                 match result {
-                    Ok(tool) => this.tool = tool,
+                    Ok((tool, other)) => (this.tool, this.other_rbw) = (tool, other),
                     Err(error) => log::warn!("reading the command line tool: {error}"),
                 }
                 cx.notify();
@@ -113,13 +120,13 @@ impl GeneralPage {
         cx.notify();
         self.tool_task = backend::request(
             cx,
-            move |backend| backend.set_command_line_tool(on),
+            move |backend| Ok((backend.set_command_line_tool(on)?, other_rbw(backend))),
             |this, result, cx| {
                 this.tool_busy = None;
                 match result {
                     // also when the person canceled the administrator's
                     // prompt, which leaves it as it was
-                    Ok(tool) => this.tool = Some(tool),
+                    Ok((tool, other)) => (this.tool, this.other_rbw) = (Some(tool), other),
                     Err(error) => {
                         this.tool_problem = Some(match error {
                             Error::AppNotInstalled => {
@@ -168,9 +175,30 @@ impl GeneralPage {
             )],
             cx,
         );
-        let below = self
-            .tool_problem
-            .map(|problem| field_error(problem, cx).px(px(4.)));
+        let below = match (self.tool_problem, &self.other_rbw) {
+            (Some(problem), _) => Some(field_error(problem, cx).px(px(4.)).into_any_element()),
+            (None, Some(other)) => Some(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .px(px(4.))
+                    .child(
+                        div()
+                            .pt(px(2.))
+                            .text_color(cx.theme().colors.warning)
+                            .child(icon(IconName::Warning)),
+                    )
+                    .text_size(cx.theme().metrics.small_text_size)
+                    .child(
+                        note(command_line::settings_advice(other), cx)
+                            .px(px(0.))
+                            .flex_1()
+                            .min_w_0(),
+                    )
+                    .into_any_element(),
+            ),
+            (None, None) => None,
+        };
         div()
             .flex()
             .flex_col()
@@ -237,6 +265,15 @@ impl GeneralPage {
         }
         cx.notify();
     }
+}
+
+/// Another rbw, if one is found; looking for it may fail without keeping
+/// the command line tool from showing.
+fn other_rbw(backend: &dyn rbw_desktop_core::Backend) -> Option<OtherRbw> {
+    backend.other_rbw().unwrap_or_else(|error| {
+        log::warn!("looking for another rbw: {error}");
+        None
+    })
 }
 
 fn clear_index(clear: Option<Duration>) -> usize {
