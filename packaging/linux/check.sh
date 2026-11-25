@@ -15,7 +15,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 packages=$(realpath "${1:-$root/target/packages}")
 arch=$(uname -m)
 shopt -s nullglob
-tarballs=("$packages"/rbw-desktop-*-"$arch"-linux.tar.xz)
+tarballs=("$packages"/rbw-desktop-"$arch"-linux.tar.xz)
 debs=("$packages"/rbw-desktop_*.deb)
 ((${#tarballs[@]} == 1 && ${#debs[@]} == 1)) ||
 	{ echo "build one tarball and one .deb first: packaging/linux/package.sh" >&2; exit 1; }

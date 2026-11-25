@@ -2,10 +2,10 @@
 # Builds the Linux packages of this machine's architecture into
 # target/packages:
 #
-# - rbw-desktop-VERSION-ARCH-linux.tar.xz, laid out as an install prefix
+# - rbw-desktop-ARCH-linux.tar.xz, laid out as an install prefix
 #   (bin, libexec, share), which runs from wherever it is unpacked, such as
 #   ~/.local;
-# - rbw-desktop_VERSION_DEBARCH.deb, the same files under /usr.
+# - rbw-desktop_DEBARCH.deb, the same files under /usr.
 #
 # Both bundle rbw and rbw-agent, built from the rbw-ng checkout in $RBW_NG,
 # in libexec/rbw-desktop: off PATH, where the app finds them. The binaries
@@ -47,9 +47,9 @@ SOURCE_DATE_EPOCH=$(git -C "$root" log -1 --format=%ct)
 export SOURCE_DATE_EPOCH
 dist=$root/target/packages
 work=$root/target/package/linux
-name=rbw-desktop-$version-$arch-linux
+name=rbw-desktop-$arch-linux
 rm -rf "$work" && mkdir -p "$work" "$dist"
-rm -f "$dist"/rbw-desktop-*-"$arch"-linux.tar.* "$dist"/rbw-desktop_*_"$deb_arch".deb*
+rm -f "$dist/$name".tar.* "$dist/rbw-desktop_$deb_arch".deb*
 
 # The prefix: what both packages hold.
 prefix=$work/$name
@@ -101,7 +101,7 @@ Description: unofficial desktop app for Bitwarden and Vaultwarden vaults
 EOF
 (cd "$deb" && find usr -type f -print0 | sort -z | xargs -0 md5sum >DEBIAN/md5sums)
 chmod -R u=rwX,go=rX "$deb"
-deb_file=rbw-desktop_${version}_$deb_arch.deb
+deb_file=rbw-desktop_$deb_arch.deb
 dpkg-deb --root-owner-group -Zxz -z9 --build "$deb" "$dist/$deb_file" >/dev/null
 
 cd "$dist"

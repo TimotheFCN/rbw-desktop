@@ -1,14 +1,18 @@
 name: release
 
-# Pushing a version tag (such as 0.1.0, as in Cargo.toml) builds the macOS
+# Pushing a version tag (such as 0.0.1, as in Cargo.toml) builds the macOS
 # disk image and the Linux packages with the rbw-ng revision pinned in
-# packaging/rbw-ng-revision, checks them, and attaches them to a draft
-# GitHub release, which is published by hand. Running the workflow by hand
-# with an existing tag does the same for that tag, replacing the assets of
-# its release.
+# packaging/rbw-ng-revision, checks them, publishes them as a GitHub
+# release with the version's notes from CHANGELOG.md, and updates the cask
+# in the Homebrew tap. Running the workflow by hand with an existing tag
+# does the same for that tag, replacing the assets of its release.
 #
-# Secrets, each optional. Without the first three the app is signed ad hoc,
-# and without the last three it isn't notarized:
+# Secrets, each optional. Without HOMEBREW_TAP_TOKEN the cask is only kept
+# as an artifact. Without the three of the certificate the app is signed ad
+# hoc, and without the three of the notary key it isn't notarized: the
+# notes and the cask then say how to open it.
+#   HOMEBREW_TAP_TOKEN          a token that can push to
+#                               TimotheFCN/homebrew-tap
 #   MACOS_CERTIFICATE           a Developer ID Application certificate and
 #                               its key, as a base64 .p12
 #   MACOS_CERTIFICATE_PASSWORD  the .p12's password
@@ -23,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to release, such as 0.1.0
+        description: Existing tag to release, such as 0.0.1
         required: true
 
 permissions:
@@ -47,7 +51,7 @@ jobs:
           ref: ${{ env.TAG }}
           path: rbw-desktop
           persist-credentials: false
-      - name: The tag is the version in Cargo.toml and the AppStream releases
+      - name: The tag is the version in Cargo.toml, the changelog and the AppStream releases
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           if [[ $version != "$TAG" ]]; then
@@ -56,6 +60,10 @@ jobs:
           fi
           if ! grep -q "<release version=\"$TAG\"" packaging/linux/*.metainfo.xml; then
             echo "::error::packaging/linux/*.metainfo.xml has no release $TAG"
+            exit 1
+          fi
+          if ! grep -qF "## [$TAG]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $TAG"
             exit 1
           fi
 
@@ -106,6 +114,8 @@ jobs:
     env:
       HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE != '' }}
       HAS_NOTARY_KEY: ${{ secrets.NOTARY_KEY != '' }}
+    outputs:
+      notarized: ${{ steps.bundle.outputs.notarized }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -143,6 +153,7 @@ jobs:
           printf '%s\n' "$NOTARY_KEY_TEXT" >"$RUNNER_TEMP/notary.p8"
           echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8" >>"$GITHUB_ENV"
       - name: The app and its disk image
+        id: bundle
         env:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
@@ -151,7 +162,10 @@ jobs:
           options=(--universal)
           if [[ $HAS_CERTIFICATE == true ]]; then
             options+=(--sign "$IDENTITY")
-            [[ $HAS_NOTARY_KEY == true ]] && options+=(--notarize)
+            if [[ $HAS_NOTARY_KEY == true ]]; then
+              options+=(--notarize)
+              echo "notarized=1" >>"$GITHUB_OUTPUT"
+            fi
           fi
           RBW_NG=../rbw-ng packaging/macos/bundle.sh "${options[@]}"
           codesign --display --verbose=4 "target/packages/Fastwarden.app"
@@ -178,6 +192,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      NOTARIZED: ${{ needs.macos.outputs.notarized }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -189,11 +204,54 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
-      - name: Create the draft release or replace its assets
+      - name: Create the release or replace its assets
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" ../dist/* --clobber
           else
-            gh release create "$TAG" --draft --verify-tag --title "Fastwarden $TAG" \
-              --notes "Fastwarden $TAG, with rbw-ng $(cat packaging/rbw-ng-revision)." ../dist/*
+            packaging/release-notes.sh "$TAG" >../notes.md
+            gh release create "$TAG" --verify-tag --title "Fastwarden $TAG" \
+              --notes-file ../notes.md ../dist/*
           fi
+
+  homebrew:
+    needs: [macos, github-release]
+    runs-on: ubuntu-24.04
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      NOTARIZED: ${{ needs.macos.outputs.notarized }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          path: rbw-desktop
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-macos
+          path: dist
+      - run: packaging/homebrew/cask.sh "$TAG" ../dist >../fastwarden.rb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: homebrew-cask
+          path: fastwarden.rb
+      - name: Push to the tap
+        working-directory: .
+        run: |
+          if [[ -z $HOMEBREW_TAP_TOKEN ]]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN isn't set, skipping the Homebrew tap"
+            exit 0
+          fi
+          git clone "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/TimotheFCN/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cp fastwarden.rb tap/Casks/fastwarden.rb
+          cd tap
+          git add Casks/fastwarden.rb
+          if git diff --cached --quiet; then
+            echo "::notice::The tap already has Fastwarden $TAG"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Fastwarden $TAG"
+          git push

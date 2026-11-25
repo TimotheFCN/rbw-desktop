@@ -4,7 +4,7 @@
 # - "Fastwarden.app": the app, with rbw and rbw-agent built from the rbw-ng
 #   checkout in $RBW_NG in Contents/Helpers, where the app finds them and
 #   where code signing expects helper tools;
-# - rbw-desktop-VERSION-macos-ARCH.dmg: the app and a link to Applications.
+# - rbw-desktop-macos-ARCH.dmg: the app and a link to Applications.
 #
 # It signs everything with the hardened runtime: ad hoc by default, which
 # runs on this Mac and, once allowed in System Settings, on others; with
@@ -179,7 +179,7 @@ if ((notarize)); then
 	# what Gatekeeper says of the app once downloaded
 	spctl --assess --type execute --verbose=2 "$app"
 fi
-dmg=$dist/rbw-desktop-$version-macos-$arch.dmg
+dmg=$dist/rbw-desktop-macos-$arch.dmg
 image
 if ((notarize)); then
 	notarize "$dmg"
