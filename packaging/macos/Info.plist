@@ -32,8 +32,8 @@
 	<!-- GPUI's Metal shaders target macOS 12. -->
 	<key>LSMinimumSystemVersion</key>
 	<string>@MINIMUM_MACOS@</string>
-	<!-- An app in the Dock, whose menu bar item keeps it running once its
-	     windows close. -->
+	<!-- An app in the Dock while it has a window; it leaves the Dock itself
+	     while only its menu bar item is left. -->
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSHighResolutionCapable</key>

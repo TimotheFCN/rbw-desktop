@@ -35,8 +35,9 @@ Fastwarden is unofficial. Bitwarden, Inc. doesn't make it or endorse it.
 * Logins, cards, identities, notes and SSH keys. Search, sort, copy, create,
   edit and delete them. Verification codes count down as you look.
 * A generator for passwords, passphrases and PINs.
-* A menu bar item with the items you used last and the generator. On Linux
-  it is a tray item, on desktops that show one.
+* A menu bar item with the items you used last and the generator. Close
+  the window and Fastwarden stays there, out of the Dock. On Linux it is a
+  tray item, on desktops that show one.
 * Touch ID unlock on a Mac that has it.
 * A copied password leaves the clipboard after a while, and when the vault
   locks.

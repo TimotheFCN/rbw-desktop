@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/core` | `rbw-desktop-core` | The `Backend` trait over rbw and `FakeBackend` with demo vaults. No GPUI. |
 | `crates/ui` | `rbw-desktop-ui` | The design system: theme tokens, motion, window chrome, the sidebar, components. Its `gallery` example shows every component. |
-| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; `command_line.rs` names the command line tool and another `rbw`, and the main window's notice of one; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
+| `crates/app` | `rbw-desktop` | The app. `window.rs` is the main window, which shows one screen at a time; one module per screen (`sign_in.rs`, `lock.rs`, `vault/`); `settings/` the Settings window, a module per page; `accounts.rs` the shared accounts and the account menu; `reprompt.rs` the master password prompt of protected items; `icons.rs` websites' icons; `generator.rs` the password generator; `panel.rs` the menu bar item's panel and `tray/` the item itself; `preferences.rs` the shared preferences; `recent.rs` notes the items used; `instance.rs` keeps one copy running; `alerts.rs` asks before what can't be undone and says what happened; `dock.rs` takes the app out of the macOS Dock while only the menu bar item is left; `command_line.rs` names the command line tool and another `rbw`, and the main window's notice of one; plus `backend.rs`, `clipboard.rs` and `demo.rs`. |
 
 GPUI comes from `gpui-kit` with its default features off: GPUI itself (the
 `gpui-pre` snapshots of Zed's GPUI) and `gpui-base`, the unstyled behaviour
@@ -691,8 +691,12 @@ The macOS-only code is small and type-checked from Linux by
 - `app/src/tray/macos.rs`: the menu bar item (a template image drawn from
   `app/assets/menu-bar-symbolic.svg`, its right-click menu) and where the
   panel hangs, from the item's `NSStatusItem` window; the panel as a
-  `PopUp` window on the blurred material without its title bar; staying in
-  the Dock when the last window closes and coming back with `on_reopen`.
+  `PopUp` window on the blurred material without its title bar.
+- `app/src/dock.rs`: the activation policy. The app is a regular one while
+  a window other than the panel is open and an accessory, out of the Dock
+  and the app switcher, while the menu bar item is all that is left;
+  opening the app again reaches it through `on_reopen`. `tools/smoke-macos`
+  checks both ways on CI's Mac.
 
 Everything else, the macOS look included, is the code Linux runs and is
 checked with `RBW_DESKTOP_THEME=macos-light` / `macos-dark` screenshots.

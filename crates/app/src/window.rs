@@ -64,6 +64,7 @@ pub fn open(missing: Option<Error>, cx: &mut App) -> Option<(AnyWindowHandle, En
         options.window_bounds = Some(bounds);
         options.display_id = display;
     }
+    crate::dock::show();
     // gpui-base's Root around the view gives the window Tab and Shift-Tab.
     let window = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| MainWindow::new(missing, window, cx))

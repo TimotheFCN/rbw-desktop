@@ -111,6 +111,12 @@ struct PanelWindow {
 
 impl Global for PanelWindow {}
 
+/// The panel's window, while it is open.
+pub fn window(cx: &App) -> Option<AnyWindowHandle> {
+    cx.try_global::<PanelWindow>()
+        .and_then(|state| state.window)
+}
+
 /// Opens the panel, or closes it if it is open.
 pub fn toggle(anchor: Anchor, cx: &mut App) {
     let state = cx.global::<PanelWindow>();

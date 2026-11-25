@@ -160,7 +160,9 @@ Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
   shows the account the main window shows. Nothing about SSH lives here.
 * The item's menu has Open Vault, Lock and Quit.
 * While the item shows, closing the last window leaves the app running.
-  Launching the app again brings the running one forward.
+  On macOS the app then leaves the Dock and the app switcher, as other
+  apps that live in the menu bar do, and comes back to them with its next
+  window. Launching the app again brings the running one forward.
 
 ### SSH agent
 

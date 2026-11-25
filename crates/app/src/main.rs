@@ -4,6 +4,7 @@ mod backend;
 mod clipboard;
 mod command_line;
 mod demo;
+mod dock;
 #[cfg(feature = "frame-stats")]
 mod frame_stats;
 mod generator;
@@ -84,13 +85,16 @@ fn main() {
         #[cfg(feature = "frame-stats")]
         frame_stats::init(cx);
         // Without a menu bar item to come back to, closing the last
-        // window ends the app. Whoever closed it is still being updated
-        // here, and that may be the menu bar item itself, closing its
-        // panel: ask it once that update is over.
+        // window ends the app; with one, it takes the app out of the
+        // Dock. Whoever closed the window is still being updated here,
+        // and that may be the menu bar item itself, closing its panel:
+        // ask it once that update is over.
         cx.on_window_closed(|cx, _| {
             cx.defer(|cx| {
                 if cx.windows().is_empty() && !tray::keeps_app_running(cx) {
                     cx.quit();
+                } else {
+                    dock::follow(cx);
                 }
             });
         })

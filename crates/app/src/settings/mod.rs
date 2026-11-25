@@ -113,6 +113,7 @@ pub fn open(page: Option<Page>, cx: &mut App) {
         app_id: Some(APP_ID.into()),
         ..chrome::window_options(title(cx), window_size, size(px(560.), px(400.)), cx)
     };
+    crate::dock::show();
     let opened = gpui::open_window(options, cx, |window, cx| {
         cx.new(|cx| SettingsWindow::new(page.unwrap_or(Page::General), window, cx))
     });

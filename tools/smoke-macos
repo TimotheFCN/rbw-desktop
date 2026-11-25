@@ -2,8 +2,9 @@
 # Runs the app on a Mac where nobody watches, as CI does: the demo's
 # unlocked vault, the menu bar panel alone, then the lock screen, each for
 # ten seconds. It keeps a screenshot of the screen and the app's log of
-# each, prints the logs, and fails if the app quits on its own. See
-# docs/DEVELOPMENT.md.
+# each, prints the logs, and fails if the app quits on its own. It then
+# checks that the app leaves the Dock with its last window and comes back
+# with the next. See docs/DEVELOPMENT.md.
 #
 #     tools/smoke-macos path/to/rbw-desktop OUT_FOLDER
 set -euo pipefail
@@ -35,8 +36,67 @@ run() {
 	echo "ok   $name"
 }
 
+# How the system lists the app: Foreground in the Dock, UIElement out of it.
+listed() {
+	lsappinfo info -only ApplicationType "$(lsappinfo find pid="$1")" | sed -n 's/.*="\(.*\)".*/\1/p'
+}
+
+# The app is in the Dock while its window is open, leaves it once Command-W
+# closed that window and the menu bar item is all that is left, and comes
+# back when the app is opened again, which only a bundle can be. Skipped
+# where the system doesn't say how it lists the app, or doesn't let a
+# script press keys.
+dock() {
+	local pid kind bundle
+	HOME=$home RBW_DESKTOP_DEMO=unlocked RUST_LOG=info RUST_BACKTRACE=full "$binary" >"$out/dock.log" 2>&1 &
+	pid=$!
+	sleep 10
+	kind=$(listed "$pid")
+	if [[ -z $kind ]]; then
+		echo "skip dock: lsappinfo doesn't list the app"
+	elif [[ $kind != Foreground ]]; then
+		echo "::error::with its window open the app is listed as $kind, not Foreground"
+		kill "$pid" 2>/dev/null
+		return 1
+	elif ! osascript -e 'tell application "System Events" to keystroke "w" using command down'; then
+		echo "skip dock: System Events may not press keys here"
+	else
+		sleep 5
+		if ! kill -0 "$pid" 2>/dev/null; then
+			echo "::error::the app quit with its window, though its menu bar item was there"
+			cat "$out/dock.log"
+			return 1
+		fi
+		kind=$(listed "$pid")
+		screencapture -x "$out/dock-closed.png" || true
+		if [[ $kind != UIElement ]]; then
+			echo "::error::with only its menu bar item left the app is listed as $kind, not UIElement"
+			kill "$pid"
+			return 1
+		fi
+		echo "ok   dock: out of it once the window closed"
+		bundle=${binary%/Contents/MacOS/*}
+		if [[ $bundle != "$binary" ]]; then
+			open "$bundle"
+			sleep 5
+			kind=$(listed "$pid")
+			screencapture -x "$out/dock-reopened.png" || true
+			if [[ $kind != Foreground ]]; then
+				echo "::error::opened again, the app is listed as $kind, not Foreground"
+				cat "$out/dock.log"
+				kill "$pid" 2>/dev/null
+				return 1
+			fi
+			echo "ok   dock: back in it with its window"
+		fi
+	fi
+	kill "$pid" 2>/dev/null
+	wait "$pid" 2>/dev/null || true
+}
+
 failed=0
 run vault unlocked || failed=1
 run panel unlocked,panel || failed=1
 run lock "" || failed=1
+dock || failed=1
 ((failed == 0))
