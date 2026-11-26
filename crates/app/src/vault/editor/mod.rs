@@ -24,9 +24,10 @@ use rbw_desktop_ui::{Confirmation, IconName};
 use super::VaultView;
 use crate::backend;
 use crate::generator::{Generated, Generator};
+use crate::icons::Icons;
 use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
-use form::{FieldText, Key, Texts, WebsiteText};
+use form::{FieldText, Key, SECRETS, Texts, WebsiteText};
 
 actions!(item_editor, [Cancel, Save, CancelNewFolder]);
 
@@ -70,17 +71,6 @@ fn name_example(kind: ItemKind) -> &'static str {
         ItemKind::SshKey => "Work laptop",
     }
 }
-
-/// Fields that hold secrets: hidden while another field has the keyboard.
-const SECRETS: [Key; 7] = [
-    Key::Password,
-    Key::Authenticator,
-    Key::Number,
-    Key::SecurityCode,
-    Key::Ssn,
-    Key::Passport,
-    Key::License,
-];
 
 /// Groups of fields that show only once they hold something, or once
 /// "Add Field" asked for them.
@@ -155,6 +145,8 @@ struct WebsiteRow {
     id: usize,
     origin: Option<usize>,
     input: Entity<InputState>,
+    /// Goes with the row.
+    _subscription: Subscription,
 }
 
 /// A custom field's row.
@@ -163,6 +155,14 @@ struct FieldRow {
     origin: Option<usize>,
     name: Entity<InputState>,
     value: FieldInput,
+    /// Go with the row.
+    _subscriptions: Vec<Subscription>,
+}
+
+/// The name of a folder being created, with what follows its field.
+struct NewFolder {
+    input: Entity<InputState>,
+    _subscription: Subscription,
 }
 
 enum FieldInput {
@@ -227,7 +227,10 @@ pub struct ItemEditor {
     folder_menu_open: bool,
     folder_menu_focus: FocusHandle,
     /// The name of a folder being created from the folder menu.
-    new_folder: Option<Entity<InputState>>,
+    new_folder: Option<NewFolder>,
+    /// Whether the folder named is being created, which Return waits for.
+    creating_folder: bool,
+    folder_task: Task<()>,
     favorite: bool,
     /// Makes the password, with the options its popover shows.
     generator: Entity<Generator>,
@@ -322,17 +325,20 @@ impl ItemEditor {
         let kind = data.content.kind();
         let shown = form::texts(&data);
         let new_item = editing.is_none();
-        let mut subscriptions = vec![];
+        let mut subscriptions = vec![
+            // The header's tile shows a website's icon once read from disk.
+            cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
+        ];
         let mut inputs = BTreeMap::new();
-        for key in ALL_KEYS {
+        // An item edited keeps its kind: only its own fields have a line.
+        let keys: &[Key] = if new_item { &ALL_KEYS } else { kind_keys(kind) };
+        for &key in std::iter::once(&Key::Name).chain(keys) {
             let example = match key {
                 Key::Name => name_example(kind),
                 key => describe(key).2,
             };
             let input = new_input(example, SECRETS.contains(&key), window, cx);
-            input.update(cx, |input, cx| {
-                input.set_value(shown.get(key).to_string(), window, cx)
-            });
+            input.update(cx, |input, cx| input.set_value(shown.get(key), window, cx));
             subscriptions.push(cx.subscribe_in(
                 &input,
                 window,
@@ -348,7 +354,7 @@ impl ItemEditor {
                 .placeholder("Anything else to keep with it")
         });
         notes.update(cx, |notes, cx| {
-            notes.set_value(shown.notes.clone(), window, cx)
+            notes.set_value(shown.notes.expose(), window, cx)
         });
         let private_key = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -356,7 +362,7 @@ impl ItemEditor {
                 .placeholder("-----BEGIN OPENSSH PRIVATE KEY-----")
         });
         private_key.update(cx, |key, cx| {
-            key.set_value(shown.private_key.clone(), window, cx)
+            key.set_value(shown.private_key.expose(), window, cx)
         });
         let generator = cx.new(|cx| Generator::new(new_item && kind == ItemKind::Login, cx));
         subscriptions.push(cx.subscribe_in(
@@ -384,6 +390,8 @@ impl ItemEditor {
             folder_menu_open: false,
             folder_menu_focus: cx.focus_handle(),
             new_folder: None,
+            creating_folder: false,
+            folder_task: Task::ready(()),
             favorite,
             generator,
             generator_open: false,
@@ -424,6 +432,12 @@ impl ItemEditor {
             .update(cx, |name, cx| name.focus(window, cx));
     }
 
+    /// The item being edited, if it isn't a new one.
+    pub(super) fn editing(&self) -> Option<&ItemId> {
+        self.editing.as_ref().map(|item| &item.id)
+    }
+
+    /// The line of `key`: of the item's kind, or of any while it is new.
     fn input(&self, key: Key) -> &Entity<InputState> {
         &self.inputs[&key]
     }
@@ -446,28 +460,28 @@ impl ItemEditor {
     ) -> Entity<InputState> {
         let input = new_input("example.com", false, window, cx);
         input.update(cx, |input, cx| input.set_value(uri.to_string(), window, cx));
-        self._subscriptions.push(cx.subscribe_in(
-            &input,
-            window,
-            |this, input, event, window, cx| this.on_input(None, input, event, window, cx),
-        ));
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+            this.on_input(None, input, event, window, cx)
+        });
         let id = self.next_row();
         self.websites.push(WebsiteRow {
             id,
             origin,
             input: input.clone(),
+            _subscription: subscription,
         });
         input
     }
 
     fn add_field_row(&mut self, text: &FieldText, window: &mut Window, cx: &mut Context<Self>) {
+        let mut subscriptions = vec![];
         let mut line =
             |placeholder: &'static str, value: &str, secret: bool, cx: &mut Context<Self>| {
                 let input = new_input(placeholder, secret, window, cx);
                 input.update(cx, |input, cx| {
                     input.set_value(value.to_string(), window, cx)
                 });
-                self._subscriptions.push(cx.subscribe_in(
+                subscriptions.push(cx.subscribe_in(
                     &input,
                     window,
                     |this, input, event, window, cx| this.on_input(None, input, event, window, cx),
@@ -489,6 +503,7 @@ impl ItemEditor {
             origin: text.origin,
             name,
             value,
+            _subscriptions: subscriptions,
         });
     }
 
@@ -498,10 +513,10 @@ impl ItemEditor {
             values: self
                 .inputs
                 .iter()
-                .map(|(key, input)| (*key, input.read(cx).value().to_string()))
+                .map(|(key, input)| (*key, Secret::new(input.read(cx).value().to_string())))
                 .collect(),
-            notes: self.notes.read(cx).value().to_string(),
-            private_key: self.private_key.read(cx).value().to_string(),
+            notes: Secret::new(self.notes.read(cx).value().to_string()),
+            private_key: Secret::new(self.private_key.read(cx).value().to_string()),
             websites: self
                 .websites
                 .iter()
@@ -533,7 +548,12 @@ impl ItemEditor {
                 self.name_missing = 0;
                 cx.notify();
             }
-            InputEvent::PressEnter { .. } if Some(input) == self.new_folder.as_ref() => {
+            InputEvent::PressEnter { .. }
+                if self
+                    .new_folder
+                    .as_ref()
+                    .is_some_and(|folder| folder.input == *input) =>
+            {
                 self.create_folder(window, cx)
             }
             InputEvent::PressEnter { .. } => self.save(&Save, window, cx),
@@ -554,7 +574,9 @@ impl ItemEditor {
 
     /// Whether `input` holds a secret, a hidden custom field.
     fn is_secret(&self, input: &Entity<InputState>) -> bool {
-        SECRETS.iter().any(|key| self.input(*key) == input)
+        SECRETS
+            .iter()
+            .any(|key| self.inputs.get(key) == Some(input))
             || self
                 .fields
                 .iter()
@@ -807,7 +829,7 @@ impl ItemEditor {
         self.saving = true;
         cx.notify();
         let account = self.account.clone();
-        self.task = backend::request_in(
+        self.task = backend::request_network_in(
             window,
             cx,
             move |backend| {
@@ -828,7 +850,10 @@ impl ItemEditor {
             |this, result, window, cx| {
                 this.saving = false;
                 match result {
-                    Ok(id) => this.close(Some(id), window, cx),
+                    Ok(id) => {
+                        crate::vault_cache::invalidate(&this.account, cx);
+                        this.close(Some(id), window, cx);
+                    }
                     Err(Error::RepromptRequired) => this.ask_password(window, cx),
                     Err(error) => this.problem = Some(backend::describe(&error)),
                 }
@@ -881,13 +906,14 @@ impl ItemEditor {
     fn start_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.folder_menu_open = false;
         let input = new_input("Folder name", false, window, cx);
-        self._subscriptions.push(cx.subscribe_in(
-            &input,
-            window,
-            |this, input, event, window, cx| this.on_input(None, input, event, window, cx),
-        ));
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+            this.on_input(None, input, event, window, cx)
+        });
         input.update(cx, |input, cx| input.focus(window, cx));
-        self.new_folder = Some(input);
+        self.new_folder = Some(NewFolder {
+            input,
+            _subscription: subscription,
+        });
         cx.notify();
     }
 
@@ -902,26 +928,34 @@ impl ItemEditor {
         cx.notify();
     }
 
+    /// Creates the folder named, once at a time, and not while the item
+    /// saves: it has its own task, so that neither replaces the other.
     fn create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = &self.new_folder else {
+        if self.saving || self.creating_folder {
+            return;
+        }
+        let Some(folder) = &self.new_folder else {
             return;
         };
-        let name = input.read(cx).value().trim().to_string();
+        let name = folder.input.read(cx).value().trim().to_string();
         if name.is_empty() {
             return;
         }
+        self.creating_folder = true;
         let account = self.account.clone();
-        self.task = backend::request_in(
+        self.folder_task = backend::request_network_in(
             window,
             cx,
             move |backend| backend.create_folder(&account, &name),
             |this, result, window, cx| {
+                this.creating_folder = false;
                 match result {
                     Ok(folder) => {
                         this.folder = Some(folder.id.clone());
                         this.folders.push(folder);
                         this.new_folder = None;
                         window.focus(&this.focus_handle, cx);
+                        crate::vault_cache::invalidate(&this.account, cx);
                         // The sidebar lists the new folder at once.
                         this.vault.update(cx, |vault, cx| vault.reload(cx)).ok();
                     }
@@ -941,10 +975,43 @@ impl ItemEditor {
     }
 }
 
-/// Every field the editor has a line for, of every kind: a new item can
-/// change its kind, and an item edited keeps the others empty.
-const ALL_KEYS: [Key; 26] = [
-    Key::Name,
+/// The fields of a kind, besides the name.
+fn kind_keys(kind: ItemKind) -> &'static [Key] {
+    match kind {
+        ItemKind::Login => &[Key::Username, Key::Password, Key::Authenticator],
+        ItemKind::Card => &[
+            Key::Cardholder,
+            Key::Brand,
+            Key::Number,
+            Key::Expiry,
+            Key::SecurityCode,
+        ],
+        ItemKind::Identity => &[
+            Key::Title,
+            Key::FirstName,
+            Key::MiddleName,
+            Key::LastName,
+            Key::Email,
+            Key::Phone,
+            Key::IdentityUsername,
+            Key::Address1,
+            Key::Address2,
+            Key::Address3,
+            Key::City,
+            Key::State,
+            Key::PostalCode,
+            Key::Country,
+            Key::Ssn,
+            Key::Passport,
+            Key::License,
+        ],
+        ItemKind::SecureNote | ItemKind::SshKey => &[],
+    }
+}
+
+/// Every field the editor has a line for, of every kind, besides the
+/// name: a new item can change its kind.
+const ALL_KEYS: [Key; 25] = [
     Key::Username,
     Key::Password,
     Key::Authenticator,

@@ -1,8 +1,11 @@
 //! An item as the editor's fields hold it, as text, and back. Saving writes
 //! back only the fields that changed, so an item saved without a change
 //! comes back exactly as it was, down to a space at the end of a password.
+//! The text is kept as [`Secret`]s, wiped when dropped, and never shows in
+//! a debug print where it is one.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use rbw_desktop_core::{CustomField, ItemContent, ItemData, Secret, Website};
 
@@ -38,15 +41,56 @@ pub enum Key {
     License,
 }
 
-/// The editor's fields, as text.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Fields that hold secrets: hidden while another field has the keyboard,
+/// and never in a debug print.
+pub const SECRETS: [Key; 7] = [
+    Key::Password,
+    Key::Authenticator,
+    Key::Number,
+    Key::SecurityCode,
+    Key::Ssn,
+    Key::Passport,
+    Key::License,
+];
+
+/// The editor's fields, as text. Every value is wiped when dropped.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Texts {
-    pub values: BTreeMap<Key, String>,
-    pub notes: String,
+    pub values: BTreeMap<Key, Secret>,
+    pub notes: Secret,
     /// An SSH key's private key, from which rbw makes the rest.
-    pub private_key: String,
+    pub private_key: Secret,
     pub websites: Vec<WebsiteText>,
     pub fields: Vec<FieldText>,
+}
+
+/// The fields, without the secrets: those of [`SECRETS`], the notes, the
+/// private key and hidden custom fields show only whether they are empty.
+impl fmt::Debug for Texts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Values<'a>(&'a BTreeMap<Key, Secret>);
+        impl fmt::Debug for Values<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut map = f.debug_map();
+                for (key, value) in self.0 {
+                    if SECRETS.contains(key) {
+                        map.entry(key, value);
+                    } else {
+                        map.entry(key, &value.expose());
+                    }
+                }
+                map.finish()
+            }
+        }
+        f.debug_struct("Texts")
+            .field("values", &Values(&self.values))
+            .field("notes", &self.notes)
+            .field("private_key", &self.private_key)
+            .field("websites", &self.websites)
+            // A hidden field's value is a secret, which hides itself.
+            .field("fields", &self.fields)
+            .finish()
+    }
 }
 
 /// A website's row: the website it shows, by its place among the item's,
@@ -66,18 +110,18 @@ pub struct FieldText {
 
 impl Texts {
     pub fn get(&self, key: Key) -> &str {
-        self.values.get(&key).map_or("", String::as_str)
+        self.values.get(&key).map_or("", Secret::expose)
     }
 }
 
 /// What the editor shows of an item.
 pub fn texts(data: &ItemData) -> Texts {
-    let mut values = BTreeMap::from([(Key::Name, data.name.clone())]);
+    let mut values = BTreeMap::from([(Key::Name, Secret::new(data.name.clone()))]);
     let mut put = |key, value: &str| {
-        values.insert(key, value.to_string());
+        values.insert(key, Secret::new(value));
     };
     let mut websites = vec![];
-    let mut private_key = String::new();
+    let mut private_key = Secret::default();
     match &data.content {
         ItemContent::Login(login) => {
             put(Key::Username, &login.username);
@@ -123,12 +167,12 @@ pub fn texts(data: &ItemData) -> Texts {
             put(Key::Passport, identity.passport_number.expose());
             put(Key::License, identity.license_number.expose());
         }
-        ItemContent::SshKey(key) => private_key = key.private_key.expose().to_string(),
+        ItemContent::SshKey(key) => private_key = key.private_key.clone(),
         ItemContent::SecureNote => {}
     }
     Texts {
         values,
-        notes: data.notes.expose().to_string(),
+        notes: data.notes.clone(),
         private_key,
         websites,
         fields: data
@@ -149,17 +193,17 @@ pub fn apply(original: &ItemData, initial: &Texts, current: &Texts) -> ItemData 
     let mut data = original.clone();
     for (&key, value) in &current.values {
         if initial.values.get(&key) != Some(value) {
-            set(&mut data, key, value);
+            set(&mut data, key, value.expose());
         }
     }
     if current.notes != initial.notes {
-        data.notes = Secret::new(current.notes.clone());
+        data.notes = current.notes.clone();
     }
     if current.private_key != initial.private_key
         && let ItemContent::SshKey(key) = &mut data.content
     {
         // The public key and fingerprint come from it.
-        key.private_key = Secret::new(current.private_key.trim().to_string());
+        key.private_key = Secret::new(current.private_key.expose().trim());
         key.public_key.clear();
         key.fingerprint.clear();
     }
@@ -544,10 +588,33 @@ mod tests {
     }
 
     #[test]
+    fn a_debug_print_shows_no_secret() {
+        let mut data = login();
+        data.fields.push(CustomField {
+            name: "Member".into(),
+            value: FieldValue::Text("4471".into()),
+        });
+        let printed = format!("{:?}", texts(&data));
+        for secret in ["pass phrase", "JBSW", "first line", "1234"] {
+            assert!(!printed.contains(secret), "{secret} in {printed}");
+        }
+        for shown in ["Bank", "alex", "bank.example", "4471"] {
+            assert!(printed.contains(shown), "{shown} not in {printed}");
+        }
+        let printed = format!("{:?}", texts(&ssh_key()));
+        assert!(!printed.contains("BEGIN OPENSSH"), "{printed}");
+        let printed = format!("{:?}", texts(&card()));
+        assert!(
+            !printed.contains("4111") && !printed.contains("123\""),
+            "{printed}"
+        );
+    }
+
+    #[test]
     fn every_identity_field_is_edited() {
         let saved = edited(&identity(), |texts| {
             for value in texts.values.values_mut() {
-                value.push('!');
+                *value = Secret::new(format!("{}!", value.expose()));
             }
         });
         let ItemContent::Identity(identity) = saved.content else {

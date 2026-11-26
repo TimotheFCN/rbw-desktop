@@ -1,15 +1,16 @@
 //! The selected item: every field copies on click, hidden ones reveal on
-//! request, the verification code counts down live.
+//! request, the verification code counts down live ([`TotpRow`]).
 //!
 //! The pane draws a chosen item at once, complete when it can: from what
 //! it showed of the item before, kept while the vault is unlocked without
-//! the item's hidden values ([`Shape`]), or else from what the list knows
-//! of it. The item itself, which reveals and copies, arrives a moment
-//! later and changes nothing on screen; only what arrives after a visible
-//! wait fades in.
+//! the item's hidden values or notes ([`Shape`]), or else from what the
+//! list knows of it. The item itself, which reveals and copies, arrives a
+//! moment later and changes nothing on screen; only what arrives after a
+//! visible wait fades in.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant, SystemTime};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, AppContext as _, Context, ElementId, Entity, FontWeight, InteractiveElement as _,
@@ -17,21 +18,24 @@ use gpui::{
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{
-    AccountId, Backend, Error, FieldValue, Item, ItemContent, ItemId, ItemKind, ItemSummary,
-    Secret, VerificationCode,
+    AccountId, Error, FieldValue, Item, ItemContent, ItemId, ItemKind, ItemSummary, Secret,
+    VerificationCode,
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, IconName, Look, button, card, chrome, field_row, icon, motion,
-    password_text, progress_ring, scroll_area, tile,
+    password_text, scroll_area, tile,
 };
 
+use super::totp::{TotpEvent, TotpRow, code_row};
 use super::{EditItem, Part, VaultView};
 use crate::backend::{self, Load};
 use crate::clipboard;
+use crate::copied::CopiedSlot;
 use crate::icons::{self, Icons};
 use crate::recent;
 use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
+use crate::vault_cache;
 
 /// How long a selection moved with the keys rests before its item is
 /// fetched.
@@ -39,8 +43,13 @@ const SETTLE: Duration = Duration::from_millis(100);
 /// What arrives this soon after the item was chosen, a couple of frames,
 /// shows as if it had been there: it doesn't fade in.
 const AT_ONCE: Duration = Duration::from_millis(50);
-/// How often a verification code's countdown moves.
-const COUNTDOWN_STEP: Duration = Duration::from_secs(1);
+/// How long an item that asks for the master password again stays open
+/// here without being used, as long as rbw's agent keeps it open: then it
+/// asks again. A verification code counting down isn't a use.
+const REPROMPT_IDLE: Duration = Duration::from_secs(120);
+/// How many items' shapes are kept: those shown last, and those fetched
+/// ahead, without one kept for each row the pointer passed.
+const MAX_SHAPES: usize = 24;
 /// How a hidden value shows: always as long, so that its length says
 /// nothing and nothing moves when it arrives.
 const MASK: &str = "••••••••••";
@@ -54,21 +63,18 @@ pub struct ItemDetail {
     account: AccountId,
     vault: WeakEntity<VaultView>,
     /// The item chosen in the list, as the list shows it.
-    selected: Option<ItemSummary>,
-    /// The last answer for an item, with the item it answers for. Until
-    /// the selected one's arrives, the pane shows its shape, or what the
-    /// list knows of it.
+    selected: Option<Arc<ItemSummary>>,
+    /// The last answer for the selected item, with the item it answers
+    /// for. Until it arrives, the pane shows its shape, or what the list
+    /// knows of it.
     loaded: Option<(ItemId, Load<Item>)>,
-    /// What the pane showed of the items it showed, while the vault is
-    /// unlocked and unsynced, and of those fetched ahead.
-    shapes: HashMap<ItemId, Shape>,
+    /// What the pane showed of the items it showed last, while the vault
+    /// is unlocked and unsynced, and of those fetched ahead.
+    shapes: Shapes,
     /// When the selected item was chosen.
     chosen_at: Instant,
     /// Whether the fields the item brought fade in: it came after a wait.
     fields_fade: bool,
-    /// Whether the verification code fades in when it changes: not the
-    /// first one, when it came with its item.
-    code_fades: bool,
     revealed: Vec<SharedString>,
     /// The fields shown or hidden again since the item showed, whose
     /// values fade up in place when they change.
@@ -76,35 +82,38 @@ pub struct ItemDetail {
     /// The field something was asked to be copied of before the item
     /// arrived, copied once it does.
     pending_copy: Option<SharedString>,
-    copied: Option<SharedString>,
-    code: Option<VerificationCode>,
-    /// The code shown expired: the next one is fetched once the pane is
-    /// drawn again, so that a hidden window asks rbw for nothing.
-    code_expired: bool,
+    copied: CopiedSlot<SharedString>,
+    /// The item's verification code, counting down in a view of its own.
+    totp: Option<Entity<TotpRow>>,
+    _totp_events: Option<Subscription>,
     /// Asks for the master password, for an item that wants it again.
     reprompt: Option<Entity<Reprompt>>,
     /// Whether the password field takes the keyboard when it appears: when
     /// the item was clicked rather than stepped to with the arrow keys.
     focus_reprompt: bool,
     _reprompt_events: Option<Subscription>,
+    /// Asks for the master password again once an item that wants it has
+    /// gone unused for [`REPROMPT_IDLE`].
+    expiry_task: Task<()>,
+    /// Whether a change of favourite is on its way, which another waits
+    /// for.
+    favoriting: bool,
+    favorite_task: Task<()>,
     load_task: Task<()>,
     prefetch_task: Task<()>,
-    copied_timer: Task<()>,
-    code_task: Task<()>,
     _icons: Subscription,
 }
 
 /// What the pane shows of an item without revealing anything: the item
-/// with each hidden value replaced by a stand-in, and its verification
-/// code while it lasts. Enough to draw it again exactly as it was, with
-/// no secret the pane doesn't show.
+/// with each hidden value and its notes replaced by a stand-in. Enough to
+/// draw it again as it was, with no secret the pane doesn't show. Its
+/// verification code isn't kept: it changes, and is one.
 struct Shape {
     item: Item,
-    code: Option<VerificationCode>,
 }
 
 impl Shape {
-    fn of(item: &Item, code: Option<VerificationCode>) -> Self {
+    fn of(item: &Item) -> Self {
         let hide = |secret: &mut Secret| {
             if !secret.is_empty() {
                 *secret = Secret::new(MASK);
@@ -128,19 +137,63 @@ impl Shape {
             ItemContent::SshKey(key) => hide(&mut key.private_key),
             ItemContent::SecureNote => {}
         }
+        // A secure note is all notes; any item's may hold secrets.
+        hide(&mut item.data.notes);
         for field in &mut item.data.fields {
             if let FieldValue::Hidden(secret) = &mut field.value {
                 hide(secret);
             }
         }
-        Self { item, code }
+        Self { item }
+    }
+}
+
+/// The shapes kept, the oldest forgotten past [`MAX_SHAPES`].
+#[derive(Default)]
+struct Shapes {
+    by_item: HashMap<ItemId, Shape>,
+    /// Oldest first.
+    order: VecDeque<ItemId>,
+}
+
+impl Shapes {
+    fn get(&self, id: &ItemId) -> Option<&Shape> {
+        self.by_item.get(id)
     }
 
-    /// The code, while it is valid.
-    fn code(&self) -> Option<&VerificationCode> {
-        self.code
-            .as_ref()
-            .filter(|code| code.expires_at > SystemTime::now())
+    fn contains(&self, id: &ItemId) -> bool {
+        self.by_item.contains_key(id)
+    }
+
+    /// Keeps `shape`, in place of the item's shape before when `replace`,
+    /// as the item itself just showed; a shape fetched ahead doesn't.
+    fn insert(&mut self, shape: Shape, replace: bool) {
+        let id = shape.item.id.clone();
+        if self.by_item.contains_key(&id) {
+            if replace {
+                self.by_item.insert(id.clone(), shape);
+                self.order.retain(|kept| *kept != id);
+                self.order.push_back(id);
+            }
+            return;
+        }
+        self.by_item.insert(id.clone(), shape);
+        self.order.push_back(id);
+        while self.order.len() > MAX_SHAPES {
+            if let Some(oldest) = self.order.pop_front() {
+                self.by_item.remove(&oldest);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.by_item.clear();
+        self.order.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.by_item.len()
     }
 }
 
@@ -161,6 +214,10 @@ struct Field {
     label: SharedString,
     value: Secret,
     shown: Shown,
+    /// Copied as a secret, which the clipboard forgets after a while and
+    /// when the vault locks: hidden values, and notes, which may hold
+    /// anything, though they show as text.
+    secret: bool,
     /// The value comes with the item, such as a login's password while
     /// the list only knows the login's name: a click copies it once it
     /// arrives, and it shows hidden until then.
@@ -179,7 +236,16 @@ impl Field {
             label: label.into(),
             value: value.into(),
             shown,
+            secret: matches!(shown, Shown::Hidden | Shown::Password),
             pending: false,
+        }
+    }
+
+    /// A field copied as a secret, though it shows as text.
+    fn secret(self) -> Self {
+        Self {
+            secret: true,
+            ..self
         }
     }
 
@@ -199,23 +265,23 @@ impl ItemDetail {
             vault,
             selected: None,
             loaded: None,
-            shapes: HashMap::new(),
+            shapes: Shapes::default(),
             chosen_at: Instant::now(),
             fields_fade: false,
-            code_fades: false,
             revealed: vec![],
             toggled: vec![],
             pending_copy: None,
-            copied: None,
-            code: None,
-            code_expired: false,
+            copied: CopiedSlot::new(),
+            totp: None,
+            _totp_events: None,
             reprompt: None,
             focus_reprompt: false,
             _reprompt_events: None,
+            expiry_task: Task::ready(()),
+            favoriting: false,
+            favorite_task: Task::ready(()),
             load_task: Task::ready(()),
             prefetch_task: Task::ready(()),
-            copied_timer: Task::ready(()),
-            code_task: Task::ready(()),
             _icons: cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
         }
     }
@@ -226,7 +292,7 @@ impl ItemDetail {
 
     /// The item chosen in the list, as the list shows it.
     pub fn selected(&self) -> Option<&ItemSummary> {
-        self.selected.as_ref()
+        self.selected.as_deref()
     }
 
     /// The answer for the selected item, once it has come.
@@ -241,13 +307,12 @@ impl ItemDetail {
     }
 
     /// Takes another item, forgetting what was revealed or copied of the
-    /// one before.
-    fn select(&mut self, item: Option<ItemSummary>) {
+    /// one before, and the item itself.
+    fn select(&mut self, item: Option<Arc<ItemSummary>>) {
         if item.as_ref().map(|item| &item.id) != self.selected_id() {
             self.forget_item_state();
             self.chosen_at = Instant::now();
             self.fields_fade = false;
-            self.code_fades = false;
         }
         self.selected = item;
     }
@@ -258,19 +323,22 @@ impl ItemDetail {
     }
 
     /// Forgets what the pane showed of every item, as after a sync, which
-    /// may have changed them.
+    /// may have changed them; what was being fetched ahead from before is
+    /// dropped too.
     pub fn forget_shapes(&mut self) {
         self.shapes.clear();
+        self.prefetch_task = Task::ready(());
     }
 
     /// Fetches items about to be shown, such as the row under the pointer
     /// or the next one down, so that they show complete at once. Only
     /// their shapes are kept; an item that asks for the master password
     /// again isn't fetched.
-    pub fn prefetch(&mut self, items: Vec<ItemSummary>, cx: &mut Context<Self>) {
-        let wanted: Vec<ItemSummary> = items
+    pub fn prefetch(&mut self, items: Vec<Arc<ItemSummary>>, cx: &mut Context<Self>) {
+        let wanted: Vec<ItemId> = items
             .into_iter()
-            .filter(|item| !item.reprompt && !self.shapes.contains_key(&item.id))
+            .filter(|item| !item.reprompt && !self.shapes.contains(&item.id))
+            .map(|item| item.id.clone())
             .collect();
         if wanted.is_empty() {
             return;
@@ -278,18 +346,18 @@ impl ItemDetail {
         let account = self.account.clone();
         self.prefetch_task = backend::request(
             cx,
+            // A shape has no verification code: the item alone.
             move |backend| {
                 Ok(wanted
                     .iter()
-                    .filter_map(|summary| {
-                        let (item, code) = fetch(backend, &account, &summary.id).ok()?;
-                        Some(Shape::of(&item, code.and_then(Result::ok)))
-                    })
+                    .filter_map(|id| backend.item(&account, id).ok())
+                    .filter(|item| !item.reprompt)
+                    .map(|item| Shape::of(&item))
                     .collect::<Vec<_>>())
             },
             |this, result, _| {
                 for shape in result.unwrap_or_default() {
-                    this.shapes.entry(shape.item.id.clone()).or_insert(shape);
+                    this.shapes.insert(shape, false);
                 }
             },
         );
@@ -297,7 +365,12 @@ impl ItemDetail {
 
     /// Shows another item, or none. `by_pointer` says it was clicked, so
     /// that a master password it asks for takes the keyboard at once.
-    pub fn show(&mut self, item: Option<ItemSummary>, by_pointer: bool, cx: &mut Context<Self>) {
+    pub fn show(
+        &mut self,
+        item: Option<Arc<ItemSummary>>,
+        by_pointer: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.select(item);
         self.focus_reprompt = by_pointer;
         self.reload(cx);
@@ -305,7 +378,7 @@ impl ItemDetail {
 
     /// Shows another item once the selection rests: one only passed over,
     /// with the arrow keys or while a search is typed, isn't fetched.
-    pub fn show_when_settled(&mut self, item: Option<ItemSummary>, cx: &mut Context<Self>) {
+    pub fn show_when_settled(&mut self, item: Option<Arc<ItemSummary>>, cx: &mut Context<Self>) {
         if item.is_none() {
             self.show(None, false, cx);
             return;
@@ -329,62 +402,86 @@ impl ItemDetail {
     /// item selected before the list knew it, such as one just created or
     /// one shown from the menu bar panel as the vault opened, shows now,
     /// its master password taking the keyboard if it was clicked.
-    pub fn set_summary(&mut self, item: ItemSummary, cx: &mut Context<Self>) {
+    pub fn set_summary(&mut self, item: Arc<ItemSummary>, cx: &mut Context<Self>) {
         if self.selected_id() != Some(&item.id) {
             self.show(Some(item), self.focus_reprompt, cx);
-        } else if self.selected.as_ref() != Some(&item) {
+        } else if self.selected.as_deref() != Some(&*item) {
             self.selected = Some(item);
             cx.notify();
         }
     }
 
+    /// Forgets everything of the item shown: what was revealed, copied or
+    /// asked for, the item itself with its secrets, its code, and a master
+    /// password being typed for it.
     fn forget_item_state(&mut self) {
+        self.loaded = None;
         self.revealed.clear();
         self.toggled.clear();
         self.pending_copy = None;
-        self.copied = None;
-        self.code = None;
-        self.code_expired = false;
-        self.code_task = Task::ready(());
+        self.copied.clear();
+        self.totp = None;
+        self._totp_events = None;
+        self.reprompt = None;
+        self._reprompt_events = None;
+        self.expiry_task = Task::ready(());
     }
 
     /// Fetches the selected item again, after it may have changed, with
-    /// its verification code.
+    /// its verification code, in one call.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected_id().cloned() else {
+            self.load_task = Task::ready(());
             cx.notify();
             return;
         };
         let (account, requested) = (self.account.clone(), id.clone());
         self.load_task = backend::request(
             cx,
-            move |backend| fetch(backend, &account, &requested),
+            move |backend| backend.item_with_code(&account, &requested),
             move |this, result, cx| {
                 // Fields the pane had nothing in place of fade in, after a
                 // wait that showed; an item shown again, as after a sync,
                 // doesn't.
                 let had_nothing = this.loaded().is_none() && this.shape().is_none();
                 this.fields_fade = had_nothing && this.chosen_at.elapsed() > AT_ONCE;
-                let (item, code) = match result {
-                    Ok((item, code)) => (Ok(item), code),
-                    Err(error) => (Err(error), None),
-                };
-                if let Ok(item) = &item
-                    && !item.reprompt
-                {
-                    let code = code.as_ref().and_then(|code| code.as_ref().ok()).cloned();
-                    this.shapes.insert(id.clone(), Shape::of(item, code));
-                }
-                this.loaded = Some((id.clone(), item.into()));
-                match code {
-                    Some(Ok(code)) => this.show_code(id, code, cx),
-                    // The item went unread long enough to lock again.
-                    Some(Err(Error::RepromptRequired)) => this.relocked(id, cx),
-                    Some(Err(_)) | None => {}
-                }
-                // A code waits for its own answer.
-                if let Some(key) = this.pending_copy.take_if(|key| key != "code") {
-                    this.copy_field(key, cx);
+                match result {
+                    Ok((item, code)) => {
+                        if !item.reprompt {
+                            this.shapes.insert(Shape::of(&item), true);
+                        }
+                        let reprompt = item.reprompt;
+                        this.loaded = Some((id.clone(), Load::Ready(item)));
+                        match code {
+                            Some(code) => this.show_code(id, code, cx),
+                            None => {
+                                this.totp = None;
+                                this._totp_events = None;
+                            }
+                        }
+                        if reprompt {
+                            this.touched(cx);
+                        }
+                        // A code asked for was copied with it, if it came.
+                        if let Some(key) = this.pending_copy.take()
+                            && key != "code"
+                        {
+                            this.copy_field(key, cx);
+                        }
+                    }
+                    Err(error) => {
+                        // Nothing is copied of an item that asks for the
+                        // master password first: once given, it is asked
+                        // again. Its prompt stays as it is.
+                        if error == Error::RepromptRequired && this.pending_copy.take().is_some() {
+                            this.focus_reprompt = true;
+                        }
+                        this.pending_copy = None;
+                        this.totp = None;
+                        this._totp_events = None;
+                        this.expiry_task = Task::ready(());
+                        this.loaded = Some((id, Load::Failed(error)));
+                    }
                 }
                 cx.notify();
             },
@@ -392,58 +489,62 @@ impl ItemDetail {
     }
 
     /// The item asks for the master password again, as after it went
-    /// unread for a while.
+    /// unread for a while: what showed of it goes.
     fn relocked(&mut self, id: ItemId, cx: &mut Context<Self>) {
-        self.loaded = Some((id, Load::Failed(Error::RepromptRequired)));
         self.forget_item_state();
+        self.loaded = Some((id, Load::Failed(Error::RepromptRequired)));
         cx.notify();
     }
 
-    /// Fetches the next verification code, once the one shown expired.
-    fn fetch_code(&mut self, id: ItemId, cx: &mut Context<Self>) {
-        let (account, requested) = (self.account.clone(), id.clone());
-        self.code_expired = false;
-        self.code_fades = true;
-        self.code_task = backend::request(
-            cx,
-            move |backend| backend.verification_code(&account, &requested),
-            move |this, result, cx| {
-                // Another item took its place meanwhile.
-                if this.selected_id() != Some(&id) {
-                    return;
+    /// The item shown was used, such as a field copied or revealed: one
+    /// that asks for the master password stays open [`REPROMPT_IDLE`]
+    /// longer.
+    fn touched(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .item()
+            .filter(|item| item.reprompt)
+            .map(|item| item.id.clone())
+        else {
+            self.expiry_task = Task::ready(());
+            return;
+        };
+        self.expiry_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REPROMPT_IDLE).await;
+            this.update(cx, |this, cx| {
+                if this.item().is_some_and(|item| item.id == id) {
+                    this.relocked(id, cx);
                 }
-                match result {
-                    Ok(code) => this.show_code(id, code, cx),
-                    Err(Error::RepromptRequired) => this.relocked(id, cx),
-                    Err(_) => {}
-                }
-            },
-        );
+            })
+            .ok();
+        });
     }
 
     /// Shows a verification code of the selected item, counting down, and
     /// copies it if it was asked for.
     fn show_code(&mut self, id: ItemId, code: VerificationCode, cx: &mut Context<Self>) {
-        let expires_at = code.expires_at;
-        if let Some(shape) = self.shapes.get_mut(&id) {
-            shape.code = Some(code.clone());
-        }
-        self.code = Some(code);
-        // Redraw each second for the countdown, which a hidden window
-        // doesn't draw, then ask for the next code when drawn.
-        self.code_task = cx.spawn(async move |this, cx| {
-            while SystemTime::now() < expires_at {
-                cx.background_executor().timer(COUNTDOWN_STEP).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    return;
-                }
+        match &self.totp {
+            Some(row) if *row.read(cx).item() == id => {
+                row.update(cx, |row, cx| row.set_code(code, cx));
             }
-            this.update(cx, |this, cx| {
-                this.code_expired = true;
-                cx.notify();
-            })
-            .ok();
-        });
+            _ => {
+                let account = self.account.clone();
+                let row = cx.new(|cx| TotpRow::new(account, id, code, cx));
+                self._totp_events = Some(cx.subscribe(&row, |this, row, event, cx| match event {
+                    TotpEvent::Copied => {
+                        this.copied.clear();
+                        this.touched(cx);
+                        cx.notify();
+                    }
+                    TotpEvent::Relocked => {
+                        let id = row.read(cx).item().clone();
+                        if this.selected_id() == Some(&id) {
+                            this.relocked(id, cx);
+                        }
+                    }
+                }));
+                self.totp = Some(row);
+            }
+        }
         if self.pending_copy.as_deref() == Some("code") {
             self.pending_copy = None;
             self.copy_part(Part::Code, cx);
@@ -460,18 +561,11 @@ impl ItemDetail {
         if let Some(item) = self.selected_id() {
             recent::used(&self.account, item, cx);
         }
-        self.copied = Some(key);
-        self.copied_timer = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(motion::CONFIRMATION_HOLD)
-                .await;
-            this.update(cx, |this, cx| {
-                this.copied = None;
-                cx.notify();
-            })
-            .ok();
-        });
-        cx.notify();
+        if let Some(row) = &self.totp {
+            row.update(cx, |row, cx| row.clear_copied(cx));
+        }
+        self.touched(cx);
+        self.copied.set(key, cx, |this| &mut this.copied);
     }
 
     /// Copies the password, username or code of the login shown, as if its
@@ -481,10 +575,8 @@ impl ItemDetail {
         match part {
             Part::Username => self.copy_field("username".into(), cx),
             Part::Password => self.copy_field("password".into(), cx),
-            Part::Code => match self.code.clone() {
-                Some(code) if self.item().is_some() => {
-                    self.copy("code".into(), &code.code, true, cx)
-                }
+            Part::Code => match self.totp.clone() {
+                Some(row) if self.item().is_some() => row.update(cx, |row, cx| row.copy(cx)),
                 _ if self.selected.as_ref().is_some_and(|item| item.has_code) => {
                     self.copy_field("code".into(), cx)
                 }
@@ -509,9 +601,8 @@ impl ItemDetail {
                 return;
             }
         };
+        // The code came with the item, if it came: it isn't a field.
         if key == "code" {
-            // Its own answer is on the way.
-            self.pending_copy = Some(key);
             return;
         }
         let field = cards(item)
@@ -519,8 +610,7 @@ impl ItemDetail {
             .flatten()
             .find(|field| field.key == key);
         if let Some(field) = field.filter(|field| !field.value.is_empty()) {
-            let hidden = matches!(field.shown, Shown::Hidden | Shown::Password);
-            self.copy(key, &field.value, hidden, cx);
+            self.copy(key, &field.value, field.secret, cx);
         }
     }
 
@@ -533,6 +623,7 @@ impl ItemDetail {
         if !self.toggled.contains(key) {
             self.toggled.push(key.clone());
         }
+        self.touched(cx);
         cx.notify();
     }
 
@@ -554,6 +645,7 @@ impl ItemDetail {
                     window,
                     |this, _, _: &Unlocked, window, cx| {
                         this.reprompt = None;
+                        this._reprompt_events = None;
                         this.reload(cx);
                         // The field that had the keyboard goes with the prompt.
                         this.vault
@@ -572,35 +664,51 @@ impl ItemDetail {
     }
 
     /// Makes the item a favourite or not; the star changes at once, and
-    /// back if the change fails.
+    /// back if the change fails. One change at a time.
     fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        if self.favoriting {
+            return;
+        }
         let Some(item) = &mut self.selected else {
             return;
         };
+        let item = Arc::make_mut(item);
         item.favorite = !item.favorite;
-        cx.notify();
         let (account, id, favorite) = (self.account.clone(), item.id.clone(), item.favorite);
+        self.favoriting = true;
+        cx.notify();
         let vault = self.vault.clone();
-        backend::request(
+        let changed = id.clone();
+        self.favorite_task = backend::request_network(
             cx,
-            move |backend| backend.set_favorite(&account, &id, favorite),
-            move |this, result, cx| match result {
-                Ok(()) => {
-                    this.reload(cx);
-                    vault.update(cx, |vault, cx| vault.reload(cx)).ok();
-                }
-                Err(error) => {
-                    if let Some(item) = &mut this.selected {
-                        item.favorite = !favorite;
+            move |backend| backend.set_favorite(&account, &changed, favorite),
+            move |this, result, cx| {
+                this.favoriting = false;
+                match result {
+                    // The item says so too, for the editor; the list
+                    // reloads, which brings the summary.
+                    Ok(()) => {
+                        if let Some((loaded, Load::Ready(item))) = &mut this.loaded
+                            && *loaded == id
+                        {
+                            item.favorite = favorite;
+                        }
+                        vault_cache::invalidate(&this.account, cx);
+                        vault.update(cx, |vault, cx| vault.reload(cx)).ok();
                     }
-                    cx.notify();
-                    vault
-                        .update(cx, |vault, cx| vault.show_error(&error, cx))
-                        .ok();
+                    // Back, if the star is still this item's.
+                    Err(error) => {
+                        if let Some(item) = this.selected.as_mut().filter(|item| item.id == id) {
+                            Arc::make_mut(item).favorite = !favorite;
+                        }
+                        vault
+                            .update(cx, |vault, cx| vault.show_error(&error, cx))
+                            .ok();
+                    }
                 }
+                cx.notify();
             },
-        )
-        .detach();
+        );
     }
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -707,8 +815,9 @@ impl ItemDetail {
             value
         };
         let key = field.key.clone();
-        let copied = self.copied.as_ref() == Some(&field.key);
+        let copied = self.copied.is(&field.key);
         let value_for_copy = field.value.clone();
+        let secret = field.secret;
         let spoken = match field.shown {
             Shown::Hidden | Shown::Password if !revealed => None,
             Shown::Link => Some(website_host(field.value.expose())),
@@ -725,7 +834,7 @@ impl ItemDetail {
             if field.pending {
                 this.copy_field(key.clone(), cx)
             } else {
-                this.copy(key.clone(), &value_for_copy, hidden, cx)
+                this.copy(key.clone(), &value_for_copy, secret, cx)
             }
         }));
         if hidden {
@@ -764,6 +873,7 @@ impl ItemDetail {
                     if let Some(item) = this.selected_id() {
                         recent::used(&this.account, item, cx);
                     }
+                    this.touched(cx);
                 })),
             );
         } else if hidden {
@@ -835,105 +945,43 @@ impl ItemDetail {
     /// the way, its place.
     fn render_code(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let summary = self.selected.as_ref()?;
+        if self.item().is_some()
+            && let Some(row) = &self.totp
+        {
+            return Some(row.clone().into_any_element());
+        }
         // One that may ask for the master password shows nothing of itself
         // until it is known not to.
         let has_code = summary.has_code && (!summary.reprompt || self.item().is_some());
-        // Until the item's own comes, the code the pane showed of it last.
-        let code = self
-            .code
-            .as_ref()
-            .or_else(|| self.shape().and_then(Shape::code));
-        let theme = cx.theme();
-        let tertiary = theme.colors.text_tertiary;
-        let key: SharedString = "code".into();
-        let copied = self.copied.as_ref() == Some(&key);
-        let row = |digits: AnyElement, fraction: f32, cx: &mut Context<Self>| {
-            field_row(
-                "code",
-                "Verification code",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(digits)
-                    .child(progress_ring(fraction, cx)),
-            )
-            .copied(copied)
-            .action(icon(IconName::Copy).text_color(tertiary))
-        };
-        let Some(code) = code else {
-            return has_code.then(|| {
-                row(
-                    div()
-                        .text_color(tertiary)
-                        .child("––– –––")
-                        .into_any_element(),
-                    0.,
-                    cx,
-                )
+        has_code.then(|| {
+            let tertiary = cx.theme().colors.text_tertiary;
+            let digits = div()
+                .text_color(tertiary)
+                .child("––– –––")
+                .into_any_element();
+            code_row(digits, 0., false, cx)
                 .on_click(cx.listener(|this, _, _, cx| this.copy_part(Part::Code, cx)))
                 .into_any_element()
-            });
-        };
-        let remaining = code
-            .expires_at
-            .duration_since(SystemTime::now())
-            .unwrap_or_default();
-        let fraction = remaining.as_secs_f32() / code.period.as_secs_f32().max(1.);
-        let digits = code.code.expose();
-        let spaced = if digits.len() == 6 {
-            format!("{} {}", &digits[..3], &digits[3..])
-        } else {
-            digits.to_string()
-        };
-        let value = code.code.clone();
-        // Each new code fades up in place; the first comes with its item.
-        let period = code
-            .expires_at
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let digits = div().child(spaced.clone());
-        let shown = if self.code_fades {
-            motion::replace(("code", period as usize), digits).into_any_element()
-        } else {
-            digits.into_any_element()
-        };
-        Some(
-            row(shown, fraction, cx)
-                .spoken_value(spaced)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.copy(key.clone(), &value, true, cx)),
-                )
-                .into_any_element(),
-        )
+        })
     }
 }
 
+#[cfg(test)]
 fn has_code(item: &Item) -> bool {
     matches!(&item.data.content, ItemContent::Login(login) if !login.totp.is_empty())
-}
-
-/// An item with its verification code, if it has one, in one call: they
-/// show together.
-fn fetch(
-    backend: &dyn Backend,
-    account: &AccountId,
-    id: &ItemId,
-) -> rbw_desktop_core::Result<(Item, Option<rbw_desktop_core::Result<VerificationCode>>)> {
-    let item = backend.item(account, id)?;
-    let code = has_code(&item).then(|| backend.verification_code(account, id));
-    Ok((item, code))
 }
 
 /// The web address to open for a website, `https://` when it has none.
 /// `None` for an address the browser wouldn't open, such as `file:`,
 /// `smb:` or another app's: the system would hand it to that program, and
 /// an item shared by an organization can be changed by its other members.
+/// Nor for one with a space or a control character inside, such as a line
+/// break, which could make it read as something else on its way there.
 fn website_url(website: &str) -> Option<String> {
     let website = website.trim();
+    if website.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
     match website.split_once("://") {
         Some((scheme, rest))
             if !rest.is_empty()
@@ -943,7 +991,7 @@ fn website_url(website: &str) -> Option<String> {
             Some(website.to_string())
         }
         Some(_) => None,
-        None if website.is_empty() || website.contains(char::is_whitespace) => None,
+        None if website.is_empty() => None,
         None => Some(format!("https://{website}")),
     }
 }
@@ -1141,12 +1189,9 @@ fn cards(item: &Item) -> Vec<Vec<Field>> {
             })
             .collect(),
     );
-    cards.push(non_empty(vec![Field::new(
-        "notes",
-        "Notes",
-        item.data.notes.clone(),
-        Shown::Text,
-    )]));
+    cards.push(non_empty(vec![
+        Field::new("notes", "Notes", item.data.notes.clone(), Shown::Text).secret(),
+    ]));
     cards
 }
 
@@ -1219,11 +1264,16 @@ impl ItemDetail {
                 None => provisional_cards(summary),
             }),
         };
-        // The cards shown while the item was on the way stay as they are.
-        let known = provisional_cards(summary)
-            .iter()
-            .filter(|fields| !fields.is_empty())
-            .count();
+        // The cards shown while the item was on the way stay as they are;
+        // they matter only when the others fade in.
+        let known = if self.fields_fade {
+            provisional_cards(summary)
+                .iter()
+                .filter(|fields| !fields.is_empty())
+                .count()
+        } else {
+            0
+        };
         let content: Vec<AnyElement> = match fields {
             Ok(cards) => self.render_cards(cards, known, cx),
             Err(None) => match self.reprompt(window, cx) {
@@ -1287,11 +1337,6 @@ impl ItemDetail {
 
 impl Render for ItemDetail {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.code_expired
-            && let Some(id) = self.item().map(|item| item.id.clone())
-        {
-            self.fetch_code(id, cx);
-        }
         let fill = cx.theme().colors.window;
         let toolbar = self.render_toolbar(window, cx);
         let corner = chrome::corner_radius(window, cx);
@@ -1405,26 +1450,109 @@ mod tests {
             totp: Secret::new("JBSWY3DPEHPK3PXP"),
             ..Login::default()
         }));
-        login.data.notes = Secret::new("shown as it is");
+        login.data.notes = Secret::new("the recovery codes");
         login.data.fields = vec![rbw_desktop_core::CustomField {
             name: "PIN".into(),
             value: FieldValue::Hidden(Secret::new("1234")),
         }];
-        let shape = Shape::of(&login, None);
+        let shape = Shape::of(&login);
         let shown: Vec<String> = cards(&shape.item)
             .into_iter()
             .flatten()
             .map(|field| field.value.expose().to_string())
             .collect();
-        assert_eq!(shown, ["alex", MASK, MASK, "shown as it is"]);
+        assert_eq!(shown, ["alex", MASK, MASK, MASK]);
         // The same fields, so that nothing moves when the item comes.
         assert_eq!(keys(&cards(&shape.item)), keys(&cards(&login)));
         assert!(has_code(&shape.item));
-        // Nothing of the secrets themselves.
+        // Nothing of the secrets themselves, nor of the notes.
         let ItemContent::Login(masked) = &shape.item.data.content else {
             unreachable!()
         };
         assert_eq!(masked.totp.expose(), MASK);
+        assert_eq!(shape.item.data.notes.expose(), MASK);
+        // A secure note keeps nothing of itself either.
+        let mut note = item(ItemContent::SecureNote);
+        note.data.notes = Secret::new("the safe's combination");
+        assert_eq!(Shape::of(&note).item.data.notes.expose(), MASK);
+        // Empty notes stay empty: no notes show where there were none.
+        assert!(
+            Shape::of(&item(ItemContent::SecureNote))
+                .item
+                .data
+                .notes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_the_last_shapes_are_kept() {
+        let mut shapes = Shapes::default();
+        let shape = |id: usize| {
+            let mut note = item(ItemContent::SecureNote);
+            note.id = ItemId(id.to_string());
+            Shape::of(&note)
+        };
+        for id in 0..MAX_SHAPES + 5 {
+            shapes.insert(shape(id), false);
+        }
+        assert_eq!(shapes.len(), MAX_SHAPES);
+        // The oldest went first.
+        assert!(!shapes.contains(&ItemId("0".into())));
+        assert!(shapes.contains(&ItemId((MAX_SHAPES + 4).to_string())));
+        // One shown again is kept as the newest.
+        let kept = ItemId("5".into());
+        shapes.insert(shape(5), true);
+        shapes.insert(shape(1000), false);
+        assert!(shapes.contains(&kept));
+        assert!(!shapes.contains(&ItemId("6".into())));
+        shapes.clear();
+        assert_eq!(shapes.len(), 0);
+    }
+
+    #[test]
+    fn notes_and_hidden_values_copy_as_secrets() {
+        let mut login = item(ItemContent::Login(Login {
+            username: "alex".into(),
+            password: Secret::new("hunter2"),
+            websites: vec![rbw_desktop_core::Website {
+                uri: "bank.example".into(),
+                matching: None,
+            }],
+            ..Login::default()
+        }));
+        login.data.notes = Secret::new("recovery codes");
+        login.data.fields = vec![
+            rbw_desktop_core::CustomField {
+                name: "PIN".into(),
+                value: FieldValue::Hidden(Secret::new("1234")),
+            },
+            rbw_desktop_core::CustomField {
+                name: "Member".into(),
+                value: FieldValue::Text("4471".into()),
+            },
+        ];
+        let secret: Vec<(String, bool)> = cards(&login)
+            .into_iter()
+            .flatten()
+            .map(|field| (field.key.to_string(), field.secret))
+            .collect();
+        assert_eq!(
+            secret,
+            [
+                ("username".to_string(), false),
+                ("password".to_string(), true),
+                ("website-0".to_string(), false),
+                ("field-0".to_string(), true),
+                ("field-1".to_string(), false),
+                ("notes".to_string(), true),
+            ]
+        );
+        // A secure note's text is its notes: a secret, shown as text.
+        let mut note = item(ItemContent::SecureNote);
+        note.data.notes = Secret::new("the safe's combination");
+        let notes = cards(&note).into_iter().flatten().next().unwrap();
+        assert!(notes.secret && notes.shown == Shown::Text);
     }
 
     #[test]
@@ -1479,6 +1607,10 @@ mod tests {
             "https://",
             "",
             "bank example",
+            "https://evil.example\nbank.example",
+            "https://bank.example/\u{7}",
+            "https://bank.example/a b",
+            "bank.example\tother",
         ] {
             assert_eq!(website_url(refused), None, "{refused}");
         }

@@ -2,12 +2,14 @@
 //! (Shift-F10 or the Menu key): copy its username, password or code, make
 //! it a favourite, move it to a folder, from a submenu, edit or delete it.
 
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement as _, Pixels, Point, Styled as _, Window, div,
     point, prelude::FluentBuilder as _, px,
 };
 use rbw_desktop_core::{Error, FolderId, Item, ItemContent, ItemId, ItemKind, ItemSummary, Result};
-use rbw_desktop_ui::{Opening, ROW_HEIGHT, menu_item, menu_separator, popover};
+use rbw_desktop_ui::{Opening, Popover, ROW_HEIGHT, menu_item, menu_separator, motion, popover};
 
 use super::list::ROW_GAP;
 use super::{OpenContextMenu, Part, VaultView};
@@ -16,7 +18,7 @@ use crate::clipboard;
 use crate::recent;
 
 pub(super) struct ContextMenu {
-    item: ItemSummary,
+    item: Arc<ItemSummary>,
     position: Point<Pixels>,
     open: bool,
 }
@@ -65,10 +67,21 @@ impl VaultView {
         self.open_context_menu(id, position, window, cx);
     }
 
+    /// Closes the menu, which goes, with its item, once it has left.
     fn close_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = &mut self.context_menu {
             menu.open = false;
         }
+        self.context_menu_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::DISMISS).await;
+            this.update(cx, |this, cx| {
+                if this.context_menu.as_ref().is_some_and(|menu| !menu.open) {
+                    this.context_menu = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
         window.focus(&self.list_focus, cx);
         cx.notify();
     }
@@ -98,7 +111,7 @@ impl VaultView {
     }
 
     /// Shows the item, with the keyboard in its master password prompt.
-    fn ask_password_for(&mut self, id: ItemId, cx: &mut Context<Self>) {
+    pub(super) fn ask_password_for(&mut self, id: ItemId, cx: &mut Context<Self>) {
         self.select_by(Some(id), true, cx);
     }
 
@@ -111,7 +124,8 @@ impl VaultView {
         if let Part::Code = what {
             let account = self.account_id();
             let requested = id.clone();
-            backend::request(
+            // A newer request from the menu replaces it, as with_item's.
+            self.menu_task = backend::request(
                 cx,
                 move |backend| backend.verification_code(&account, &requested),
                 move |this, result, cx| match result {
@@ -122,8 +136,7 @@ impl VaultView {
                     Err(Error::RepromptRequired) => this.ask_password_for(id, cx),
                     Err(error) => this.show_error(&error, cx),
                 },
-            )
-            .detach();
+            );
             return;
         }
         self.with_item(id, window, cx, move |this, item, _, cx| {
@@ -147,18 +160,7 @@ impl VaultView {
     /// Something of an item was copied: its row says so for a moment.
     pub(super) fn copied(&mut self, item: &ItemId, cx: &mut Context<Self>) {
         recent::used(&self.account.id, item, cx);
-        self.copied = Some(item.clone());
-        self.copied_timer = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(rbw_desktop_ui::motion::CONFIRMATION_HOLD)
-                .await;
-            this.update(cx, |this, cx| {
-                this.copied = None;
-                cx.notify();
-            })
-            .ok();
-        });
-        cx.notify();
+        self.copied.set(item.clone(), cx, |this| &mut this.copied);
     }
 
     fn toggle_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -168,7 +170,7 @@ impl VaultView {
         let (account, id, favorite) =
             (self.account_id(), menu.item.id.clone(), !menu.item.favorite);
         self.close_context_menu(window, cx);
-        backend::request(
+        backend::request_network(
             cx,
             move |backend| backend.set_favorite(&account, &id, favorite),
             |this, result, cx| this.changed(result, cx),
@@ -186,7 +188,7 @@ impl VaultView {
         if unchanged {
             return;
         }
-        backend::request(
+        backend::request_network(
             cx,
             move |backend| backend.move_item(&account, &id, folder.as_ref()),
             |this, result, cx| this.changed(result, cx),
@@ -198,6 +200,7 @@ impl VaultView {
     fn changed(&mut self, result: Result<()>, cx: &mut Context<Self>) {
         match result {
             Ok(()) => {
+                crate::vault_cache::invalidate(&self.account.id, cx);
                 self.reload(cx);
                 self.detail.update(cx, |detail, cx| detail.reload(cx));
             }
@@ -225,19 +228,36 @@ impl VaultView {
 
     pub(super) fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
-        let item = &menu.item;
-        let this = cx.entity().downgrade();
+        let (this, view) = (cx.entity().downgrade(), cx.entity());
         let popover = popover(
             "item-menu",
             menu.open,
             &self.context_menu_focus,
-            item.name.clone(),
+            menu.item.name.clone(),
         )
         .opening(Opening::At(menu.position))
         .on_dismiss(move |window, cx| {
             this.update(cx, |this, cx| this.close_context_menu(window, cx))
                 .ok();
+        })
+        .when_shown(move |menu, _, cx| {
+            view.update(cx, |this, cx| this.context_menu_items(menu, cx))
         });
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .child(popover)
+                .into_any_element(),
+        )
+    }
+
+    /// The menu's items, made only while it shows.
+    fn context_menu_items(&mut self, popover: Popover, cx: &mut Context<Self>) -> Popover {
+        let Some(item) = self.context_menu.as_ref().map(|menu| menu.item.clone()) else {
+            return popover;
+        };
         let folders: Vec<AnyElement> =
             std::iter::once((None, "No Folder".to_string()))
                 .chain(
@@ -275,7 +295,7 @@ impl VaultView {
                 ));
         }
         let has_copies = !copies.is_empty();
-        let popover = popover
+        popover
             .children(copies)
             .when(has_copies, |menu| menu.child(menu_separator(cx)))
             .child(
@@ -298,14 +318,6 @@ impl VaultView {
                     .child(menu_item("delete", "Delete…").on_click(
                         cx.listener(|this, _, window, cx| this.delete_from_menu(window, cx)),
                     ))
-            });
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .child(popover)
-                .into_any_element(),
-        )
+            })
     }
 }

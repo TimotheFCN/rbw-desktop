@@ -5,28 +5,34 @@ mod detail;
 mod editor;
 mod list;
 mod sidebar;
+mod totp;
 
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gpui::base::input::{InputEvent, InputState};
 use gpui::{
-    App, AppContext as _, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
-    Styled as _, Subscription, Task, UniformListScrollHandle, Window, actions, div, px,
+    AnyWindowHandle, App, AppContext as _, Context, DragMoveEvent, Entity, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
+    Render, ScrollStrategy, Styled as _, Subscription, Task, UniformListScrollHandle, WeakEntity,
+    Window, actions, div, px,
 };
 use rbw_desktop_core::{
     Account, AccountId, Error, Folder, FolderId, Item, ItemId, ItemKind, ItemSummary, SortOrder,
 };
-use rbw_desktop_ui::{Confirmation, ListPointer, SheetSlot, ToastSlot, motion};
+use rbw_desktop_ui::{Confirmation, ListPointer, SheetSlot, motion};
 
 use crate::accounts::{AccountMenu, Request};
 use crate::backend::{self, Load};
+use crate::copied::CopiedSlot;
 use crate::generator::Generator;
 use crate::icons::{self, Icons};
 use crate::preferences::{self, Prefs};
 use crate::recent;
 use crate::secondary;
+use crate::vault_cache::{self, VaultSnapshot};
 use context_menu::ContextMenu;
 use detail::ItemDetail;
 use editor::ItemEditor;
@@ -158,10 +164,90 @@ impl Only {
     }
 }
 
+/// An item of a list, with what a search looks through, made once off
+/// the main thread when the list loads rather than on every key typed.
+#[derive(Clone)]
+pub(crate) struct Indexed {
+    pub summary: Arc<ItemSummary>,
+    /// Its name, subtitle and websites in lower case, apart.
+    search: String,
+    /// Names the elements of its row without a string made for each.
+    pub key: u64,
+}
+
+impl Indexed {
+    pub fn new(summary: ItemSummary) -> Self {
+        Self::from_shared(Arc::new(summary))
+    }
+
+    pub fn from_shared(summary: Arc<ItemSummary>) -> Self {
+        // A character no search typed in one line holds, so that no search
+        // finds the end of one field and the start of the next.
+        const APART: char = '\u{1f}';
+        let mut search = summary.name.to_lowercase();
+        for text in summary.subtitle.iter().chain(&summary.websites) {
+            search.push(APART);
+            search.push_str(&text.to_lowercase());
+        }
+        let mut hasher = DefaultHasher::new();
+        summary.id.hash(&mut hasher);
+        Self {
+            key: hasher.finish(),
+            summary,
+            search,
+        }
+    }
+
+    /// Whether a search, in lower case and trimmed, finds the item.
+    pub fn matches(&self, query: &str) -> bool {
+        query.is_empty() || self.search.contains(query)
+    }
+}
+
+/// The items sorted by name, ready for searching: off the main thread.
+pub(crate) fn index(mut items: Vec<ItemSummary>) -> Vec<Indexed> {
+    items.sort_by_cached_key(|item| item.name.to_lowercase());
+    items.into_iter().map(Indexed::new).collect()
+}
+
+/// Same as [`index`] for already-shared summaries from the vault cache.
+pub(crate) fn index_shared(items: Vec<Arc<ItemSummary>>) -> Vec<Indexed> {
+    items.into_iter().map(Indexed::from_shared).collect()
+}
+
+/// What the vault holds, for the sidebar and the list's menu to leave out
+/// what no item has: found once when the items load.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Holds {
+    kinds: Vec<ItemKind>,
+    /// Items in no folder.
+    unfiled: bool,
+    /// Logins with a verification code.
+    codes: bool,
+    /// Items shared through an organization.
+    shared: bool,
+}
+
+impl Holds {
+    fn of(items: &[Indexed]) -> Self {
+        let mut holds = Self::default();
+        for item in items {
+            let item = &item.summary;
+            if !holds.kinds.contains(&item.kind) {
+                holds.kinds.push(item.kind);
+            }
+            holds.unfiled |= item.folder.is_none();
+            holds.codes |= item.has_code;
+            holds.shared |= item.organization.is_some();
+        }
+        holds
+    }
+}
+
 /// The items, as indices into `items`, that the sidebar's choice, the
 /// menu's and a search in lower case admit, in `order`.
 fn visible(
-    items: &[ItemSummary],
+    items: &[Indexed],
     filter: &Filter,
     only: Only,
     query: &str,
@@ -171,7 +257,9 @@ fn visible(
     let mut visible: Vec<usize> = items
         .iter()
         .enumerate()
-        .filter(|(_, item)| filter.admits(item) && only.admits(item) && matches(item, query))
+        .filter(|(_, item)| {
+            filter.admits(&item.summary) && only.admits(&item.summary) && item.matches(query)
+        })
         .map(|(index, _)| index)
         .collect();
     sort(&mut visible, items, order, recent);
@@ -180,11 +268,11 @@ fn visible(
 
 /// Puts the list's items, given as indices into `items`, in `order`.
 /// `items` are sorted by name already, and ties keep that order.
-fn sort(visible: &mut [usize], items: &[ItemSummary], order: SortOrder, recent: &[ItemId]) {
+fn sort(visible: &mut [usize], items: &[Indexed], order: SortOrder, recent: &[ItemId]) {
     match order {
         SortOrder::Name => {}
         SortOrder::Modified => {
-            visible.sort_by_key(|&index| std::cmp::Reverse(items[index].modified));
+            visible.sort_by_key(|&index| std::cmp::Reverse(items[index].summary.modified));
         }
         SortOrder::RecentlyUsed => {
             let rank: std::collections::HashMap<&ItemId, usize> = recent
@@ -192,9 +280,60 @@ fn sort(visible: &mut [usize], items: &[ItemSummary], order: SortOrder, recent: 
                 .enumerate()
                 .map(|(rank, id)| (id, rank))
                 .collect();
-            visible.sort_by_key(|&index| rank.get(&items[index].id).copied().unwrap_or(usize::MAX));
+            visible.sort_by_key(|&index| {
+                rank.get(&items[index].summary.id)
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
         }
     }
+}
+
+/// The logins whose icons are read ahead for the sidebar's choices other
+/// than `shown`: the first rows of each, so that choosing one shows its
+/// list complete. Off the main thread: it sorts the list once per choice.
+fn icons_ahead(
+    items: &[Indexed],
+    folders: &[Folder],
+    shown: &Filter,
+    only: Only,
+    query: &str,
+    order: SortOrder,
+    recent: &[ItemId],
+) -> Vec<Arc<ItemSummary>> {
+    [
+        Filter::All,
+        Filter::Favorites,
+        Filter::Kind(ItemKind::Login),
+        Filter::NoFolder,
+    ]
+    .into_iter()
+    .chain(
+        folders
+            .iter()
+            .map(|folder| Filter::Folder(folder.id.clone())),
+    )
+    .filter(|filter| filter != shown)
+    .flat_map(|filter| {
+        visible(items, &filter, only, query, order, recent)
+            .into_iter()
+            .take(FIRST_ROWS)
+    })
+    // Only logins have websites' icons.
+    .filter(|&index| items[index].summary.kind == ItemKind::Login)
+    .take(OTHER_CHOICES_ROWS)
+    .map(|index| items[index].summary.clone())
+    .collect()
+}
+
+/// What the vault's items load with.
+struct Loaded {
+    items: Vec<Indexed>,
+    holds: Holds,
+    folders: Vec<Folder>,
+    recent: Vec<ItemId>,
+    icons: Option<icons::Cached>,
+    ahead: Vec<Arc<ItemSummary>>,
 }
 
 pub struct VaultView {
@@ -206,10 +345,15 @@ pub struct VaultView {
     /// GNOME's primary menu, in the sidebar's header bar.
     main_menu_open: bool,
     main_menu_focus: FocusHandle,
-    items: Load<Vec<ItemSummary>>,
+    /// The items, shared with the work done off the main thread.
+    items: Load<Arc<Vec<Indexed>>>,
+    /// What the items hold, found when they loaded.
+    holds: Holds,
     /// The items that weren't in the list before it last loaded, such as
     /// one just created, whose rows fade in.
     arrived: HashSet<ItemId>,
+    /// Forgets the items arrived once their rows have faded in.
+    arrived_task: Task<()>,
     folders: Vec<Folder>,
     /// The items used last, as they were when the vault loaded, for
     /// sorting by them; using an item doesn't move it while it shows.
@@ -222,6 +366,9 @@ pub struct VaultView {
     /// The order the list was last sorted in, to sort it again when the
     /// preferences, read after it loaded, say otherwise.
     sorted_by: SortOrder,
+    /// The list's share the preferences gave last, to redraw only when it
+    /// changes rather than whenever they are saved.
+    saved_share: Option<f32>,
     sort_menu_open: bool,
     sort_menu_focus: FocusHandle,
     search: Entity<InputState>,
@@ -234,13 +381,18 @@ pub struct VaultView {
     /// edge of.
     drew: std::ops::Range<usize>,
     selected: Option<ItemId>,
+    /// The selection's row among `visible`, kept with them.
+    selected_index: Option<usize>,
     /// Where the selection's highlight is drawn, in rows, as it slides.
     highlight_at: Option<f32>,
     /// The list changed under the selection, which then doesn't slide.
     highlight_jumps: bool,
     detail: Entity<ItemDetail>,
     sheet: SheetSlot,
-    toast: ToastSlot,
+    /// The editor the sheet shows, if it shows one.
+    editor: Option<WeakEntity<ItemEditor>>,
+    /// The window, whose alerts say what went wrong.
+    window: AnyWindowHandle,
     list_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     list_pointer: ListPointer,
@@ -249,10 +401,11 @@ pub struct VaultView {
     /// The row drawn with the pointer's hover.
     hover_drawn: Option<usize>,
     context_menu: Option<ContextMenu>,
+    /// Forgets the context menu once it has left.
+    context_menu_task: Task<()>,
     /// The item something was copied of from its context menu, whose row
     /// says so for a moment.
-    copied: Option<ItemId>,
-    copied_timer: Task<()>,
+    copied: CopiedSlot<ItemId>,
     /// Fetches an item for the context menu; a newer one replaces it.
     menu_task: Task<()>,
     context_menu_focus: FocusHandle,
@@ -262,7 +415,16 @@ pub struct VaultView {
     generator_focus: FocusHandle,
     generator_task: Task<()>,
     last_sync: Option<SystemTime>,
+    syncing: bool,
+    sync_task: Task<()>,
+    locking: bool,
+    lock_task: Task<()>,
+    /// The item being moved to the trash, until the backend answers.
+    deleting: Option<ItemId>,
+    delete_task: Task<()>,
     load_task: Task<()>,
+    /// Reads ahead the icons of the sidebar's other choices.
+    icons_task: Task<()>,
     /// Fetches ahead the row the pointer rests on.
     hover_task: Task<()>,
     /// The list's share while its divider is dragged, until it is saved.
@@ -305,13 +467,16 @@ impl VaultView {
             main_menu_open: false,
             main_menu_focus: cx.focus_handle(),
             items: Load::Loading,
+            holds: Holds::default(),
             arrived: HashSet::new(),
+            arrived_task: Task::ready(()),
             folders: vec![],
             recent: vec![],
             filter: Filter::All,
             only: Only::default(),
             only_shown: Only::default(),
             sorted_by: SortOrder::Name,
+            saved_share: Prefs::global(cx).read(cx).get().list_share,
             sort_menu_open: false,
             sort_menu_focus: cx.focus_handle(),
             search,
@@ -319,40 +484,69 @@ impl VaultView {
             prefetched: 0..0,
             drew: 0..0,
             selected: None,
+            selected_index: None,
             highlight_at: None,
             highlight_jumps: false,
             detail,
             sheet: SheetSlot::default(),
-            toast: ToastSlot::default(),
+            editor: None,
+            window: window.window_handle(),
             list_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
             list_pointer: ListPointer::default(),
             pointer_row: None,
             hover_drawn: None,
             context_menu: None,
-            copied: None,
-            copied_timer: Task::ready(()),
+            context_menu_task: Task::ready(()),
+            copied: CopiedSlot::new(),
             menu_task: Task::ready(()),
             context_menu_focus: cx.focus_handle(),
             generator: None,
             generator_open: false,
             generator_focus: cx.focus_handle(),
             generator_task: Task::ready(()),
+            syncing: false,
+            sync_task: Task::ready(()),
+            locking: false,
+            lock_task: Task::ready(()),
+            deleting: None,
+            delete_task: Task::ready(()),
             load_task: Task::ready(()),
+            icons_task: Task::ready(()),
             hover_task: Task::ready(()),
             dragged_share: None,
             save_share_task: Task::ready(()),
             _subscriptions: [
                 cx.observe(&Icons::global(cx), |_, _, cx| cx.notify()),
+                // The preferences are saved whenever the window moves: only
+                // the order and the list's share change what shows here.
                 cx.observe(&Prefs::global(cx), |this, prefs, cx| {
-                    if prefs.read(cx).get().sort != this.sorted_by {
+                    let prefs = prefs.read(cx).get();
+                    let (sort, share) = (prefs.sort, prefs.list_share);
+                    if sort != this.sorted_by {
                         this.refilter(cx);
                     }
-                    cx.notify();
+                    if share != std::mem::replace(&mut this.saved_share, share) {
+                        cx.notify();
+                    }
                 }),
             ],
         };
-        this.reload(cx);
+        if let Some(cached) = vault_cache::get(&this.account.id, cx) {
+            let items = index_shared(cached.items);
+            this.holds = Holds::of(&items);
+            this.items = Load::Ready(Arc::new(items));
+            this.folders = cached.folders;
+            this.recent = cached.recent;
+            this.refilter(cx);
+            if cached.stale || cached.last_sync != this.last_sync {
+                this.reload(cx);
+            } else {
+                this.read_icons_ahead(cx);
+            }
+        } else {
+            this.reload(cx);
+        }
         window.focus(&this.list_focus, cx);
         if crate::demo::wants("new-item") {
             cx.defer_in(window, |this, window, cx| {
@@ -402,6 +596,8 @@ impl VaultView {
 
     /// Loads the items and folders again, keeping the selection if it still
     /// exists. The first time, the icons of the first rows come with them.
+    /// What a search looks through, what the vault holds and the icons to
+    /// read ahead are worked out with them, off the main thread.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let account = self.account_id();
         let first_load = matches!(self.items, Load::Loading);
@@ -410,47 +606,99 @@ impl VaultView {
         self.load_task = backend::request(
             cx,
             move |backend| {
-                let mut items = backend.items(&account)?;
-                items.sort_by_cached_key(|item| item.name.to_lowercase());
+                let items = index(backend.items(&account)?);
                 let folders = backend.folders(&account)?;
                 // Without them, the list is still worth showing.
                 let recent = backend.recent_items(&account).unwrap_or_default();
                 let icons = first_load.then(|| {
                     let rows = visible(&items, &filter, only, &query, order, &recent);
-                    let first = rows.into_iter().take(FIRST_ROWS).map(|index| &items[index]);
+                    let first = rows
+                        .into_iter()
+                        .take(FIRST_ROWS)
+                        .map(|index| &*items[index].summary);
                     icons::read_cached(backend, &account, first)
                 });
-                Ok((items, folders, recent, icons))
+                let ahead = icons_ahead(&items, &folders, &filter, only, &query, order, &recent);
+                Ok(Loaded {
+                    holds: Holds::of(&items),
+                    items,
+                    folders,
+                    recent,
+                    icons,
+                    ahead,
+                })
             },
             |this, result, cx| {
                 match result {
-                    Ok((items, folders, recent, icons)) => {
-                        if let Some(icons) = icons {
+                    Ok(loaded) => {
+                        if let Some(icons) = loaded.icons {
                             Icons::global(cx)
                                 .update(cx, |known, cx| known.insert_cached(icons, cx));
                         }
                         this.arrived = match &this.items {
                             Load::Ready(before) => {
                                 let before: HashSet<&ItemId> =
-                                    before.iter().map(|item| &item.id).collect();
-                                items
+                                    before.iter().map(|item| &item.summary.id).collect();
+                                loaded
+                                    .items
                                     .iter()
-                                    .filter(|item| !before.contains(&item.id))
-                                    .map(|item| item.id.clone())
+                                    .filter(|item| !before.contains(&item.summary.id))
+                                    .map(|item| item.summary.id.clone())
                                     .collect()
                             }
                             Load::Loading | Load::Failed(_) => HashSet::new(),
                         };
-                        this.items = Load::Ready(items);
-                        this.folders = folders;
-                        this.recent = recent;
+                        this.forget_arrived_later(cx);
+                        let cached_items: Vec<Arc<ItemSummary>> = loaded
+                            .items
+                            .iter()
+                            .map(|item| item.summary.clone())
+                            .collect();
+                        let account = this.account.id.clone();
+                        vault_cache::put(
+                            account.clone(),
+                            VaultSnapshot {
+                                last_sync: this.last_sync,
+                                items: cached_items,
+                                folders: loaded.folders.clone(),
+                                recent: loaded.recent.clone(),
+                                stale: false,
+                            },
+                            cx,
+                        );
+                        this.items = Load::Ready(Arc::new(loaded.items));
+                        this.holds = loaded.holds;
+                        this.folders = loaded.folders;
+                        this.recent = loaded.recent;
+                        Icons::global(cx).update(cx, |icons, cx| {
+                            icons.prefetch(&account, loaded.ahead.iter().map(|item| &**item), cx)
+                        });
                     }
-                    Err(error) => this.items = Load::Failed(error),
+                    Err(error) => {
+                        this.items = Load::Failed(error);
+                        this.holds = Holds::default();
+                    }
                 }
                 this.refilter(cx);
-                this.read_icons_ahead(cx);
             },
         );
+    }
+
+    /// The rows that arrived fade in once: after that they are rows like
+    /// any other.
+    fn forget_arrived_later(&mut self, cx: &mut Context<Self>) {
+        if self.arrived.is_empty() {
+            self.arrived_task = Task::ready(());
+            return;
+        }
+        self.arrived_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::ARRIVE).await;
+            this.update(cx, |this, cx| {
+                this.arrived.clear();
+                cx.notify();
+            })
+            .ok();
+        });
     }
 
     /// Lists the items the sidebar and the search admit, keeping the
@@ -470,17 +718,18 @@ impl VaultView {
         };
         self.prefetched = 0..0;
         self.highlight_jumps = true;
-        match self.selected_index() {
+        self.locate_selected();
+        match self.selected_index {
             Some(index) => {
                 self.list_scroll
                     .scroll_to_item(index, ScrollStrategy::Nearest);
-                if let Some(item) = self.visible_items().nth(index).cloned() {
+                if let Some(item) = self.item_at(index).cloned() {
                     self.detail
                         .update(cx, |detail, cx| detail.set_summary(item, cx));
                 }
             }
             None => {
-                let first = self.visible_items().next().map(|item| item.id.clone());
+                let first = self.item_at(0).map(|item| item.id.clone());
                 self.select(first, cx);
             }
         }
@@ -489,50 +738,56 @@ impl VaultView {
 
     /// Reads the icons of the first rows of the sidebar's other choices
     /// from rbw's cache, so that choosing one shows its list complete, its
-    /// icons with it.
-    fn read_icons_ahead(&self, cx: &mut Context<Self>) {
-        let Some(items) = self.items.ready() else {
+    /// icons with it. Which rows those are is worked out off the main
+    /// thread.
+    fn read_icons_ahead(&mut self, cx: &mut Context<Self>) {
+        let Some(items) = self.items.ready().cloned() else {
             return;
         };
-        let (query, order) = (self.query(cx), Prefs::global(cx).read(cx).get().sort);
-        // Only logins have websites' icons.
-        let choices = [
-            Filter::All,
-            Filter::Favorites,
-            Filter::Kind(ItemKind::Login),
-            Filter::NoFolder,
-        ]
-        .into_iter()
-        .chain(
-            self.folders
-                .iter()
-                .map(|folder| Filter::Folder(folder.id.clone())),
-        )
-        .filter(|filter| *filter != self.filter);
-        let rows: Vec<&ItemSummary> = choices
-            .flat_map(|filter| {
-                visible(items, &filter, self.only, &query, order, &self.recent)
-                    .into_iter()
-                    .take(FIRST_ROWS)
-            })
-            .take(OTHER_CHOICES_ROWS)
-            .map(|index| &items[index])
-            .collect();
+        let (filter, only, query) = (self.filter.clone(), self.only, self.query(cx));
+        let order = Prefs::global(cx).read(cx).get().sort;
+        let (folders, recent) = (self.folders.clone(), self.recent.clone());
         let account = self.account.id.clone();
-        Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&account, rows, cx));
+        self.icons_task = cx.spawn(async move |this, cx| {
+            let rows = cx
+                .background_spawn(async move {
+                    icons_ahead(&items, &folders, &filter, only, &query, order, &recent)
+                })
+                .await;
+            this.update(cx, |_, cx| {
+                Icons::global(cx).update(cx, |icons, cx| {
+                    icons.prefetch(&account, rows.iter().map(|item| &**item), cx)
+                })
+            })
+            .ok();
+        });
     }
 
     pub(crate) fn focus_list(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.list_focus, cx);
     }
 
-    fn summary(&self, id: &ItemId) -> Option<&ItemSummary> {
-        self.items.ready()?.iter().find(|item| item.id == *id)
+    fn summary(&self, id: &ItemId) -> Option<&Arc<ItemSummary>> {
+        self.items
+            .ready()?
+            .iter()
+            .map(|item| &item.summary)
+            .find(|item| item.id == *id)
     }
 
-    fn visible_items(&self) -> impl Iterator<Item = &ItemSummary> {
-        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
-        self.visible.iter().map(move |&index| &items[index])
+    /// The item at `position` in the list.
+    fn item_at(&self, position: usize) -> Option<&Arc<ItemSummary>> {
+        let index = *self.visible.get(position)?;
+        Some(&self.items.ready()?.get(index)?.summary)
+    }
+
+    fn visible_items(&self) -> impl Iterator<Item = &Arc<ItemSummary>> {
+        let items = self
+            .items
+            .ready()
+            .map(|items| items.as_slice())
+            .unwrap_or_default();
+        self.visible.iter().map(move |&index| &items[index].summary)
     }
 
     fn set_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
@@ -578,6 +833,7 @@ impl VaultView {
             return;
         }
         self.selected = item.clone();
+        self.locate_selected();
         let summary = item.and_then(|id| self.summary(&id).cloned());
         // A selection that moves with the keys or the search is fetched
         // once it rests; meanwhile it shows from its shape, or the list.
@@ -592,7 +848,7 @@ impl VaultView {
     }
 
     fn select_index(&mut self, index: usize, cx: &mut Context<Self>) {
-        let item = self.visible_items().nth(index).map(|item| item.id.clone());
+        let item = self.item_at(index).map(|item| item.id.clone());
         if item.is_some() {
             self.select(item, cx);
             self.list_scroll
@@ -601,8 +857,16 @@ impl VaultView {
     }
 
     fn selected_index(&self) -> Option<usize> {
-        let selected = self.selected.as_ref()?;
-        self.visible_items().position(|item| &item.id == selected)
+        self.selected_index
+    }
+
+    /// Finds the selection's row again, after the selection or the rows
+    /// changed: drawing the list reads it rather than looking for it.
+    fn locate_selected(&mut self) {
+        self.selected_index = self
+            .selected
+            .as_ref()
+            .and_then(|selected| self.visible_items().position(|item| &item.id == selected));
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -622,9 +886,9 @@ impl VaultView {
     /// at once when chosen: the next one the arrow keys go to, the one the
     /// pointer is on.
     fn prefetch_rows(&mut self, rows: impl IntoIterator<Item = usize>, cx: &mut Context<Self>) {
-        let items: Vec<ItemSummary> = rows
+        let items: Vec<Arc<ItemSummary>> = rows
             .into_iter()
-            .filter_map(|row| self.visible_items().nth(row).cloned())
+            .filter_map(|row| self.item_at(row).cloned())
             .collect();
         self.detail
             .update(cx, |detail, cx| detail.prefetch(items, cx));
@@ -672,9 +936,13 @@ impl VaultView {
     }
 
     /// Edits the selected item, once it has arrived if it is on the way.
+    /// A read-only item, shared without the right to change it, isn't.
     fn edit_item(&mut self, _: &EditItem, window: &mut Window, cx: &mut Context<Self>) {
         let detail = self.detail.read(cx);
-        if let Some(item) = detail.item().cloned() {
+        if !detail.selected().is_some_and(|item| item.editable) {
+            return;
+        }
+        if let Some(item) = detail.item().filter(|item| item.editable).cloned() {
             self.open_editor(item, window, cx);
         } else if let Some(id) = detail.selected().map(|item| item.id.clone()) {
             self.fetch_and_edit(id, window, cx);
@@ -691,6 +959,9 @@ impl VaultView {
     }
 
     fn open_editor(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        if !item.editable {
+            return;
+        }
         let vault = cx.entity().downgrade();
         let folders = self.folders.clone();
         let account = self.account_id();
@@ -700,6 +971,7 @@ impl VaultView {
 
     fn present(&mut self, editor: Entity<ItemEditor>, window: &mut Window, cx: &mut Context<Self>) {
         editor.update(cx, |editor, cx| editor.focus(window, cx));
+        self.editor = Some(editor.downgrade());
         self.sheet.present(editor);
         cx.notify();
     }
@@ -712,6 +984,7 @@ impl VaultView {
         cx: &mut Context<Self>,
     ) {
         self.sheet.dismiss();
+        self.editor = None;
         window.focus(&self.list_focus, cx);
         if let Some(item) = saved {
             recent::used(&self.account.id, &item, cx);
@@ -740,34 +1013,51 @@ impl VaultView {
         }
     }
 
+    /// Syncs the vault, once at a time: another Sync while one runs waits
+    /// for nothing.
     fn sync(&mut self, _: &Sync, _: &mut Window, cx: &mut Context<Self>) {
+        if self.syncing {
+            return;
+        }
+        self.syncing = true;
+        cx.notify();
         let account = self.account_id();
-        backend::request(
+        self.sync_task = backend::request_network(
             cx,
             move |backend| backend.sync(&account),
-            |this, result, cx| match result {
-                Ok(()) => crate::accounts::refresh(cx),
-                Err(error) => this.show_error(&error, cx),
+            |this, result, cx| {
+                this.syncing = false;
+                match result {
+                    Ok(()) => crate::accounts::refresh(cx),
+                    Err(error) => this.show_error(&error, cx),
+                }
+                cx.notify();
             },
-        )
-        .detach();
+        );
     }
 
     fn lock(&mut self, _: &Lock, _: &mut Window, cx: &mut Context<Self>) {
+        if self.locking {
+            return;
+        }
+        self.locking = true;
         let account = self.account_id();
         let locked = account.clone();
-        backend::request(
+        self.lock_task = backend::request(
             cx,
             move |backend| backend.lock(&account),
-            |this, result, cx| match result {
-                Ok(()) => {
-                    cx.emit(Request::Locked(locked));
-                    crate::accounts::refresh(cx);
+            |this, result, cx| {
+                this.locking = false;
+                match result {
+                    Ok(()) => {
+                        vault_cache::clear_account(&locked, cx);
+                        cx.emit(Request::Locked(locked));
+                        crate::accounts::refresh(cx);
+                    }
+                    Err(error) => this.show_error(&error, cx),
                 }
-                Err(error) => this.show_error(&error, cx),
             },
-        )
-        .detach();
+        );
     }
 
     fn delete_selected(&mut self, _: &DeleteItem, window: &mut Window, cx: &mut Context<Self>) {
@@ -778,7 +1068,28 @@ impl VaultView {
     }
 
     /// Asks, then moves the item to the trash and selects the one after it.
+    /// An item that asks for the master password again has it asked for
+    /// first: it goes only once it is open.
     pub(crate) fn delete_item(
+        &mut self,
+        id: ItemId,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.deleting.is_some() {
+            return;
+        }
+        if self.summary(&id).is_some_and(|item| item.reprompt) {
+            self.with_item(id, window, cx, move |this, item, window, cx| {
+                this.confirm_delete(item.id, name, window, cx)
+            });
+        } else {
+            self.confirm_delete(id, name, window, cx);
+        }
+    }
+
+    fn confirm_delete(
         &mut self,
         id: ItemId,
         name: String,
@@ -800,33 +1111,50 @@ impl VaultView {
     }
 
     fn delete_confirmed(&mut self, id: ItemId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.deleting.is_some() {
+            return;
+        }
+        self.deleting = Some(id.clone());
         let account = self.account_id();
         let deleted = id.clone();
-        backend::request_in(
+        self.delete_task = backend::request_network_in(
             window,
             cx,
             move |backend| backend.delete_item(&account, &id),
-            move |this, result, window, cx| match result {
-                Ok(()) => {
-                    if this.sheet.is_open() {
-                        this.dismiss_sheet(None, window, cx);
+            move |this, result, window, cx| {
+                this.deleting = None;
+                match result {
+                    Ok(()) => {
+                        vault_cache::invalidate(&this.account.id, cx);
+                        // Only the sheet that edits the item goes with it.
+                        if this.sheet.is_open() && this.edits(&deleted, cx) {
+                            this.dismiss_sheet(None, window, cx);
+                        }
+                        // The next item takes its place, or the one before it
+                        // at the end of the list.
+                        let neighbour = this.selected_index().and_then(|index| {
+                            let items: Vec<_> =
+                                this.visible_items().map(|item| item.id.clone()).collect();
+                            neighbour(&items, index)
+                        });
+                        if this.selected.as_ref() == Some(&deleted) {
+                            this.select(neighbour, cx);
+                        }
+                        this.reload(cx);
                     }
-                    // The next item takes its place, or the one before it at
-                    // the end of the list.
-                    let neighbour = this.selected_index().and_then(|index| {
-                        let items: Vec<_> =
-                            this.visible_items().map(|item| item.id.clone()).collect();
-                        neighbour(&items, index)
-                    });
-                    if this.selected.as_ref() == Some(&deleted) {
-                        this.select(neighbour, cx);
-                    }
-                    this.reload(cx);
+                    Err(Error::RepromptRequired) => this.ask_password_for(deleted, cx),
+                    Err(error) => this.show_error(&error, cx),
                 }
-                Err(error) => this.show_error(&error, cx),
             },
-        )
-        .detach();
+        );
+    }
+
+    /// Whether the sheet edits this item.
+    fn edits(&self, item: &ItemId, cx: &App) -> bool {
+        self.editor
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+            .is_some_and(|editor| editor.read(cx).editing() == Some(item))
     }
 
     fn copy_password(&mut self, _: &CopyPassword, _: &mut Window, cx: &mut Context<Self>) {
@@ -920,12 +1248,19 @@ impl VaultView {
         cx.notify();
     }
 
+    /// Says what went wrong at the bottom of the window, with the window's
+    /// other news: one toast at a time.
     pub(crate) fn show_error(&mut self, error: &Error, cx: &mut Context<Self>) {
-        self.toast.show(
-            backend::describe(error),
-            |this: &mut Self| &mut this.toast,
-            cx,
-        );
+        let message = backend::describe(error);
+        let window = self.window;
+        // Once this view is done updating: the window is busy until then.
+        cx.defer(move |cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    crate::alerts::toast(message, window, cx)
+                })
+                .ok();
+        });
     }
 }
 
@@ -936,20 +1271,6 @@ fn neighbour(items: &[ItemId], index: usize) -> Option<ItemId> {
         .get(index + 1)
         .or_else(|| index.checked_sub(1).and_then(|before| items.get(before)))
         .cloned()
-}
-
-/// Whether a search, in lower case, finds the item.
-pub(crate) fn matches(item: &ItemSummary, query: &str) -> bool {
-    query.is_empty()
-        || item.name.to_lowercase().contains(query)
-        || item
-            .subtitle
-            .as_ref()
-            .is_some_and(|subtitle| subtitle.to_lowercase().contains(query))
-        || item
-            .websites
-            .iter()
-            .any(|website| website.to_lowercase().contains(query))
 }
 
 impl AccountMenu for VaultView {
@@ -985,7 +1306,6 @@ impl Render for VaultView {
         let list = self.render_list(share, window, cx);
         let divider = self.render_divider(share, cx);
         let sheet = self.sheet.render(px(480.), window, cx);
-        let toast = self.toast.render(window, cx);
         // The sheet is outside the vault's key context, so that none of the
         // vault's shortcuts act behind it.
         div()
@@ -1027,7 +1347,6 @@ impl Render for VaultView {
                     .children(self.render_context_menu(cx)),
             )
             .children(sheet)
-            .children(toast)
     }
 }
 
@@ -1059,10 +1378,65 @@ mod tests {
             websites: vec!["https://Bank.example".into()],
             ..item("Bank", ItemKind::Login)
         };
+        let login = Indexed::new(login);
         for query in ["", "ban", "alex.m", "bank.example"] {
-            assert!(matches(&login, query), "{query}");
+            assert!(login.matches(query), "{query}");
         }
-        assert!(!matches(&login, "github"));
+        assert!(!login.matches("github"));
+        // Not across the end of one field and the start of the next.
+        assert!(!login.matches("bankalex"));
+    }
+
+    #[test]
+    fn the_vault_says_what_it_holds() {
+        let items = index(vec![
+            ItemSummary {
+                has_code: true,
+                folder: Some(FolderId("travel".into())),
+                ..item("GitHub", ItemKind::Login)
+            },
+            ItemSummary {
+                folder: Some(FolderId("travel".into())),
+                ..item("Visa", ItemKind::Card)
+            },
+        ]);
+        let holds = Holds::of(&items);
+        assert_eq!(holds.kinds, [ItemKind::Login, ItemKind::Card]);
+        assert!(holds.codes && !holds.shared && !holds.unfiled);
+        // Sorted by name, each with a key of its own.
+        assert_eq!(items[0].summary.name, "GitHub");
+        assert_ne!(items[0].key, items[1].key);
+    }
+
+    #[test]
+    fn icons_are_read_ahead_for_logins_of_the_other_choices() {
+        let items = index(vec![
+            ItemSummary {
+                favorite: true,
+                ..item("Bank", ItemKind::Login)
+            },
+            ItemSummary {
+                favorite: true,
+                ..item("Visa", ItemKind::Card)
+            },
+        ]);
+        let ahead = |shown: &Filter| -> Vec<String> {
+            icons_ahead(
+                &items,
+                &[],
+                shown,
+                Only::default(),
+                "",
+                SortOrder::Name,
+                &[],
+            )
+            .iter()
+            .map(|item| item.name.clone())
+            .collect()
+        };
+        // Every choice but the one shown, and only their logins.
+        assert!(ahead(&Filter::All).iter().all(|name| name == "Bank"));
+        assert!(!ahead(&Filter::All).is_empty());
     }
 
     #[test]
@@ -1085,7 +1459,7 @@ mod tests {
     #[test]
     fn the_list_sorts_by_name_change_or_use() {
         let at = |seconds| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
-        let items = [
+        let items = index(vec![
             ItemSummary {
                 modified: at(10),
                 ..item("Amazon", ItemKind::Login)
@@ -1098,7 +1472,7 @@ mod tests {
                 modified: at(20),
                 ..item("Codes", ItemKind::SecureNote)
             },
-        ];
+        ]);
         let sorted = |order, recent: &[ItemId]| {
             let mut visible = vec![0, 1, 2];
             sort(&mut visible, &items, order, recent);
