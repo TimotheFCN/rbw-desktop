@@ -2,9 +2,11 @@
 //! secrets on stdin and errors as JSON on stderr.
 
 use std::ffi::OsStr;
-use std::io::Write as _;
+use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
@@ -47,6 +49,8 @@ pub struct Rbw {
     path: PathBuf,
     /// Whether it is the one bundled with the app.
     bundled: bool,
+    /// What `rbw --version` printed, once asked.
+    version: OnceLock<Version>,
 }
 
 impl Rbw {
@@ -71,13 +75,17 @@ impl Rbw {
     }
 
     fn checked(path: PathBuf, bundled: bool) -> Result<Self> {
-        let rbw = Self { path, bundled };
+        let rbw = Self {
+            path,
+            bundled,
+            version: OnceLock::new(),
+        };
         let version = rbw.version()?;
         if version.is_enough() {
             Ok(rbw)
         } else {
             Err(Error::RbwTooOld {
-                found: version.text,
+                found: version.text.clone(),
                 required: REQUIRED_RBW.to_string(),
             })
         }
@@ -89,6 +97,7 @@ impl Rbw {
         Self {
             path,
             bundled: false,
+            version: OnceLock::new(),
         }
     }
 
@@ -106,10 +115,15 @@ impl Rbw {
         cfg!(target_os = "macos") && transient(&self.path)
     }
 
-    /// The version `rbw --version` prints.
-    pub fn version(&self) -> Result<Version> {
+    /// The version `rbw --version` prints, asked once: the program at the
+    /// path doesn't change while the app runs it.
+    pub fn version(&self) -> Result<&Version> {
+        if let Some(version) = self.version.get() {
+            return Ok(version);
+        }
         let output = self.run(None, &["--version"], None, Wait::Local)?;
-        Ok(Version::of(&String::from_utf8_lossy(&output)))
+        let version = Version::of(&String::from_utf8_lossy(&output));
+        Ok(self.version.get_or_init(|| version))
     }
 
     /// Runs `rbw` for a profile and returns its output, or how it failed.
@@ -173,44 +187,44 @@ impl Rbw {
         let (input_pipe, output_pipe, error_pipe) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take());
 
-        // the scope waits for its threads, which end once rbw has exited or
-        // been killed and its pipes have closed
-        std::thread::scope(|scope| {
-            let stdout = scope.spawn(|| read_all(output_pipe));
-            let stderr = scope.spawn(|| read_all(error_pipe));
-            if let (Some(input), Some(mut pipe)) = (stdin, input_pipe) {
-                // a failed write shows as rbw's own error about its input
-                scope.spawn(move || pipe.write_all(input));
-            }
+        // Threads of their own, not scoped: a program rbw started may keep
+        // its pipes open after it ends or is killed, and nothing may wait
+        // for them past the deadline. They end once the pipes close.
+        let stdout = read_in_thread(output_pipe);
+        let stderr = read_in_thread(error_pipe);
+        if let (Some(input), Some(mut pipe)) = (stdin, input_pipe) {
+            let input = Zeroizing::new(input.to_vec());
+            // a failed write shows as rbw's own error about its input
+            std::thread::spawn(move || pipe.write_all(&input));
+        }
 
-            let mut pause = Duration::from_millis(1);
-            let status = loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break status,
-                    Ok(None) if Instant::now() >= deadline => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(Error::Timeout.into());
-                    }
-                    Ok(None) => {
-                        std::thread::sleep(pause);
-                        pause = (pause * 2).min(Duration::from_millis(20));
-                    }
-                    Err(error) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(Error::Other(format!("can't wait for rbw: {error}")).into());
-                    }
+        let mut pause = Duration::from_millis(1);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Timeout.into());
                 }
-            };
-            let stdout = stdout.join().unwrap_or_default();
-            let stderr = stderr.join().unwrap_or_default();
-            if status.success() {
-                Ok(stdout)
-            } else {
-                Err(failure(&String::from_utf8_lossy(&stderr)))
+                Ok(None) => {
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_millis(20));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Other(format!("can't wait for rbw: {error}")).into());
+                }
             }
-        })
+        };
+        let stdout = collect(&stdout, deadline)?;
+        let stderr = collect(&stderr, deadline)?;
+        if status.success() {
+            Ok(stdout)
+        } else {
+            Err(failure(&String::from_utf8_lossy(&stderr)))
+        }
     }
 
     /// Runs `rbw` and parses its JSON output.
@@ -227,12 +241,53 @@ impl Rbw {
     }
 }
 
-fn read_all(pipe: Option<impl std::io::Read>) -> Zeroizing<Vec<u8>> {
-    // room for an item with its secrets, so that the buffer rarely grows
-    // and leaves copies behind
-    let mut output = Zeroizing::new(Vec::with_capacity(64 * 1024));
-    if let Some(mut pipe) = pipe {
-        let _ = pipe.read_to_end(&mut output);
+/// Reads a pipe to its end in a thread, for [`collect`].
+fn read_in_thread(pipe: Option<impl Read + Send + 'static>) -> Receiver<Zeroizing<Vec<u8>>> {
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::spawn(move || send.send(read_all(pipe)));
+    receive
+}
+
+/// What a pipe's thread read, once the pipe closed; a timeout if it is
+/// still open at the deadline.
+fn collect(
+    output: &Receiver<Zeroizing<Vec<u8>>>,
+    deadline: Instant,
+) -> Result<Zeroizing<Vec<u8>>, Failure> {
+    match output.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(output) => Ok(output),
+        Err(RecvTimeoutError::Timeout) => Err(Error::Timeout.into()),
+        // the thread panicked: nothing was read
+        Err(RecvTimeoutError::Disconnected) => Ok(Zeroizing::default()),
+    }
+}
+
+/// Room for an item with its secrets, so that the buffer rarely grows.
+const OUTPUT_CAPACITY: usize = 64 * 1024;
+
+fn read_all(pipe: Option<impl Read>) -> Zeroizing<Vec<u8>> {
+    let mut output = Zeroizing::new(Vec::with_capacity(OUTPUT_CAPACITY));
+    let Some(mut pipe) = pipe else {
+        return output;
+    };
+    let mut chunk = Zeroizing::new([0_u8; 8 * 1024]);
+    loop {
+        let read = match pipe.read(&mut chunk[..]) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        // grown by hand, never by the vector itself, which would leave the
+        // old buffer with its secrets in freed memory: this one is zeroed
+        // as it drops
+        if output.len() + read > output.capacity() {
+            let capacity = (output.capacity() * 2).max(output.len() + read);
+            let mut grown = Zeroizing::new(Vec::with_capacity(capacity));
+            grown.extend_from_slice(&output);
+            output = grown;
+        }
+        output.extend_from_slice(&chunk[..read]);
     }
     output
 }
@@ -261,6 +316,7 @@ fn transient(path: &Path) -> bool {
 }
 
 /// An `rbw --version`.
+#[derive(Clone, Debug)]
 pub struct Version {
     /// rbw-ng's version number, or the whole text for another program, such
     /// as the original rbw.
@@ -515,6 +571,67 @@ mod tests {
         let output = sleep.run(None, &["0.05"], None, Wait::Local).unwrap();
         assert!(output.is_empty());
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn reads_more_than_its_first_buffer() {
+        let input: Vec<u8> = (0..OUTPUT_CAPACITY * 3 + 17).map(|i| i as u8).collect();
+        let output = read_all(Some(std::io::Cursor::new(input.clone())));
+        assert_eq!(*output, input);
+        assert!(read_all(None::<std::io::Empty>).is_empty());
+    }
+
+    #[test]
+    fn asks_the_version_once() {
+        let rbw = Rbw::at(PathBuf::from("/bin/echo"));
+        let first: *const Version = rbw.version().unwrap();
+        let second: *const Version = rbw.version().unwrap();
+        assert_eq!(first, second);
+        assert_eq!(rbw.version().unwrap().rbw_ng(), None);
+    }
+
+    #[test]
+    fn a_program_left_with_its_pipes_doesnt_hold_up_a_timeout() {
+        // the shell ends at the deadline, its child keeps stdout and stderr
+        let shell = Rbw::at(PathBuf::from("/bin/sh"));
+        let start = Instant::now();
+        let failure = shell
+            .run_within(
+                None,
+                &["-c", "sleep 3 & sleep 3"],
+                None,
+                &[],
+                Duration::from_millis(200),
+            )
+            .unwrap_err();
+        assert_eq!(failure.error, Error::Timeout);
+        assert!(start.elapsed() < Duration::from_secs(2));
+
+        // the shell ends at once, its child keeps them past the deadline
+        let start = Instant::now();
+        let failure = shell
+            .run_within(
+                None,
+                &["-c", "sleep 3 &"],
+                None,
+                &[],
+                Duration::from_millis(200),
+            )
+            .unwrap_err();
+        assert_eq!(failure.error, Error::Timeout);
+        assert!(start.elapsed() < Duration::from_secs(2));
+
+        // and one that closes them answers as usual
+        let output = shell
+            .run_within(
+                None,
+                &["-c", "echo hi; sleep 3 >/dev/null 2>&1 &"],
+                None,
+                &[],
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(&output[..], b"hi\n");
     }
 
     #[test]

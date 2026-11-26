@@ -36,7 +36,7 @@ pub use command_line::{CommandLineTool, OtherRbw, ToolState};
 pub use error::{Error, Result};
 pub use fake::{FakeBackend, Operation};
 pub use generator::{CharacterClasses, Characters, GeneratorOptions, Strength};
-pub use icon::{IconFormat, WebsiteIcon};
+pub use icon::{IconFormat, WebsiteIcon, host_from_uri};
 pub use item::{
     Card, CustomField, FieldValue, Folder, FolderId, Identity, Item, ItemContent, ItemData, ItemId,
     ItemKind, ItemSummary, Login, Revision, SshKey, UriMatch, VerificationCode, Website,
@@ -111,6 +111,17 @@ pub trait Backend: Send + Sync {
     /// an item that asks for the master password again and isn't unlocked.
     fn item(&self, account: &AccountId, item: &ItemId) -> Result<Item>;
 
+    /// [`Backend::item`] with its current verification code, when it is a
+    /// login with one, in a single call where the backend can. A code that
+    /// fails to come is `None`: the item still comes.
+    fn item_with_code(
+        &self,
+        account: &AccountId,
+        item: &ItemId,
+    ) -> Result<(Item, Option<VerificationCode>)> {
+        item_then_code(self, account, item)
+    }
+
     /// Unlocks an item that asks for the master password again
     /// ([`ItemSummary::reprompt`]), once rbw-agent has checked the password:
     /// [`Backend::item`], [`Backend::verification_code`] and
@@ -176,6 +187,32 @@ pub trait Backend: Send + Sync {
         item: &ItemSummary,
     ) -> Result<Option<Option<WebsiteIcon>>>;
 
+    /// What [`Backend::cached_website_icon`] answers for a website's host,
+    /// or any address [`host_from_uri`] reads, without an item: the disk's
+    /// icon for it, `Some(None)` when it has none to show, and `None` when
+    /// only the server can say.
+    fn cached_website_icon_host(
+        &self,
+        account: &AccountId,
+        host: &str,
+    ) -> Result<Option<Option<WebsiteIcon>>> {
+        let item = ItemSummary {
+            id: ItemId(String::new()),
+            kind: ItemKind::Login,
+            name: String::new(),
+            subtitle: None,
+            websites: vec![host.to_string()],
+            folder: None,
+            organization: None,
+            favorite: false,
+            has_code: false,
+            reprompt: false,
+            editable: false,
+            modified: None,
+        };
+        self.cached_website_icon(account, &item)
+    }
+
     /// The items of the account used last in the app on this computer,
     /// most recent first, as [`Backend::item_used`] noted them: their ids
     /// only, kept with the preferences. Items deleted since are still
@@ -237,4 +274,21 @@ pub trait Backend: Send + Sync {
     /// use the command line tool. `None` while the app runs no `rbw` of its
     /// own, or when the one found is the same release.
     fn other_rbw(&self) -> Result<Option<OtherRbw>>;
+}
+
+/// [`Backend::item_with_code`] in two calls: [`Backend::item`], then
+/// [`Backend::verification_code`] for a login with a code.
+pub(crate) fn item_then_code<B: Backend + ?Sized>(
+    backend: &B,
+    account: &AccountId,
+    item: &ItemId,
+) -> Result<(Item, Option<VerificationCode>)> {
+    let found = backend.item(account, item)?;
+    let code = match &found.data.content {
+        ItemContent::Login(login) if !login.totp.is_empty() => {
+            backend.verification_code(account, item).ok()
+        }
+        _ => None,
+    };
+    Ok((found, code))
 }

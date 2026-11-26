@@ -3,9 +3,10 @@
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
-use super::process::in_an_app;
+use super::process::{BUNDLED, in_an_app};
 use crate::{CommandLineTool, Error, Result, ToolState};
 
 /// Runs a shell script as an administrator, asking the person first;
@@ -121,10 +122,18 @@ impl Link {
         )
     }
 
-    /// Removes the link if it is one, never a file.
+    /// Removes the link if it is one the app may take away, as `state`
+    /// tells them, looked at again as the administrator: one to the app's
+    /// `rbw`, to a copy of the app, or to nothing. Never a file, nor a link
+    /// to another program that took its place since.
     fn unlink_script(&self) -> String {
         let path = shell_word(&self.path);
-        format!("{{ [ ! -L {path} ] || rm {path}; }}")
+        let target = shell_word(&self.target);
+        format!(
+            "{{ [ ! -L {path} ] || case \"$(readlink {path})\" in \
+             {target}|*/{BUNDLED}/rbw) rm {path} ;; \
+             *) [ -e {path} ] || rm {path} ;; esac; }}"
+        )
     }
 }
 
@@ -178,13 +187,18 @@ fn in_path(folder: &Path, path: Option<&OsStr>) -> bool {
 }
 
 /// The first `rbw` in these folders that isn't the app's own, through a
-/// link or not.
+/// link or not: a program a terminal would run, so an executable file.
 pub fn first_other(folders: impl IntoIterator<Item = PathBuf>, own: &Path) -> Option<PathBuf> {
     let own = std::fs::canonicalize(own).ok();
     folders
         .into_iter()
         .map(|folder| folder.join("rbw"))
-        .find(|rbw| rbw.is_file() && std::fs::canonicalize(rbw).ok() != own)
+        .find(|rbw| executable(rbw) && std::fs::canonicalize(rbw).ok() != own)
+}
+
+fn executable(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 /// Where a terminal may find an `rbw`: the folders of the app's `PATH`,
@@ -202,9 +216,8 @@ pub fn terminal_folders(home: &Path) -> Vec<PathBuf> {
 mod tests {
     use std::cell::RefCell;
     use std::fs::Permissions;
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::fs::symlink;
 
-    use super::super::process::BUNDLED;
     use super::*;
 
     /// A folder of its own for a test, removed after it.
@@ -219,11 +232,12 @@ mod tests {
             Self(std::fs::canonicalize(dir).unwrap())
         }
 
-        /// A file at `path` under the folder, with its folders.
+        /// A program at `path` under the folder, with its folders.
         fn file(&self, path: &str) -> PathBuf {
             let file = self.0.join(path);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(&file, "").unwrap();
+            std::fs::set_permissions(&file, Permissions::from_mode(0o755)).unwrap();
             file
         }
     }
@@ -330,12 +344,58 @@ mod tests {
         assert_eq!(
             scripts.borrow().as_slice(),
             [format!(
-                "mkdir -p '{bin}' && {{ [ ! -L '{bin}/rbw' ] || rm '{bin}/rbw'; }} && \
+                "mkdir -p '{bin}' && {{ [ ! -L '{bin}/rbw' ] || \
+                 case \"$(readlink '{bin}/rbw')\" in \
+                 '{own}'|*/{BUNDLED}/rbw) rm '{bin}/rbw' ;; \
+                 *) [ -e '{bin}/rbw' ] || rm '{bin}/rbw' ;; esac; }} && \
                  ln -s '{own}' '{bin}/rbw'"
             )]
         );
         let error = link.turn_on(None).unwrap_err();
         assert!(matches!(error, Error::Other(message) if message.contains("ermission")));
+    }
+
+    #[test]
+    fn the_administrators_script_removes_only_the_apps_links() {
+        let scratch = Scratch::new("unlink-script");
+        let own = app_rbw(&scratch, "it's app");
+        let link = Link::new(&scratch.0.join("bin"), &own);
+        std::fs::create_dir(scratch.0.join("bin")).unwrap();
+        let unlink = || {
+            let status = std::process::Command::new("/bin/sh")
+                .args(["-c", &link.unlink_script()])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        let replace = |target: &Path| {
+            let _ = std::fs::remove_file(&link.path);
+            symlink(target, &link.path).unwrap();
+        };
+
+        // the app's, another copy's, and one that leads nowhere go
+        for target in [
+            own.clone(),
+            app_rbw(&scratch, "copy"),
+            scratch.0.join("gone/rbw"),
+        ] {
+            replace(&target);
+            unlink();
+            assert!(
+                link.path.symlink_metadata().is_err(),
+                "{}",
+                target.display()
+            );
+        }
+        // another program, linked or not, stays
+        let homebrew = scratch.file("Cellar/rbw-ng/1.18.1/bin/rbw");
+        replace(&homebrew);
+        unlink();
+        assert_eq!(std::fs::read_link(&link.path).unwrap(), homebrew);
+        std::fs::remove_file(&link.path).unwrap();
+        let file = scratch.file("bin/rbw");
+        unlink();
+        assert!(file.is_file() && !file.is_symlink());
     }
 
     #[test]
@@ -388,6 +448,13 @@ mod tests {
             Some(homebrew)
         );
         assert_eq!(first_other(folders(&["cargo/bin"]), &own), Some(cargo));
+        // a file that isn't a program is no rbw a terminal runs
+        let data = scratch.file("data/rbw");
+        std::fs::set_permissions(&data, Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            first_other(folders(&["data", "cargo/bin"]), &own),
+            Some(scratch.0.join("cargo/bin/rbw"))
+        );
         assert_eq!(
             first_other(folders(&["bin", &format!("app/{BUNDLED}")]), &own),
             None

@@ -101,7 +101,8 @@ pub enum TwoStepMethod {
 /// The code that finishes a sign-in after
 /// [`Error::TwoStepRequired`](crate::Error::TwoStepRequired) or
 /// [`Error::NewDeviceCodeRequired`](crate::Error::NewDeviceCodeRequired).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Its `Debug` leaves the code out, as a log may show it.
+#[derive(Clone, PartialEq, Eq)]
 pub enum LoginCode {
     TwoStep {
         method: TwoStepMethod,
@@ -109,6 +110,19 @@ pub enum LoginCode {
     },
     /// The code the server emailed to verify a new device.
     NewDevice(String),
+}
+
+impl std::fmt::Debug for LoginCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TwoStep { method, code: _ } => f
+                .debug_struct("TwoStep")
+                .field("method", method)
+                .field("code", &"[redacted]")
+                .finish(),
+            Self::NewDevice(_) => f.debug_tuple("NewDevice").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 /// The settings rbw keeps for each account, shared with the command line.
@@ -126,6 +140,23 @@ pub struct AccountSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_codes_keep_their_code_out_of_logs() {
+        let two_step = LoginCode::TwoStep {
+            method: TwoStepMethod::Authenticator,
+            code: "123456".into(),
+        };
+        let shown = format!("{two_step:?} {:?}", LoginCode::NewDevice("654321".into()));
+        assert!(
+            !shown.contains("123456") && !shown.contains("654321"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Authenticator") && shown.contains("NewDevice"),
+            "{shown}"
+        );
+    }
 
     #[test]
     fn profiles_for_emails() {

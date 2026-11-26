@@ -64,12 +64,19 @@ impl IconFormat {
 /// to 256 pixels; a decoder would allocate for whatever size a file claims.
 const MAX_SIDE: u32 = 1024;
 
+/// The largest icon file the backend passes on or keeps. Icons are a few
+/// kilobytes; anything near this is no icon.
+pub(crate) const MAX_ICON_BYTES: usize = 1024 * 1024;
+
 impl WebsiteIcon {
     /// The icon in what a server sent: a bitmap of at most [`MAX_SIDE`]
-    /// pixels a side, by what its header says. `None` for anything else,
-    /// SVG included: a server may pass on a website's SVG as it is, which
-    /// can refer to other files.
+    /// pixels a side, by what its header says, in at most
+    /// [`MAX_ICON_BYTES`]. `None` for anything else, SVG included: a server
+    /// may pass on a website's SVG as it is, which can refer to other files.
     pub(crate) fn from_server(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > MAX_ICON_BYTES {
+            return None;
+        }
         let format = IconFormat::of(bytes)?;
         let sides = match format {
             IconFormat::Png => png_size(bytes).map(|size| vec![size]),
@@ -82,7 +89,9 @@ impl WebsiteIcon {
         }?;
         sides
             .iter()
-            .all(|&(width, height)| width <= MAX_SIDE && height <= MAX_SIDE)
+            .all(|&(width, height)| {
+                (1..=MAX_SIDE).contains(&width) && (1..=MAX_SIDE).contains(&height)
+            })
             .then(|| Self {
                 format,
                 bytes: bytes.into(),
@@ -200,14 +209,39 @@ fn ico_sizes(bytes: &[u8]) -> Option<Vec<(u32, u32)>> {
 }
 
 /// The host whose icon an item shows, chosen as the official clients do: a
-/// login's first website, when it is a web address or a bare host name
-/// with a dot, and never a `.onion` or `.i2p` site, whose names they keep
-/// from the icon service.
+/// login's first website, as [`host_from_uri`] reads it.
 pub(crate) fn icon_host(item: &ItemSummary) -> Option<String> {
     if item.kind != ItemKind::Login {
         return None;
     }
-    let website = item.websites.first()?.trim();
+    host_from_uri(item.websites.first()?)
+}
+
+/// The top-level domains of names that only mean something on a local
+/// network, or that the official clients keep from the icon service.
+const PRIVATE_DOMAINS: [&str; 9] = [
+    "onion",
+    "i2p",
+    "local",
+    "internal",
+    "lan",
+    "home",
+    "corp",
+    "localhost",
+    "arpa",
+];
+
+/// The longest host name DNS allows, and the longest part of one.
+const MAX_HOST: usize = 253;
+const MAX_LABEL: usize = 63;
+
+/// The host whose icon a website shows, in lower case: a web address or a
+/// bare host name with a dot. `None` for anything the icon service of a
+/// server shouldn't be asked about: other schemes, IP addresses, names of a
+/// local network, `.onion` and `.i2p` sites, and anything that isn't an
+/// ASCII DNS name.
+pub fn host_from_uri(uri: &str) -> Option<String> {
+    let website = uri.trim();
     let rest = match website.split_once("://") {
         None if website.contains('.') => website,
         Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => rest,
@@ -216,19 +250,31 @@ pub(crate) fn icon_host(item: &ItemSummary) -> Option<String> {
     };
     let authority = rest.split(['/', '?', '#']).next()?;
     let host_port = authority.rsplit('@').next()?;
+    // a bracketed IPv6 address, whose colons aren't a port's
+    if host_port.starts_with('[') {
+        return None;
+    }
     // a final dot names the same host
     let host = host_port
         .split(':')
         .next()?
         .trim_end_matches('.')
-        .to_lowercase();
+        .to_ascii_lowercase();
+    if host.parse::<std::net::IpAddr>().is_ok() || host.len() > MAX_HOST {
+        return None;
+    }
+    let mut labels = host.split('.');
     let valid = host.contains('.')
-        && !host.starts_with('.')
-        && host
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
-        && !matches!(host.rsplit('.').next(), Some("onion" | "i2p"));
-    valid.then_some(host)
+        && labels.all(|label| {
+            (1..=MAX_LABEL).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    let top = host.rsplit('.').next()?;
+    // a numeric last part makes an address, as in 10.1 or 127.0.0.010
+    let address = top.bytes().all(|byte| byte.is_ascii_digit());
+    (valid && !address && !PRIVATE_DOMAINS.contains(&top)).then_some(host)
 }
 
 #[cfg(test)]
@@ -260,7 +306,25 @@ mod tests {
             ("http://user:pw@example.org:8443/x?y#z", Some("example.org")),
             ("forum.example.net", Some("forum.example.net")),
             ("forum.example.net/path", Some("forum.example.net")),
-            ("192.168.1.1", Some("192.168.1.1")),
+            ("192.168.1.1", None),
+            ("https://10.0.0.1:8443/", None),
+            ("http://127.1/", None),
+            ("https://[fe80::1]:443/", None),
+            ("http://router.local/", None),
+            ("https://intranet.corp/", None),
+            ("https://nas.lan", None),
+            ("https://box.home/", None),
+            ("https://svc.internal", None),
+            ("http://app.localhost:3000", None),
+            ("https://1.0.0.127.in-addr.arpa", None),
+            ("https://bücher.example", None),
+            (
+                "https://xn--bcher-kva.example/",
+                Some("xn--bcher-kva.example"),
+            ),
+            ("https://under_score.example", None),
+            ("https://a..example", None),
+            ("https://.example.com", None),
             ("localhost", None),
             ("http://localhost:8080", None),
             ("ftp://files.example.com", None),
@@ -276,6 +340,16 @@ mod tests {
         ] {
             assert_eq!(icon_host(&login(website)).as_deref(), host, "{website}");
         }
+        let long_label = format!("https://{}.example", "a".repeat(64));
+        assert_eq!(icon_host(&login(&long_label)), None);
+        let long_host = format!("https://{}example", "abcdefghi.".repeat(25));
+        assert_eq!(icon_host(&login(&long_host)), None);
+        let longest = format!("{}example", "abcdefghi.".repeat(24));
+        assert_eq!(host_from_uri(&longest), Some(longest.clone()));
+        assert_eq!(
+            host_from_uri(" https://GitHub.com "),
+            Some("github.com".into())
+        );
         let mut card = login("https://bank.example");
         card.kind = ItemKind::Card;
         assert_eq!(icon_host(&card), None);
@@ -321,6 +395,13 @@ mod tests {
         assert!(!fits(&png(1025, 16)));
         assert!(!fits(&png(16, 100_000)));
         assert!(!fits(b"\x89PNG\r\n\x1a\n"));
+        assert!(!fits(&png(0, 16)));
+        assert!(!fits(&png(16, 0)));
+        let mut huge = png(16, 16);
+        huge.resize(MAX_ICON_BYTES + 1, 0);
+        assert!(!fits(&huge));
+        huge.truncate(MAX_ICON_BYTES);
+        assert!(fits(&huge));
 
         let mut bmp = b"BM".to_vec();
         bmp.extend([0; 12]);

@@ -4,10 +4,13 @@
 //! another server may have an icon that this one hasn't, and removing an
 //! account forgets which sites it had.
 
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
+use super::private_dir;
 use crate::{AccountId, WebsiteIcon};
 
 // As long as Vaultwarden keeps the icons it fetched, and the sites it found
@@ -16,14 +19,45 @@ const ICON_LIFE: Duration = Duration::from_secs(30 * 24 * 3600);
 const MISS_LIFE: Duration = Duration::from_secs(3 * 24 * 3600);
 // A few thousand icons; past it, the oldest go until a quarter is free.
 const SIZE_LIMIT: u64 = 20 * 1024 * 1024;
+// Looking for what to prune reads every file's size, so it waits for this
+// many writes, or this many bytes written, since it last looked; the first
+// write of a run looks at once.
+const PRUNE_WRITES: usize = 50;
+const PRUNE_BYTES: usize = 1024 * 1024;
 
 pub struct IconCache {
     dir: PathBuf,
+    /// Writes and bytes written since the cache was last pruned.
+    writes: AtomicUsize,
+    written: AtomicUsize,
+    pruned: AtomicBool,
 }
 
 impl IconCache {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            writes: AtomicUsize::new(0),
+            written: AtomicUsize::new(0),
+            pruned: AtomicBool::new(false),
+        }
+    }
+
+    /// Counts a write of `len` bytes, and says whether it is time to prune.
+    fn prune_due(&self, len: usize) -> bool {
+        let writes = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
+        let written = self
+            .written
+            .fetch_add(len, Ordering::Relaxed)
+            .saturating_add(len);
+        let first = !self.pruned.swap(true, Ordering::Relaxed);
+        if first || writes >= PRUNE_WRITES || written >= PRUNE_BYTES {
+            self.writes.store(0, Ordering::Relaxed);
+            self.written.store(0, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     // "profile-" keeps a profile called ".." from naming another folder
@@ -57,7 +91,8 @@ impl IconCache {
             None => ("miss", "icon"),
         };
         let bytes = icon.map_or(&[][..], |icon| &icon.bytes);
-        if std::fs::create_dir_all(&dir).is_err() {
+        // which sites the vault has is for this user alone
+        if private_dir(&self.dir).is_err() || private_dir(&dir).is_err() {
             return;
         }
         // written whole, then moved into place, as another call may read or
@@ -68,14 +103,28 @@ impl IconCache {
             std::process::id(),
             WRITES.fetch_add(1, Ordering::Relaxed)
         ));
-        if std::fs::write(&partial, bytes).is_err()
+        if write_private(&partial, bytes).is_err()
             || std::fs::rename(&partial, dir.join(format!("{host}.{keep}"))).is_err()
         {
             let _ = std::fs::remove_file(&partial);
             return;
         }
         let _ = std::fs::remove_file(dir.join(format!("{host}.{drop}")));
-        prune(&dir);
+        if self.prune_due(bytes.len()) {
+            self.prune();
+        }
+    }
+
+    /// Prunes each account's folder on its own.
+    pub fn prune(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                prune(&entry.path());
+            }
+        }
     }
 
     /// Forgets every icon.
@@ -89,6 +138,16 @@ impl IconCache {
     }
 }
 
+/// A new file only this user can read, with the bytes.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
 fn remove(dir: &Path) -> std::io::Result<()> {
     match std::fs::remove_dir_all(dir) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
@@ -96,7 +155,7 @@ fn remove(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-// Each account's folder on its own.
+// One account's folder.
 fn prune(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -170,6 +229,14 @@ mod tests {
         cache.put(&parent, "example.com", None);
         assert!(dir.join("profile-../example.com.miss").exists());
         assert!(cache.folder(&AccountId::new("a/b")).is_none());
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir), 0o700);
+            assert_eq!(mode(&dir.join("default")), 0o700);
+            assert_eq!(mode(&dir.join("default/github.com.icon")), 0o600);
+            assert_eq!(mode(&dir.join("profile-../example.com.miss")), 0o600);
+        }
         cache.clear().unwrap();
         assert!(!dir.exists());
         cache.clear().unwrap();
@@ -191,9 +258,23 @@ mod tests {
             vec![0; (SIZE_LIMIT / 2 + 1) as usize],
         )
         .unwrap();
+        // the first write of a run prunes
         cache.put(&AccountId::default(), "tiny.example", None);
         assert!(!old.exists());
         assert!(account.join("new.example.icon").exists());
         cache.clear().unwrap();
+    }
+
+    #[test]
+    fn prunes_every_so_many_writes_or_bytes() {
+        let cache = IconCache::new(PathBuf::from("/nonexistent"));
+        assert!(cache.prune_due(10));
+        for _ in 1..PRUNE_WRITES {
+            assert!(!cache.prune_due(10));
+        }
+        assert!(cache.prune_due(10));
+        assert!(!cache.prune_due(PRUNE_BYTES - 1));
+        assert!(cache.prune_due(1));
+        assert!(!cache.prune_due(0));
     }
 }

@@ -29,7 +29,8 @@ pub struct ItemJson {
     notes: Option<Secret>,
     #[serde(default)]
     folder_id: Option<String>,
-    #[serde(default)]
+    // left out of an edit, the item stays in its organization
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
     // left out of an edit, it stays as it is
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,6 +51,9 @@ pub struct ItemJson {
     fields: Vec<FieldJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     revision_date: Option<String>,
+    // rbw item get --with-code: the login's current code
+    #[serde(default, skip_serializing)]
+    pub totp_code: Option<CodeJson>,
 }
 
 fn yes() -> bool {
@@ -208,15 +212,20 @@ impl ItemJson {
             }
             ItemKind::Card => (self.card.and_then(|card| card.brand), vec![], false),
             ItemKind::Identity => {
-                let identity = self.identity.unwrap_or_default();
-                let name = Identity {
-                    first_name: text(identity.first_name),
-                    middle_name: text(identity.middle_name),
-                    last_name: text(identity.last_name),
-                    ..Identity::default()
-                }
-                .full_name();
-                (Some(name), vec![], false)
+                // as Identity::full_name puts them together
+                let name = self.identity.map(|identity| {
+                    [
+                        identity.first_name,
+                        identity.middle_name,
+                        identity.last_name,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                });
+                (name, vec![], false)
             }
             ItemKind::SshKey => (
                 self.ssh_key
@@ -521,6 +530,15 @@ pub struct ProfileJson {
     pub server_url: Option<String>,
 }
 
+/// A profile with its status, as `rbw profiles --json --status` lists it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileStatusJson {
+    pub profile: Option<String>,
+    #[serde(flatten)]
+    pub status: StatusJson,
+}
+
 pub fn server(base_url: Option<&str>) -> Server {
     match base_url.map(|url| url.trim_end_matches('/')) {
         None | Some("") => Server::BitwardenCom,
@@ -539,18 +557,42 @@ pub fn base_url(server: &Server) -> Option<&str> {
     }
 }
 
-/// A time as RFC 3339 writes it in UTC, such as `2026-11-24T09:41:07Z`,
-/// with or without fractions of a second.
+/// A time as RFC 3339 writes it, such as `2026-11-24T09:41:07Z` or
+/// `2026-11-24T10:41:07+01:00`, with or without fractions of a second.
+/// `None` for anything else, a day the month hasn't included, or a time
+/// before 1970.
 pub fn parse_time(text: &str) -> Option<SystemTime> {
-    let text = text.strip_suffix('Z')?;
-    let (date, time) = text.split_once('T')?;
-    let mut date = date.splitn(3, '-').map(str::parse::<i64>);
-    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
-    let time = time.split('.').next()?;
-    let mut time = time.splitn(3, ':').map(str::parse::<u64>);
-    let (hour, minute, second) = (time.next()?.ok()?, time.next()?.ok()?, time.next()?.ok()?);
+    let (date, time) = text.split_once(['T', 't'])?;
+    // the offset from UTC, in seconds east of it
+    let (time, offset) = if let Some(time) = time.strip_suffix(['Z', 'z']) {
+        (time, 0)
+    } else {
+        let at = time.rfind(['+', '-'])?;
+        let (time, offset) = time.split_at(at);
+        let east = offset.starts_with('+');
+        let (hours, minutes) = offset[1..].split_once(':')?;
+        let (hours, minutes) = (two_digits(hours)?, two_digits(minutes)?);
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        let offset = hours * 3600 + minutes * 60;
+        (time, if east { offset } else { -offset })
+    };
+
+    let mut date = date.splitn(3, '-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: i64 = date.next()?.parse().ok()?;
+    let day: i64 = date.next()?.parse().ok()?;
+    let (time, fraction) = time.split_once('.').unwrap_or((time, "0"));
+    if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut time = time.splitn(3, ':');
+    let hour = two_digits(time.next()?)?;
+    let minute = two_digits(time.next()?)?;
+    let second = two_digits(time.next()?)?;
     if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
+        || !(1..=days_in(year, month)).contains(&day)
         || hour > 23
         || minute > 59
         || second > 60
@@ -558,14 +600,38 @@ pub fn parse_time(text: &str) -> Option<SystemTime> {
         return None;
     }
     // Howard Hinnant's days_from_civil
-    let y = if month <= 2 { year - 1 } else { year };
+    let y = if month <= 2 {
+        year.checked_sub(1)?
+    } else {
+        year
+    };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);
     let mp = (month + 9) % 12;
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = u64::try_from(era * 146_097 + doe - 719_468).ok()?;
-    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + hour * 3600 + minute * 60 + second))
+    let days = era.checked_mul(146_097)?.checked_add(doe - 719_468)?;
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hour * 3600 + minute * 60 + second)?
+        .checked_sub(offset)?;
+    Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).ok()?))
+}
+
+// Exactly two digits, as RFC 3339 writes the parts of a time.
+fn two_digits(text: &str) -> Option<i64> {
+    (text.len() == 2 && text.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| text.parse().ok())
+        .flatten()
+}
+
+fn days_in(year: i64, month: i64) -> i64 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +667,17 @@ mod tests {
         assert_eq!(login.modified, None);
         assert_eq!(summaries[1].modified, parse_time("2026-11-24T09:41:07Z"));
         assert_eq!(summaries[2].subtitle.as_deref(), Some("Alex Martin"));
+        assert_eq!(
+            summaries[2].subtitle,
+            Some(
+                Identity {
+                    first_name: "Alex".into(),
+                    last_name: "Martin".into(),
+                    ..Identity::default()
+                }
+                .full_name()
+            )
+        );
         assert_eq!(summaries[3].subtitle.as_deref(), Some("Ed25519 key"));
     }
 
@@ -693,6 +770,47 @@ mod tests {
     }
 
     #[test]
+    fn an_item_with_its_code_and_an_edit_without_organization() {
+        let item: ItemJson = serde_json::from_str(
+            r#"{"id":"a","type":1,"name":"GitHub","organizationId":null,
+                "login":{"username":"octo","totp":"JBSWY3DPEHPK3PXP"},
+                "totpCode":{"code":"123456","period":30,"expiresAt":1795513290}}"#,
+        )
+        .unwrap();
+        let code = VerificationCode::from(item.totp_code.unwrap());
+        assert_eq!(code.code.expose(), "123456");
+        assert_eq!(code.period, Duration::from_secs(30));
+        let without: ItemJson =
+            serde_json::from_str(r#"{"id":"a","type":2,"name":"Note"}"#).unwrap();
+        assert!(without.totp_code.is_none());
+
+        let json = to_stdin(&ItemJson::from_data(&ItemData::new(ItemKind::Login))).unwrap();
+        let text = std::str::from_utf8(&json).unwrap();
+        assert!(
+            !text.contains("organizationId") && !text.contains("totpCode"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn profiles_with_their_status() {
+        let profiles: Vec<ProfileStatusJson> = serde_json::from_str(
+            r#"[{"profile":null,"userEmail":"a@example.com","serverUrl":null,
+                 "status":"unlocked","lastSync":"2026-11-24T09:41:07Z","touchId":true},
+                {"profile":"work","userEmail":null,"serverUrl":"https://vault.example.com",
+                 "status":"not_logged_in","touchId":false}]"#,
+        )
+        .unwrap();
+        assert_eq!(profiles[0].profile, None);
+        assert_eq!(profiles[0].status.status, "unlocked");
+        assert!(profiles[0].status.touch_id);
+        assert!(profiles[0].status.last_sync.is_some());
+        assert_eq!(profiles[1].profile.as_deref(), Some("work"));
+        assert_eq!(profiles[1].status.user_email, None);
+        assert_eq!(profiles[1].status.last_sync, None);
+    }
+
+    #[test]
     fn servers_and_their_base_urls() {
         for server in [
             Server::BitwardenCom,
@@ -723,5 +841,26 @@ mod tests {
         );
         assert_eq!(parse_time("2026-11-24 09:41:07"), None);
         assert_eq!(parse_time("2026-13-24T09:41:07Z"), None);
+        // the same moment at other offsets
+        let moment = parse_time("2026-11-24T09:41:07Z");
+        assert_eq!(parse_time("2026-11-24T10:41:07+01:00"), moment);
+        assert_eq!(parse_time("2026-11-24T05:11:07.5-04:30"), moment);
+        assert_eq!(parse_time("2026-11-24T09:41:07+00:00"), moment);
+        assert_eq!(parse_time("2026-11-24T09:41:07.123+01"), None);
+        assert_eq!(parse_time("2026-11-24T09:41:07+24:00"), None);
+        // days the month hasn't
+        assert_eq!(parse_time("2026-02-31T00:00:00Z"), None);
+        assert_eq!(parse_time("2026-04-31T00:00:00Z"), None);
+        assert_eq!(parse_time("2026-02-29T00:00:00Z"), None);
+        assert!(parse_time("2028-02-29T00:00:00Z").is_some());
+        assert!(parse_time("2000-02-29T00:00:00Z").is_some());
+        assert_eq!(parse_time("2100-02-29T00:00:00Z"), None);
+        // nothing that overflows or comes before 1970
+        assert_eq!(parse_time("9223372036854775807-01-01T00:00:00Z"), None);
+        assert_eq!(parse_time("-9223372036854775808-03-01T00:00:00Z"), None);
+        assert_eq!(parse_time("1969-12-31T23:59:59Z"), None);
+        assert_eq!(parse_time("1970-01-01T00:30:00+01:00"), None);
+        assert_eq!(parse_time("2026-11-24T9:41:07Z"), None);
+        assert_eq!(parse_time("2026-11-24T09:41:07.Z"), None);
     }
 }
