@@ -4,16 +4,16 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, ElementId, EmptyView,
+    AnyElement, AppContext as _, ClickEvent, Context, CursorStyle, EmptyView,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
     StatefulInteractiveElement as _, Styled, Window, div, prelude::FluentBuilder as _, px,
     relative, uniform_list,
 };
 use rbw_desktop_core::SortOrder;
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, Highlight, IconName, ListRows, Look, Opening, ROW_HEIGHT,
-    button, chrome, follow_pointer, list_row, menu_item, menu_separator, motion, popover,
-    scrollbar, search_field, section_label,
+    ActiveTheme as _, ButtonStyle, Highlight, IconName, ListRows, Look, Opening, Popover,
+    ROW_HEIGHT, button, chrome, follow_pointer, list_row, loading_rows, menu_item, menu_separator,
+    motion, popover, scrollbar, search_field, section_label,
 };
 
 use super::{ListDivider, MAX_LIST_SHARE, NewItem, Only, ShowGenerator, VaultView};
@@ -92,7 +92,16 @@ impl VaultView {
             Load::Failed(error) => message(backend::describe(error), dim),
             Load::Ready(items) if items.is_empty() => message("No Items", dim),
             Load::Ready(_) if self.visible.is_empty() => message("No Results", dim),
-            Load::Loading | Load::Ready(_) => uniform_list(
+            // Rows standing in for the items, once the wait shows.
+            Load::Loading => motion::appear_late(
+                "vault-loading",
+                div()
+                    .flex_1()
+                    .px(px(7.))
+                    .child(loading_rows("vault-loading-rows", 8).gap(ROW_GAP)),
+            )
+            .into_any_element(),
+            Load::Ready(_) => uniform_list(
                 "items",
                 self.visible.len(),
                 cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
@@ -100,21 +109,24 @@ impl VaultView {
                     this.drew = range.clone();
                     this.prefetch_icons(&range, cx);
                     let list_focused = this.list_focus.is_focused(window);
+                    let Some(items) = this.items.ready().cloned() else {
+                        return vec![];
+                    };
                     range
                         .map(|position| {
-                            let items = this.items.ready().map(Vec::as_slice).unwrap_or_default();
-                            let item = items[this.visible[position]].clone();
-                            let selected = this.selected.as_ref() == Some(&item.id);
+                            let indexed = &items[this.visible[position]];
+                            let (item, key) = (&indexed.summary, indexed.key);
+                            let selected = this.selected_index == Some(position);
                             let hovered = this.hover_drawn == Some(position);
                             let highlight = this.highlight_at.and_then(|at| {
                                 Highlight::at(at - position as f32, ROW_HEIGHT + ROW_GAP)
                             });
-                            let copied = this.copied.as_ref() == Some(&item.id);
-                            let icon = icons::icon(&account, &item, cx);
+                            let copied = this.copied.is(&item.id);
+                            let icon = icons::icon(&account, item, cx);
                             let (id, menu_id) = (item.id.clone(), item.id.clone());
                             let arrived = this.arrived.contains(&item.id);
                             let row = div()
-                                .id(ElementId::Name(format!("row-{}", item.id.0).into()))
+                                .id(("row", key))
                                 .px(px(7.))
                                 .pb(ROW_GAP)
                                 .on_mouse_down(
@@ -130,7 +142,7 @@ impl VaultView {
                                 )
                                 .child(
                                     list_row(
-                                        gpui::ElementId::Name(format!("item-{}", item.id.0).into()),
+                                        ("item", key),
                                         item.name.clone(),
                                         item.subtitle.clone().map(Into::into),
                                         selected,
@@ -148,11 +160,7 @@ impl VaultView {
                                     )),
                                 );
                             if arrived {
-                                motion::appear(
-                                    ElementId::Name(format!("arrived-{}", item.id.0).into()),
-                                    row,
-                                )
-                                .into_any_element()
+                                motion::appear(("arrived", key), row).into_any_element()
                             } else {
                                 row.into_any_element()
                             }
@@ -218,8 +226,14 @@ impl VaultView {
             return;
         }
         self.prefetched = around.clone();
-        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
-        let rows = self.visible[around].iter().map(|&index| &items[index]);
+        let items = self
+            .items
+            .ready()
+            .map(|items| items.as_slice())
+            .unwrap_or_default();
+        let rows = self.visible[around]
+            .iter()
+            .map(|&index| &*items[index].summary);
         Icons::global(cx).update(cx, |icons, cx| icons.prefetch(&self.account.id, rows, cx));
     }
 
@@ -293,14 +307,49 @@ impl VaultView {
 
     /// The menu next to the search field: how the list is sorted, and what
     /// it shows only. Its choices for the list's contents leave out what no
-    /// item has.
+    /// item has. They are made only while the menu shows.
     fn render_sort_button(&self, style: ButtonStyle, cx: &mut Context<Self>) -> AnyElement {
+        let (this, view) = (cx.entity().downgrade(), cx.entity());
+        let menu = popover(
+            "sort-menu",
+            self.sort_menu_open,
+            &self.sort_menu_focus,
+            "Sort and Filter",
+        )
+        .opening(Opening::BelowEnd)
+        .on_dismiss(move |window, cx| {
+            this.update(cx, |this, cx| this.close_sort_menu(window, cx))
+                .ok();
+        })
+        .when_shown(move |menu, _, cx| view.update(cx, |this, cx| this.sort_menu_items(menu, cx)));
+        div()
+            .relative()
+            .child(
+                button("sort-menu-button")
+                    .icon(IconName::Filter)
+                    .style(style)
+                    // The list shows only some items.
+                    .toggled(self.only.any())
+                    .accessibility_label("Sort and Filter")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.sort_menu_open {
+                            this.close_sort_menu(window, cx);
+                        } else {
+                            this.sort_menu_open = true;
+                            window.focus(&this.sort_menu_focus, cx);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(menu)
+            .into_any_element()
+    }
+
+    /// The sort menu's choices.
+    fn sort_menu_items(&mut self, menu: Popover, cx: &mut Context<Self>) -> Popover {
         let order = Prefs::global(cx).read(cx).get().sort;
         let only = self.only;
-        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
-        let has_codes = items.iter().any(|item| item.has_code);
-        let has_shared = items.iter().any(|item| item.organization.is_some());
-        let this = cx.entity().downgrade();
+        let (has_codes, has_shared) = (self.holds.codes, self.holds.shared);
         let sort =
             |id: &'static str, label: &'static str, choice: SortOrder, cx: &mut Context<Self>| {
                 menu_item(id, label)
@@ -324,74 +373,42 @@ impl VaultView {
                     this.set_only(only, cx);
                 }))
         };
-        let menu = popover(
-            "sort-menu",
-            self.sort_menu_open,
-            &self.sort_menu_focus,
-            "Sort and Filter",
-        )
-        .opening(Opening::BelowEnd)
-        .on_dismiss(move |window, cx| {
-            this.update(cx, |this, cx| this.close_sort_menu(window, cx))
-                .ok();
-        })
-        .child(section_label("Sort By", cx))
-        .child(sort("sort-name", "Name", SortOrder::Name, cx))
-        .child(sort(
-            "sort-modified",
-            "Last Modified",
-            SortOrder::Modified,
-            cx,
-        ))
-        .child(sort(
-            "sort-recent",
-            "Recently Used",
-            SortOrder::RecentlyUsed,
-            cx,
-        ))
-        .when(has_codes || has_shared || only.any(), |menu| {
-            menu.child(menu_separator(cx))
-                .child(section_label("Show Only", cx))
-        })
-        .when(has_codes || only.code, |menu| {
-            menu.child(show(
-                "only-code",
-                "With Verification Code",
-                only.code,
-                |only| only.code = !only.code,
+        menu.child(section_label("Sort By", cx))
+            .child(sort("sort-name", "Name", SortOrder::Name, cx))
+            .child(sort(
+                "sort-modified",
+                "Last Modified",
+                SortOrder::Modified,
                 cx,
             ))
-        })
-        .when(has_shared || only.shared, |menu| {
-            menu.child(show(
-                "only-shared",
-                "Shared",
-                only.shared,
-                |only| only.shared = !only.shared,
+            .child(sort(
+                "sort-recent",
+                "Recently Used",
+                SortOrder::RecentlyUsed,
                 cx,
             ))
-        });
-        div()
-            .relative()
-            .child(
-                button("sort-menu-button")
-                    .icon(IconName::Filter)
-                    .style(style)
-                    // The list shows only some items.
-                    .toggled(only.any())
-                    .accessibility_label("Sort and Filter")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.sort_menu_open {
-                            this.close_sort_menu(window, cx);
-                        } else {
-                            this.sort_menu_open = true;
-                            window.focus(&this.sort_menu_focus, cx);
-                            cx.notify();
-                        }
-                    })),
-            )
-            .child(menu)
-            .into_any_element()
+            .when(has_codes || has_shared || only.any(), |menu| {
+                menu.child(menu_separator(cx))
+                    .child(section_label("Show Only", cx))
+            })
+            .when(has_codes || only.code, |menu| {
+                menu.child(show(
+                    "only-code",
+                    "With Verification Code",
+                    only.code,
+                    |only| only.code = !only.code,
+                    cx,
+                ))
+            })
+            .when(has_shared || only.shared, |menu| {
+                menu.child(show(
+                    "only-shared",
+                    "Shared",
+                    only.shared,
+                    |only| only.shared = !only.shared,
+                    cx,
+                ))
+            })
     }
 
     fn close_sort_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {

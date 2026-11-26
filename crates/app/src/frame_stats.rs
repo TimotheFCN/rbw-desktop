@@ -15,6 +15,8 @@ pub fn init(cx: &mut App) {
         loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let windows = cx.update(|cx| cx.windows());
+            // A window closed since, such as the panel's, is forgotten.
+            before.retain(|id, _| windows.iter().any(|handle| handle.window_id() == *id));
             for handle in windows {
                 let Ok(now) = handle.update(cx, |_, window, _| window.frame_duration_snapshot())
                 else {

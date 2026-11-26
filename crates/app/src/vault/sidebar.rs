@@ -8,9 +8,9 @@ use gpui::{
 };
 use rbw_desktop_core::{APP_NAME, ItemKind};
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, avatar, button, chrome, menu_item,
-    menu_separator, nav_row, popover, row_focus_ring, scroll_area, section_label, selection_track,
-    sidebar,
+    ActiveTheme as _, ButtonStyle, IconName, Look, Opening, Popover, avatar, button, chrome,
+    menu_item, menu_separator, nav_row, popover, row_focus_ring, scroll_area, section_label,
+    selection_track, sidebar,
 };
 
 use super::{Filter, Lock, ShowGenerator, VaultView};
@@ -30,7 +30,7 @@ impl VaultView {
     /// GNOME's primary menu: the generator, Preferences and About, which a
     /// Mac has in its menu bar.
     fn render_main_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let this = cx.entity().downgrade();
+        let (this, view) = (cx.entity().downgrade(), cx.entity());
         let menu = popover(
             "main-menu",
             self.main_menu_open,
@@ -42,19 +42,7 @@ impl VaultView {
             this.update(cx, |this, cx| this.close_main_menu(window, cx))
                 .ok();
         })
-        .child(
-            menu_item("generator", "Password Generator")
-                .on_click(Self::main_menu_choice(Box::new(ShowGenerator), cx)),
-        )
-        .child(menu_separator(cx))
-        .child(
-            menu_item("preferences", "Preferences")
-                .on_click(Self::main_menu_choice(Box::new(OpenSettings), cx)),
-        )
-        .child(
-            menu_item("about", format!("About {APP_NAME}"))
-                .on_click(Self::main_menu_choice(Box::new(About), cx)),
-        );
+        .when_shown(move |menu, _, cx| view.update(cx, |_, cx| Self::main_menu_items(menu, cx)));
         div()
             .relative()
             .pr(px(4.))
@@ -75,6 +63,22 @@ impl VaultView {
             )
             .child(menu)
             .into_any_element()
+    }
+
+    fn main_menu_items(menu: Popover, cx: &mut Context<Self>) -> Popover {
+        menu.child(
+            menu_item("generator", "Password Generator")
+                .on_click(Self::main_menu_choice(Box::new(ShowGenerator), cx)),
+        )
+        .child(menu_separator(cx))
+        .child(
+            menu_item("preferences", "Preferences")
+                .on_click(Self::main_menu_choice(Box::new(OpenSettings), cx)),
+        )
+        .child(
+            menu_item("about", format!("About {APP_NAME}"))
+                .on_click(Self::main_menu_choice(Box::new(About), cx)),
+        )
     }
 
     /// A main menu item's click: closes the menu, then does `action`.
@@ -106,11 +110,7 @@ impl VaultView {
         // Only the kinds the vault holds are worth a row.
         let kinds: Vec<_> = KINDS
             .iter()
-            .filter(|(kind, ..)| {
-                self.items
-                    .ready()
-                    .is_some_and(|items| items.iter().any(|item| item.kind == *kind))
-            })
+            .filter(|(kind, ..)| self.holds.kinds.contains(kind))
             .collect();
 
         let track = selection_track("sidebar-selection", Some(&row_id(&self.filter)), window, cx);
@@ -168,16 +168,17 @@ impl VaultView {
         if !self.folders.is_empty() {
             rows.push(section_label("Folders", cx).into_any_element());
         }
-        for folder in self.folders.clone() {
-            let filter = Filter::Folder(folder.id);
-            rows.push(row(IconName::Folder, folder.name.into(), filter, cx));
+        for folder in &self.folders {
+            let filter = Filter::Folder(folder.id.clone());
+            rows.push(row(
+                IconName::Folder,
+                folder.name.clone().into(),
+                filter,
+                cx,
+            ));
         }
         // Where the items no folder holds are, once there are folders.
-        let unfiled = self
-            .items
-            .ready()
-            .is_some_and(|items| items.iter().any(|item| item.folder.is_none()));
-        if !self.folders.is_empty() && unfiled {
+        if !self.folders.is_empty() && self.holds.unfiled {
             rows.push(row(
                 IconName::Folder,
                 "No Folder".into(),

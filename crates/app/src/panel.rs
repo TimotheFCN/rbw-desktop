@@ -4,6 +4,8 @@
 //! the pointer, or centred. It shows the account the main window shows,
 //! and closes on Escape or when it loses the keyboard.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::base::input::{InputEvent, InputState};
@@ -21,19 +23,22 @@ use rbw_desktop_core::{
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, COMPACT_ROW_HEIGHT, Highlight, IconName, ListPointer, ListRows,
     Material, TileIcon, ToastSlot, backdrop, button, chrome, follow_pointer, icon, key_hint,
-    list_row, motion, scroll_area, scrollbar, search_field, section_label, segmented_control, tile,
+    list_row, loading_rows, motion, scroll_area, scrollbar, search_field, section_label,
+    segmented_control, tile,
 };
 
 use crate::CloseWindow;
 use crate::accounts::{self, Accounts};
 use crate::backend::{self, Load};
 use crate::clipboard;
+use crate::copied::CopiedSlot;
 use crate::generator::Generator;
 use crate::icons::{self, Icons};
 use crate::recent;
 use crate::reprompt::{Reprompt, Unlocked};
 use crate::secondary;
-use crate::vault;
+use crate::vault::{self, Indexed};
+use crate::vault_cache::{self, VaultSnapshot};
 use crate::window;
 
 actions!(
@@ -233,10 +238,12 @@ pub struct QuickPanel {
     /// The account the main window shows, which the panel follows.
     account: Option<Account>,
     several_accounts: bool,
-    /// The account's items, for the search and to name the recent ones.
-    items: Load<Vec<ItemSummary>>,
+    /// The account's items, for the search and to name the recent ones,
+    /// ready for searching.
+    items: Load<Arc<Vec<Indexed>>>,
     loaded: Option<(AccountId, Option<std::time::SystemTime>)>,
-    recent: Vec<ItemId>,
+    /// The items used last, as indices into the items, most recent first.
+    recent: Vec<usize>,
     /// Indices into the items of the rows shown, in order.
     shown: Vec<usize>,
     selection: Selection,
@@ -247,14 +254,18 @@ pub struct QuickPanel {
     /// The rows the list drew last, which its selection comes in from the
     /// edge of.
     drew: std::ops::Range<usize>,
-    copied: Option<ItemId>,
-    copied_timer: Task<()>,
+    copied: CopiedSlot<ItemId>,
     /// The button under the pointer, which the line under the list names.
     pointed: Option<Pointed>,
     /// The master password of an item that asks for it before something
     /// of it is copied.
     asking: Option<Asking>,
+    /// Touch ID is unlocking the account: until the account changes, if it
+    /// does.
     unlocking: bool,
+    unlock_task: Task<()>,
+    locking: bool,
+    lock_task: Task<()>,
     /// Made when its tab is first shown.
     generator: Option<Entity<Generator>>,
     focus: FocusHandle,
@@ -262,6 +273,8 @@ pub struct QuickPanel {
     pointer: ListPointer,
     toast: ToastSlot,
     load_task: Task<()>,
+    /// Fetches what is being copied; the account changing drops it.
+    copy_task: Task<()>,
     /// Whether the panel has had the keyboard, after which losing it
     /// closes the panel.
     was_active: bool,
@@ -319,22 +332,25 @@ impl QuickPanel {
             highlight_at: 0.,
             highlight_jumps: false,
             drew: 0..0,
-            copied: None,
-            copied_timer: Task::ready(()),
+            copied: CopiedSlot::new(),
             pointed: None,
             asking: None,
             unlocking: false,
+            unlock_task: Task::ready(()),
+            locking: false,
+            lock_task: Task::ready(()),
             generator: None,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             pointer: ListPointer::default(),
             toast: ToastSlot::default(),
             load_task: Task::ready(()),
+            copy_task: Task::ready(()),
             was_active: false,
             _subscriptions: subscriptions,
         };
         window.focus(&this.focus, cx);
-        accounts::refresh(cx);
+        accounts::refresh_if_idle(cx);
         this.follow_accounts(window, cx);
         this
     }
@@ -348,7 +364,9 @@ impl QuickPanel {
     }
 
     /// Takes the current account's latest state, loading its items once it
-    /// is unlocked and again after a sync.
+    /// is unlocked and again after a sync. Locked, or another account in
+    /// its place, everything of the account before goes: its items, what
+    /// was searched, copied or being asked for.
     fn follow_accounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let accounts = Accounts::global(cx);
         let accounts = accounts.read(cx);
@@ -358,14 +376,39 @@ impl QuickPanel {
             .as_ref()
             .filter(|account| account.state == LockState::Unlocked)
             .map(|account| (account.id.clone(), account.last_sync));
+        // Touch ID's spinner keeps going until the account changes.
+        let state = |account: &Option<Account>| {
+            account
+                .as_ref()
+                .map(|account| (account.id.clone(), account.state))
+        };
+        if state(&account) != state(&self.account) {
+            self.unlocking = false;
+        }
         let was_unlocked = self.loaded.is_some();
         if unlocked != self.loaded {
+            let same_account = matches!(
+                (&unlocked, &self.loaded),
+                (Some((now, _)), Some((before, _))) if now == before
+            );
+            if !same_account {
+                self.forget_account(window, cx);
+            }
             self.loaded = unlocked.clone();
-            match unlocked {
-                Some((id, _)) => self.load(id, cx),
-                None => {
-                    self.items = Load::Loading;
-                    self.shown.clear();
+            if let Some((id, last_sync)) = unlocked {
+                if let Some(cached) = vault_cache::get(&id, cx) {
+                    let items = Arc::new(vault::index_shared(cached.items));
+                    let recent = recent_indices(&items, &cached.recent);
+                    self.items = Load::Ready(items);
+                    self.recent = recent;
+                    self.refilter(cx);
+                    if cached.stale || cached.last_sync != last_sync {
+                        self.load(id, last_sync, cx);
+                    } else {
+                        self.refresh_recent_and_icons(id, cx);
+                    }
+                } else {
+                    self.load(id, last_sync, cx);
                 }
             }
         }
@@ -376,26 +419,95 @@ impl QuickPanel {
         cx.notify();
     }
 
-    /// Loads the account's items, with the icons of those used last.
-    fn load(&mut self, account: AccountId, cx: &mut Context<Self>) {
+    /// Forgets the account shown, which locked or gave its place to another.
+    fn forget_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_task = Task::ready(());
+        self.copy_task = Task::ready(());
+        if let Some(asking) = self.asking.take() {
+            asking
+                .reprompt
+                .update(cx, |reprompt, cx| reprompt.clear(window, cx));
+        }
+        self.search
+            .update(cx, |search, cx| search.set_value("", window, cx));
+        self.items = Load::Loading;
+        self.recent.clear();
+        self.shown.clear();
+        self.selection.reset(0);
+        self.copied.clear();
+    }
+
+    /// Refreshes the recent-items list and disk-cached icons when the vault
+    /// cache already has fresh summaries, sparing an `rbw item list` spawn.
+    fn refresh_recent_and_icons(&mut self, account: AccountId, cx: &mut Context<Self>) {
+        let Some(items) = self.items.ready().cloned() else {
+            return;
+        };
         self.load_task = backend::request(
             cx,
             move |backend| {
-                let mut items = backend.items(&account)?;
-                items.sort_by_cached_key(|item| item.name.to_lowercase());
-                let recent = backend.recent_items(&account)?;
-                let first = recent
-                    .iter()
-                    .filter_map(|id| items.iter().find(|item| item.id == *id))
-                    .take(RECENT);
+                let recent_ids = backend.recent_items(&account)?;
+                let recent = recent_indices(&items, &recent_ids);
+                let first = recent.iter().map(|&index| &*items[index].summary);
                 let icons = icons::read_cached(backend, &account, first);
-                Ok((items, recent, icons))
+                Ok((recent, icons))
             },
             |this, result, cx| {
+                if let Ok((recent, icons)) = result {
+                    Icons::global(cx).update(cx, |known, cx| known.insert_cached(icons, cx));
+                    this.recent = recent;
+                    this.refilter(cx);
+                }
+            },
+        );
+    }
+
+    /// Loads the account's items, with the icons of those used last. What
+    /// a search looks through and which items were used last are worked
+    /// out with them, off the main thread.
+    fn load(
+        &mut self,
+        account: AccountId,
+        last_sync: Option<std::time::SystemTime>,
+        cx: &mut Context<Self>,
+    ) {
+        let for_cache = account.clone();
+        self.load_task = backend::request(
+            cx,
+            move |backend| {
+                let items = vault::index(backend.items(&account)?);
+                let recent_ids = backend.recent_items(&account)?;
+                let recent = recent_indices(&items, &recent_ids);
+                let first = recent.iter().map(|&index| &*items[index].summary);
+                let icons = icons::read_cached(backend, &account, first);
+                Ok((items, recent_ids, recent, icons))
+            },
+            move |this, result, cx| {
                 match result {
-                    Ok((items, recent, icons)) => {
+                    Ok((items, recent_ids, recent, icons)) => {
                         Icons::global(cx).update(cx, |known, cx| known.insert_cached(icons, cx));
-                        this.items = Load::Ready(items);
+                        // Populate the shared cache only if the main window hasn't
+                        // already stored a fresh snapshot with folders.
+                        let keep_existing = vault_cache::get(&for_cache, cx)
+                            .is_some_and(|cached| !cached.stale && cached.last_sync == last_sync);
+                        if !keep_existing {
+                            let folders = vault_cache::get(&for_cache, cx)
+                                .map(|cached| cached.folders)
+                                .unwrap_or_default();
+                            let summaries = items.iter().map(|item| item.summary.clone()).collect();
+                            vault_cache::put(
+                                for_cache,
+                                VaultSnapshot {
+                                    last_sync,
+                                    items: summaries,
+                                    folders,
+                                    recent: recent_ids,
+                                    stale: true,
+                                },
+                                cx,
+                            );
+                        }
+                        this.items = Load::Ready(Arc::new(items));
                         this.recent = recent;
                     }
                     Err(error) => this.items = Load::Failed(error),
@@ -404,7 +516,24 @@ impl QuickPanel {
             },
         );
     }
+}
 
+/// Maps recently used item IDs to their indices in `items`, keeping at most
+/// [`RECENT`].
+fn recent_indices(items: &[Indexed], recent_ids: &[ItemId]) -> Vec<usize> {
+    let rows: HashMap<&ItemId, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (&item.summary.id, index))
+        .collect();
+    recent_ids
+        .iter()
+        .filter_map(|id| rows.get(id).copied())
+        .take(RECENT)
+        .collect()
+}
+
+impl QuickPanel {
     fn account_id(&self) -> Option<AccountId> {
         self.account.as_ref().map(|account| account.id.clone())
     }
@@ -413,18 +542,18 @@ impl QuickPanel {
     fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value().to_lowercase();
         let query = query.trim();
-        let items = self.items.ready().map(Vec::as_slice).unwrap_or_default();
+        let items = self
+            .items
+            .ready()
+            .map(|items| items.as_slice())
+            .unwrap_or_default();
         self.shown = if query.is_empty() {
-            self.recent
-                .iter()
-                .filter_map(|id| items.iter().position(|item| item.id == *id))
-                .take(RECENT)
-                .collect()
+            self.recent.clone()
         } else {
             items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| vault::matches(item, query))
+                .filter(|(_, item)| item.matches(query))
                 .map(|(index, _)| index)
                 .collect()
         };
@@ -434,9 +563,13 @@ impl QuickPanel {
         cx.notify();
     }
 
-    fn item(&self, position: usize) -> Option<&ItemSummary> {
+    fn indexed(&self, position: usize) -> Option<&Indexed> {
         let index = *self.shown.get(position)?;
         self.items.ready()?.get(index)
+    }
+
+    fn item(&self, position: usize) -> Option<&Arc<ItemSummary>> {
+        self.indexed(position).map(|item| &item.summary)
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -525,34 +658,47 @@ impl QuickPanel {
     }
 
     /// Copies something of an item. An item that asks for the master
-    /// password again asks for it here first.
-    fn copy(&mut self, item: ItemSummary, part: Part, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(account) = self.account_id() else {
+    /// password again asks for it here first. Nothing is copied once the
+    /// account has locked, or another has taken its place.
+    fn copy(
+        &mut self,
+        item: Arc<ItemSummary>,
+        part: Part,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(account) = self.account_id().filter(|_| self.loaded.is_some()) else {
             return;
         };
-        let requested = item.id.clone();
-        backend::request_in(
+        let (requested, asked) = (item.id.clone(), account.clone());
+        self.copy_task = backend::request_in(
             window,
             cx,
             move |backend| match part {
-                Part::Code => Ok(backend.verification_code(&account, &requested)?.code),
-                _ => Ok(part.value(&backend.item(&account, &requested)?)),
+                Part::Code => Ok(backend.verification_code(&asked, &requested)?.code),
+                _ => Ok(part.value(&backend.item(&asked, &requested)?)),
             },
-            move |this, result, window, cx| match result {
-                Ok(value) if value.expose().is_empty() => this.say(part.missing(), cx),
-                Ok(value) => this.copied(item.id, &value, part.secret(), cx),
-                Err(Error::RepromptRequired) => this.ask_password(item, part, window, cx),
-                Err(error) => this.say(backend::describe(&error), cx),
+            move |this, result, window, cx| {
+                let still = this.account_id().as_ref() == Some(&account)
+                    && this.loaded.as_ref().is_some_and(|(id, _)| *id == account);
+                if !still {
+                    return;
+                }
+                match result {
+                    Ok(value) if value.expose().is_empty() => this.say(part.missing(), cx),
+                    Ok(value) => this.copied(item.id.clone(), &value, part.secret(), &account, cx),
+                    Err(Error::RepromptRequired) => this.ask_password(item, part, window, cx),
+                    Err(error) => this.say(backend::describe(&error), cx),
+                }
             },
-        )
-        .detach();
+        );
     }
 
     /// Asks for the master password in place of the list, then copies what
     /// was asked for.
     fn ask_password(
         &mut self,
-        item: ItemSummary,
+        item: Arc<ItemSummary>,
         part: Part,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -581,7 +727,11 @@ impl QuickPanel {
 
     fn cancel_reprompt(&mut self, _: &CancelReprompt, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_search(window, cx);
-        self.asking = None;
+        if let Some(asking) = self.asking.take() {
+            asking
+                .reprompt
+                .update(cx, |reprompt, cx| reprompt.clear(window, cx));
+        }
         cx.notify();
     }
 
@@ -590,28 +740,21 @@ impl QuickPanel {
             .update(cx, |search, cx| search.focus(window, cx));
     }
 
-    fn copied(&mut self, item: ItemId, value: &Secret, secret: bool, cx: &mut Context<Self>) {
-        let account = self.account_id();
+    fn copied(
+        &mut self,
+        item: ItemId,
+        value: &Secret,
+        secret: bool,
+        account: &AccountId,
+        cx: &mut Context<Self>,
+    ) {
         if secret {
-            clipboard::copy_secret(value, account.as_ref(), cx);
+            clipboard::copy_secret(value, Some(account), cx);
         } else {
             clipboard::copy_text(value.expose(), cx);
         }
-        if let Some(account) = &account {
-            recent::used(account, &item, cx);
-        }
-        self.copied = Some(item);
-        self.copied_timer = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(motion::CONFIRMATION_HOLD)
-                .await;
-            this.update(cx, |this, cx| {
-                this.copied = None;
-                cx.notify();
-            })
-            .ok();
-        });
-        cx.notify();
+        recent::used(account, &item, cx);
+        self.copied.set(item, cx, |this| &mut this.copied);
     }
 
     fn say(&mut self, message: &'static str, cx: &mut Context<Self>) {
@@ -658,39 +801,55 @@ impl QuickPanel {
     }
 
     fn lock(&mut self, _: &Lock, _: &mut Window, cx: &mut Context<Self>) {
+        if self.locking {
+            return;
+        }
         let Some(account) = self.account_id().filter(|_| self.loaded.is_some()) else {
             return;
         };
-        backend::request(
+        self.locking = true;
+        let locked = account.clone();
+        self.lock_task = backend::request(
             cx,
             move |backend| backend.lock(&account),
-            |this, result, cx| match result {
-                Ok(()) => accounts::refresh(cx),
-                Err(error) => this.say(backend::describe(&error), cx),
+            move |this, result, cx| {
+                this.locking = false;
+                match result {
+                    Ok(()) => {
+                        vault_cache::clear_account(&locked, cx);
+                        accounts::refresh(cx);
+                    }
+                    Err(error) => this.say(backend::describe(&error), cx),
+                }
             },
-        )
-        .detach();
+        );
     }
 
+    /// Unlocks with Touch ID, once at a time; the spinner keeps going until
+    /// the account shows unlocked, as on the lock screen.
     fn unlock_with_touch_id(&mut self, cx: &mut Context<Self>) {
+        if self.unlocking {
+            return;
+        }
         let Some(account) = self.account_id() else {
             return;
         };
         self.unlocking = true;
         cx.notify();
-        backend::request(
+        self.unlock_task = backend::request_network(
             cx,
             move |backend| backend.unlock_with_touch_id(&account),
             |this, result, cx| {
-                this.unlocking = false;
                 match result {
                     Ok(()) => accounts::refresh(cx),
-                    Err(error) => this.say(backend::describe(&error), cx),
+                    Err(error) => {
+                        this.unlocking = false;
+                        this.say(backend::describe(&error), cx);
+                    }
                 }
                 cx.notify();
             },
-        )
-        .detach();
+        );
     }
 
     fn show_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
@@ -718,7 +877,7 @@ impl QuickPanel {
             return self.render_asking(asking, cx);
         }
         let body = match account.as_ref().map(|account| account.state) {
-            _ if !known => div().into_any_element(),
+            _ if !known => loading("panel-loading-accounts"),
             Some(LockState::Unlocked) => self.render_items(window, cx),
             Some(LockState::Locked) => self.render_locked(cx),
             Some(LockState::SignedOut) | None => self.render_signed_out(cx),
@@ -795,6 +954,8 @@ impl QuickPanel {
                     })),
             )
             .child(match empty {
+                // Rows standing in for the items, once the wait shows.
+                _ if matches!(self.items, Load::Loading) => loading("panel-loading-items"),
                 Some(message) => div()
                     .flex_1()
                     .flex()
@@ -856,16 +1017,17 @@ impl QuickPanel {
     /// each thing it can copy, and one that opens the item in the vault.
     /// The pointer moving onto a row selects it (`follow_pointer`).
     fn render_row(&self, position: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let item = self.item(position)?.clone();
-        let account = self.account.as_ref()?.id.clone();
+        let indexed = self.indexed(position)?;
+        let (item, key) = (&indexed.summary, indexed.key);
+        let account = &self.account.as_ref()?.id;
         let selected = position == self.selection.row;
-        let icon = icons::icon(&account, &item, cx);
-        let copied = self.copied.as_ref() == Some(&item.id);
+        let icon = icons::icon(account, item, cx);
+        let copied = self.copied.is(&item.id);
         // They fade in with the selection, rather than pop.
         let actions = selected.then(|| {
             motion::appear(
-                SharedString::from(format!("panel-actions-{}", item.id.0)),
-                div().flex().child(self.render_row_actions(&item, cx)),
+                ("panel-actions", key),
+                div().flex().child(self.render_row_actions(item, cx)),
             )
         });
         let clicked = item.clone();
@@ -875,7 +1037,7 @@ impl QuickPanel {
             div()
                 .child(
                     list_row(
-                        SharedString::from(format!("panel-item-{}", item.id.0)),
+                        ("panel-item", key),
                         item.name.clone(),
                         item.subtitle.clone().map(Into::into),
                         selected,
@@ -897,19 +1059,25 @@ impl QuickPanel {
         )
     }
 
-    /// Notes the button the pointer is on, or that it left it.
+    /// Notes the button the pointer is on, or that it left it: the line
+    /// under the list is drawn again only when that changes.
     fn point_at(
         &self,
         pointed: Pointed,
         cx: &mut Context<Self>,
     ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
         cx.listener(move |this, hovered: &bool, _, cx| {
-            if *hovered {
-                this.pointed = Some(pointed);
+            let now = if *hovered {
+                Some(pointed)
             } else if this.pointed == Some(pointed) {
-                this.pointed = None;
+                None
+            } else {
+                this.pointed
+            };
+            if now != this.pointed {
+                this.pointed = now;
+                cx.notify();
             }
-            cx.notify();
         })
     }
 
@@ -940,7 +1108,7 @@ impl QuickPanel {
     /// a login has a username or a code; it doesn't say whether a password,
     /// a card's number or a note is empty, so those buttons always show and
     /// say so when it is. They leave the keyboard in the search field.
-    fn render_row_actions(&self, item: &ItemSummary, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row_actions(&self, item: &Arc<ItemSummary>, cx: &mut Context<Self>) -> AnyElement {
         let parts = Part::of(item);
         let id = item.id.clone();
         div()
@@ -949,7 +1117,7 @@ impl QuickPanel {
             .gap(px(2.))
             .children(parts.into_iter().map(|part| {
                 let item = item.clone();
-                button(SharedString::from(format!("panel-{}", part.label())))
+                button(("panel-copy", part as usize))
                     .icon(part.icon())
                     .style(ButtonStyle::Flat)
                     .size(px(26.))
@@ -1207,7 +1375,7 @@ fn hint(
 
 /// An item asking for the master password before `part` of it is copied.
 struct Asking {
-    item: ItemSummary,
+    item: Arc<ItemSummary>,
     part: Part,
     reprompt: Entity<Reprompt>,
     _unlocked: Subscription,
@@ -1346,6 +1514,19 @@ impl Part {
             Part::PublicKey => "This SSH key has no public key.",
         }
     }
+}
+
+/// Rows standing in for the panel's list while it loads, once the wait
+/// shows; `id` names what loads.
+fn loading(id: &'static str) -> AnyElement {
+    motion::appear_late(
+        id,
+        div()
+            .flex_1()
+            .min_h_0()
+            .child(loading_rows((id, 0usize), 6).compact()),
+    )
+    .into_any_element()
 }
 
 /// A state in place of the items, such as a locked vault: an icon, what is

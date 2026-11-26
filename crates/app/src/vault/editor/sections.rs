@@ -278,6 +278,8 @@ impl ItemEditor {
                 .accessibility_label(label)
         };
         let this = cx.entity().downgrade();
+        let generator = self.generator.clone();
+        // The options are drawn only while they show.
         let options = popover(
             "generator-options",
             self.generator_open,
@@ -290,12 +292,13 @@ impl ItemEditor {
             this.update(cx, |this, cx| this.close_generator(window, cx))
                 .ok();
         })
-        .child(
-            div().w(generator::POPOVER_WIDTH).child(
-                self.generator
-                    .update(cx, |generator, cx| generator.render_options(cx)),
-            ),
-        );
+        .when_shown(move |options, _, cx| {
+            options.child(
+                div()
+                    .w(generator::POPOVER_WIDTH)
+                    .child(generator.update(cx, |generator, cx| generator.render_options(cx))),
+            )
+        });
         let buttons = div()
             .flex()
             .items_center()
@@ -564,10 +567,10 @@ impl ItemEditor {
     }
 
     /// "Add Field": the groups not shown yet and the custom fields, each
-    /// with its glyph and what it is for.
+    /// with its glyph and what it is for, made only while its menu shows.
     fn render_add(&self, cx: &mut Context<Self>) -> Group {
-        let this = cx.entity().downgrade();
-        let mut menu = popover(
+        let (this, view) = (cx.entity().downgrade(), cx.entity());
+        let menu = popover(
             "add-menu",
             self.add_menu_open,
             &self.add_menu_focus,
@@ -577,7 +580,28 @@ impl ItemEditor {
         .on_dismiss(move |window, cx| {
             this.update(cx, |this, cx| this.close_add_menu(window, cx))
                 .ok();
-        });
+        })
+        .when_shown(move |menu, _, cx| view.update(cx, |this, cx| this.add_menu_items(menu, cx)));
+        Group::new(
+            "add",
+            div()
+                .relative()
+                .flex()
+                .child(
+                    button("add-field")
+                        .label("Add Field")
+                        .icon(IconName::Plus)
+                        .trailing_icon(IconName::Down)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.toggle_add_menu(window, cx)),
+                        ),
+                )
+                .child(menu),
+            vec![],
+        )
+    }
+
+    fn add_menu_items(&mut self, mut menu: Popover, cx: &mut Context<Self>) -> Popover {
         let mut parts = 0;
         if self.kind == ItemKind::Login {
             parts += 1;
@@ -617,32 +641,12 @@ impl ItemEditor {
                     })),
             );
         }
-        Group::new(
-            "add",
-            div()
-                .relative()
-                .flex()
-                .child(
-                    button("add-field")
-                        .label("Add Field")
-                        .icon(IconName::Plus)
-                        .trailing_icon(IconName::Down)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.toggle_add_menu(window, cx)),
-                        ),
-                )
-                .child(menu),
-            vec![],
-        )
+        menu
     }
 
+    /// The folder menu, its choices made only while it shows.
     fn render_folder_menu(&self, cx: &mut Context<Self>) -> Popover {
-        let choices = std::iter::once((None, "No Folder".to_string())).chain(
-            self.folders
-                .iter()
-                .map(|folder| (Some(folder.id.clone()), folder.name.clone())),
-        );
-        let this = cx.entity().downgrade();
+        let (this, view) = (cx.entity().downgrade(), cx.entity());
         popover(
             "folder-menu",
             self.folder_menu_open,
@@ -653,7 +657,16 @@ impl ItemEditor {
             this.update(cx, |this, cx| this.close_folder_menu(window, cx))
                 .ok();
         })
-        .children(choices.enumerate().map(|(index, (id, name))| {
+        .when_shown(move |menu, _, cx| view.update(cx, |this, cx| this.folder_menu_items(menu, cx)))
+    }
+
+    fn folder_menu_items(&mut self, menu: Popover, cx: &mut Context<Self>) -> Popover {
+        let choices = std::iter::once((None, "No Folder".to_string())).chain(
+            self.folders
+                .iter()
+                .map(|folder| (Some(folder.id.clone()), folder.name.clone())),
+        );
+        menu.children(choices.enumerate().map(|(index, (id, name))| {
             let checked = id == self.folder;
             menu_item(("folder", index), name)
                 .checked(checked)
@@ -671,11 +684,16 @@ impl ItemEditor {
     }
 
     fn render_folder_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(input) = &self.new_folder {
+        if let Some(folder) = &self.new_folder {
             return div()
                 .key_context(NEW_FOLDER_CONTEXT)
                 .on_action(cx.listener(Self::cancel_new_folder))
-                .child(form_row(IconName::Folder, "Folder", Input::new(input), cx))
+                .child(form_row(
+                    IconName::Folder,
+                    "Folder",
+                    Input::new(&folder.input),
+                    cx,
+                ))
                 .into_any_element();
         }
         let name = self.folder_name();
