@@ -8,15 +8,18 @@ mod json;
 mod process;
 
 use std::collections::HashMap;
+use std::io::Write as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use command_line::Link;
 use icons::IconCache;
-use json::{ItemJson, ProfileJson, StatusJson};
+use json::{ItemJson, ProfileJson, ProfileStatusJson, StatusJson};
 pub use process::RBW_ENV;
-use process::{Rbw, Wait};
+use process::{Failure, Rbw, Wait};
 
 use crate::{
     Account, AccountId, AccountSettings, Backend, CharacterClasses, Characters, CommandLineTool,
@@ -41,8 +44,18 @@ pub struct RbwBackend {
     recent: PathBuf,
     /// Held while the recent items are read and written back.
     recent_lock: Mutex<()>,
+    /// Held while the preferences are read or written, so that
+    /// `website_icons` stays what the file says.
+    preferences_lock: Mutex<()>,
+    /// [`Preferences::website_icons`] as last read or saved, so that each
+    /// icon doesn't read the preferences: one of the `ICONS_` values.
+    website_icons: AtomicU8,
     icons: IconCache,
 }
+
+const ICONS_UNKNOWN: u8 = 0;
+const ICONS_OFF: u8 = 1;
+const ICONS_ON: u8 = 2;
 
 impl RbwBackend {
     /// Finds an `rbw` that is [`REQUIRED_RBW`] or later: the one in
@@ -67,6 +80,8 @@ impl RbwBackend {
             preferences: dirs.config_dir().join("preferences.json"),
             recent: dirs.config_dir().join("recent.json"),
             recent_lock: Mutex::new(()),
+            preferences_lock: Mutex::new(()),
+            website_icons: AtomicU8::new(ICONS_UNKNOWN),
             icons: IconCache::new(dirs.cache_dir().join("icons")),
         })
     }
@@ -103,16 +118,123 @@ impl RbwBackend {
             .json(None, &["profiles", "--json"], None, Wait::Local)
     }
 
+    /// Every account from one `rbw status --json` each, for an rbw without
+    /// `rbw profiles --status`. An account whose status fails is left out,
+    /// unless every one fails.
+    fn accounts_one_by_one(&self) -> Result<Vec<Account>> {
+        let mut accounts = vec![];
+        let mut failed = None;
+        for profile in self.profiles()? {
+            match self.account(&AccountId::new(profile.profile.unwrap_or_default())) {
+                Ok(account) => accounts.push(account),
+                Err(error) => failed = failed.or(Some(error)),
+            }
+        }
+        match failed {
+            Some(error) if accounts.is_empty() => Err(error),
+            _ => Ok(accounts),
+        }
+    }
+
     fn item_json(&self, account: &AccountId, item: &ItemId) -> Result<ItemJson> {
         self.json(account, &["item", "get", "--", &item.0], None, Wait::Local)
     }
 
     fn save(&self, account: &AccountId, args: &[&str], item: &ItemJson) -> Result<ItemSummary> {
+        Ok(self.save_or_fail(account, args, item)?)
+    }
+
+    /// [`Self::save`], with rbw's code for how it failed.
+    fn save_or_fail(
+        &self,
+        account: &AccountId,
+        args: &[&str],
+        item: &ItemJson,
+    ) -> Result<ItemSummary, Failure> {
         let input = json::to_stdin(item)?;
-        let saved: ItemJson = self.json(account, args, Some(&input), Wait::Network)?;
-        saved
+        let output = self
+            .rbw
+            .run(Some(account), args, Some(&input), Wait::Network)?;
+        let saved: ItemJson = serde_json::from_slice(&output)
+            .map_err(|error| Error::Other(format!("rbw answered with unexpected JSON: {error}")))?;
+        Ok(saved
             .summary()
-            .ok_or_else(|| Error::Other("rbw saved an item of an unknown kind".into()))
+            .ok_or_else(|| Error::Other("rbw saved an item of an unknown kind".into()))?)
+    }
+
+    /// The account's SSH keys: `None` while it is locked or signed out.
+    fn ssh_keys(&self, account: &AccountId) -> Result<Option<Vec<crate::SshKeySummary>>> {
+        let list = |args: &[&str]| self.json::<Vec<ItemJson>>(account, args, None, Wait::Local);
+        let items = match list(&["item", "list", "--type", "ssh-key"]) {
+            // an rbw without --type
+            Err(Error::InvalidItem(_)) => list(&["item", "list"]),
+            listed => listed,
+        };
+        match items {
+            Ok(items) => Ok(Some(items.iter().filter_map(ItemJson::ssh_key).collect())),
+            Err(Error::Locked | Error::NotSignedIn | Error::PasswordRequired) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The account's SSH agent service, without its keys.
+    fn ssh_service_status(&self, account: &AccountId) -> Result<SshServiceStatus> {
+        let status: SshStatusJson = self.json(
+            account,
+            &["ssh-agent", "status", "--json"],
+            None,
+            Wait::Local,
+        )?;
+        Ok(SshServiceStatus::from(status))
+    }
+
+    /// Whether websites' icons are on, from the preferences as last read
+    /// or saved.
+    fn website_icons_on(&self) -> Result<bool> {
+        match self.website_icons.load(Ordering::Relaxed) {
+            ICONS_ON => Ok(true),
+            ICONS_OFF => Ok(false),
+            _ => Ok(self.preferences()?.website_icons),
+        }
+    }
+
+    fn remember_website_icons(&self, on: bool) {
+        let value = if on { ICONS_ON } else { ICONS_OFF };
+        self.website_icons.store(value, Ordering::Relaxed);
+    }
+
+    /// The preferences in their file. Call with `preferences_lock` held.
+    fn read_preferences(&self) -> Result<Preferences> {
+        let text = match std::fs::read_to_string(&self.preferences) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Preferences::default());
+            }
+            Err(error) => return Err(Error::Other(format!("can't read the preferences: {error}"))),
+        };
+        // preferences from a newer or broken file fall back to the defaults
+        let defaults = Preferences::default();
+        Ok(serde_json::from_str::<PreferencesJson>(&text)
+            .map(|saved| Preferences {
+                clipboard_clear: saved.clipboard_clear.map(Duration::from_secs),
+                website_icons: saved.website_icons,
+                generator: saved.generator.map_or(defaults.generator, Into::into),
+                menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
+                list_share: saved.list_share,
+                sort: saved.sort.map_or(defaults.sort, Into::into),
+                window: saved.window.map(Into::into),
+                dismissed_rbw: saved.dismissed_rbw.map(|other| OtherRbw {
+                    path: other.path,
+                    version: other.version,
+                }),
+            })
+            .unwrap_or(defaults))
+    }
+
+    fn lock_preferences(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.preferences_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn set_config(&self, account: &AccountId, key: &str, value: &str) -> Result<()> {
@@ -144,15 +266,47 @@ impl RbwBackend {
     }
 }
 
-/// Writes `value` whole next to `path`, then moves it over the old file.
+/// Writes `value` whole next to `path`, then moves it over the old file:
+/// a file only this user can read, in a folder only this user can open.
+/// Each write has a file of its own until it moves, so that two at once
+/// never mix.
 fn write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        private_dir(dir)?;
     }
     let text = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
-    let partial = path.with_extension("json.partial");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, path)
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}-{}.partial",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
+    let partial = path.with_file_name(name);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&partial)
+        .and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&partial, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
+}
+
+/// Makes the folder, and the ones it is in, for this user only, and makes
+/// it so if it was there already.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
 // The app's folders, named after APP_ID's parts: macOS names them after the
@@ -172,14 +326,10 @@ fn app_dirs() -> Result<directories::ProjectDirs> {
 /// as a socket: `$XDG_RUNTIME_DIR/rbwdesktop` on Linux, its cache folder
 /// elsewhere. It is made if missing, for this user only.
 pub fn session_dir() -> Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt as _;
-
     let dirs = app_dirs()?;
     let dir = dirs.runtime_dir().unwrap_or(dirs.cache_dir()).to_path_buf();
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
+    // one made before, as the icons' cache folder may be, is made private
+    private_dir(&dir)
         .map_err(|error| Error::Other(format!("can't make {}: {error}", dir.display())))?;
     Ok(dir)
 }
@@ -417,28 +567,79 @@ struct SshJson {
     socket: Option<PathBuf>,
 }
 
+/// [`SshAgentStatus`] without the keys.
+struct SshServiceStatus {
+    service: SshService,
+    running: bool,
+    socket: PathBuf,
+    ssh_uses: SshUses,
+}
+
+impl From<SshStatusJson> for SshServiceStatus {
+    fn from(status: SshStatusJson) -> Self {
+        let service = if !status.supported {
+            SshService::Unsupported
+        } else if status.installed {
+            SshService::Installed
+        } else if let Some(other) = status.other_profiles.into_iter().next() {
+            SshService::InstalledForOther(AccountId::new(other.unwrap_or_default()))
+        } else {
+            SshService::NotInstalled
+        };
+        let ssh_uses = match (status.ssh.agent.as_str(), status.ssh.socket) {
+            ("rbw", _) => SshUses::Rbw,
+            ("other", Some(socket)) => SshUses::Other(socket),
+            ("none", _) => SshUses::None,
+            _ => SshUses::Unknown,
+        };
+        Self {
+            service,
+            running: status.running,
+            socket: status.socket,
+            ssh_uses,
+        }
+    }
+}
+
+fn account_from(id: AccountId, status: StatusJson) -> Account {
+    Account {
+        id,
+        email: status.user_email,
+        server: json::server(status.server_url.as_deref()),
+        state: match status.status.as_str() {
+            "unlocked" => LockState::Unlocked,
+            "locked" => LockState::Locked,
+            _ => LockState::SignedOut,
+        },
+        touch_id_ready: status.touch_id,
+        last_sync: status.last_sync.as_deref().and_then(json::parse_time),
+    }
+}
+
 impl Backend for RbwBackend {
     fn accounts(&self) -> Result<Vec<Account>> {
-        self.profiles()?
-            .into_iter()
-            .map(|profile| self.account(&AccountId::new(profile.profile.unwrap_or_default())))
-            .collect()
+        match self.rbw.json::<Vec<ProfileStatusJson>, _>(
+            None,
+            &["profiles", "--json", "--status"],
+            None,
+            Wait::Local,
+        ) {
+            Ok(profiles) => Ok(profiles
+                .into_iter()
+                .map(|profile| {
+                    let id = AccountId::new(profile.profile.unwrap_or_default());
+                    account_from(id, profile.status)
+                })
+                .collect()),
+            // an rbw without --status
+            Err(Error::InvalidItem(_)) => self.accounts_one_by_one(),
+            Err(error) => Err(error),
+        }
     }
 
     fn account(&self, account: &AccountId) -> Result<Account> {
         let status: StatusJson = self.json(account, &["status", "--json"], None, Wait::Local)?;
-        Ok(Account {
-            id: account.clone(),
-            email: status.user_email,
-            server: json::server(status.server_url.as_deref()),
-            state: match status.status.as_str() {
-                "unlocked" => LockState::Unlocked,
-                "locked" => LockState::Locked,
-                _ => LockState::SignedOut,
-            },
-            touch_id_ready: status.touch_id,
-            last_sync: status.last_sync.as_deref().and_then(json::parse_time),
-        })
+        Ok(account_from(account.clone(), status))
     }
 
     fn add_account(&self, server: &Server, email: &str) -> Result<AccountId> {
@@ -593,6 +794,29 @@ impl Backend for RbwBackend {
             .ok_or_else(|| Error::Other("the item is of a kind this version doesn't know".into()))
     }
 
+    fn item_with_code(
+        &self,
+        account: &AccountId,
+        item: &ItemId,
+    ) -> Result<(Item, Option<VerificationCode>)> {
+        let mut found: ItemJson = match self.json(
+            account,
+            &["item", "get", "--with-code", "--", &item.0],
+            None,
+            Wait::Local,
+        ) {
+            Ok(found) => found,
+            // an rbw without --with-code: the item, then its code
+            Err(Error::InvalidItem(_)) => return crate::item_then_code(self, account, item),
+            Err(error) => return Err(error),
+        };
+        let code = found.totp_code.take().map(VerificationCode::from);
+        let found = found.item().ok_or_else(|| {
+            Error::Other("the item is of a kind this version doesn't know".into())
+        })?;
+        Ok((found, code))
+    }
+
     fn unlock_item(&self, account: &AccountId, item: &ItemId, password: &Secret) -> Result<()> {
         self.run_with_secret(
             account,
@@ -612,20 +836,33 @@ impl Backend for RbwBackend {
         item: &ItemId,
         data: &ItemData,
     ) -> Result<ItemSummary> {
-        // the edit names the organization the item is in, which only the
-        // list knows without fetching the item's secrets
-        let current = self
-            .items(account)?
-            .into_iter()
-            .find(|summary| summary.id == *item)
-            .ok_or(Error::NotFound)?;
-        if !current.editable {
-            return Err(Error::ReadOnly);
-        }
+        // without an organization, rbw keeps the item in its own, and
+        // refuses a read-only item itself
+        let args = ["item", "edit", "--", &item.0];
         let mut edited = ItemJson::from_data(data);
         edited.id = Some(item.0.clone());
-        edited.organization_id = current.organization;
-        self.save(account, &["item", "edit", "--", &item.0], &edited)
+        match self.save_or_fail(account, &args, &edited) {
+            Ok(saved) => Ok(saved),
+            // an rbw that reads no organization as moving the item out of
+            // it: name the item's, which only the list knows without
+            // fetching the item's secrets
+            Err(failure) if failure.code.as_deref() == Some("unsupported") => {
+                let current = self
+                    .items(account)?
+                    .into_iter()
+                    .find(|summary| summary.id == *item)
+                    .ok_or(Error::NotFound)?;
+                if !current.editable {
+                    return Err(Error::ReadOnly);
+                }
+                if current.organization.is_none() {
+                    return Err(failure.error);
+                }
+                edited.organization_id = current.organization;
+                self.save(account, &args, &edited)
+            }
+            Err(failure) => Err(failure.error),
+        }
     }
 
     fn delete_item(&self, account: &AccountId, item: &ItemId) -> Result<()> {
@@ -678,7 +915,7 @@ impl Backend for RbwBackend {
     }
 
     fn website_icon(&self, account: &AccountId, item: &ItemSummary) -> Result<Option<WebsiteIcon>> {
-        if !self.preferences()?.website_icons {
+        if !self.website_icons_on()? {
             return Ok(None);
         }
         let Some(host) = icon::icon_host(item) else {
@@ -705,10 +942,24 @@ impl Backend for RbwBackend {
         account: &AccountId,
         item: &ItemSummary,
     ) -> Result<Option<Option<WebsiteIcon>>> {
-        if !self.preferences()?.website_icons {
+        if !self.website_icons_on()? {
             return Ok(Some(None));
         }
         Ok(match icon::icon_host(item) {
+            Some(host) => self.icons.get(account, &host),
+            None => Some(None),
+        })
+    }
+
+    fn cached_website_icon_host(
+        &self,
+        account: &AccountId,
+        host: &str,
+    ) -> Result<Option<Option<WebsiteIcon>>> {
+        if !self.website_icons_on()? {
+            return Ok(Some(None));
+        }
+        Ok(match icon::host_from_uri(host) {
             Some(host) => self.icons.get(account, &host),
             None => Some(None),
         })
@@ -801,30 +1052,10 @@ impl Backend for RbwBackend {
     }
 
     fn preferences(&self) -> Result<Preferences> {
-        let text = match std::fs::read_to_string(&self.preferences) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Preferences::default());
-            }
-            Err(error) => return Err(Error::Other(format!("can't read the preferences: {error}"))),
-        };
-        // preferences from a newer or broken file fall back to the defaults
-        let defaults = Preferences::default();
-        Ok(serde_json::from_str::<PreferencesJson>(&text)
-            .map(|saved| Preferences {
-                clipboard_clear: saved.clipboard_clear.map(Duration::from_secs),
-                website_icons: saved.website_icons,
-                generator: saved.generator.map_or(defaults.generator, Into::into),
-                menu_bar: saved.menu_bar.unwrap_or(defaults.menu_bar),
-                list_share: saved.list_share,
-                sort: saved.sort.map_or(defaults.sort, Into::into),
-                window: saved.window.map(Into::into),
-                dismissed_rbw: saved.dismissed_rbw.map(|other| OtherRbw {
-                    path: other.path,
-                    version: other.version,
-                }),
-            })
-            .unwrap_or(defaults))
+        let _held = self.lock_preferences();
+        let preferences = self.read_preferences()?;
+        self.remember_website_icons(preferences.website_icons);
+        Ok(preferences)
     }
 
     fn set_preferences(&self, preferences: &Preferences) -> Result<()> {
@@ -841,12 +1072,16 @@ impl Backend for RbwBackend {
                 version: other.version,
             }),
         };
-        write_json(&self.preferences, &saved)
-            .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
+        {
+            let _held = self.lock_preferences();
+            write_json(&self.preferences, &saved)
+                .map_err(|error| Error::Other(format!("can't save the preferences: {error}")))?;
+            self.remember_website_icons(preferences.website_icons);
+        }
+        // the preferences are saved: icons left behind are only a cache,
+        // which a later change of the preference clears again
         if !preferences.website_icons {
-            self.icons
-                .clear()
-                .map_err(|error| Error::Other(format!("can't forget the icons: {error}")))?;
+            let _ = self.icons.clear();
         }
         Ok(())
     }
@@ -875,37 +1110,13 @@ impl Backend for RbwBackend {
     }
 
     fn ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        let status: SshStatusJson = self.json(
-            account,
-            &["ssh-agent", "status", "--json"],
-            None,
-            Wait::Local,
-        )?;
-        let keys = match self.json::<Vec<ItemJson>>(account, &["item", "list"], None, Wait::Local) {
-            Ok(items) => Some(items.iter().filter_map(ItemJson::ssh_key).collect()),
-            Err(Error::Locked | Error::NotSignedIn | Error::PasswordRequired) => None,
-            Err(error) => return Err(error),
-        };
-        let service = if !status.supported {
-            SshService::Unsupported
-        } else if status.installed {
-            SshService::Installed
-        } else if let Some(other) = status.other_profiles.into_iter().next() {
-            SshService::InstalledForOther(AccountId::new(other.unwrap_or_default()))
-        } else {
-            SshService::NotInstalled
-        };
-        let ssh_uses = match (status.ssh.agent.as_str(), status.ssh.socket) {
-            ("rbw", _) => SshUses::Rbw,
-            ("other", Some(socket)) => SshUses::Other(socket),
-            ("none", _) => SshUses::None,
-            _ => SshUses::Unknown,
-        };
+        let status = self.ssh_service_status(account)?;
+        let keys = self.ssh_keys(account)?;
         Ok(SshAgentStatus {
-            service,
+            service: status.service,
             running: status.running,
             socket: status.socket,
-            ssh_uses,
+            ssh_uses: status.ssh_uses,
             keys,
         })
     }
@@ -914,7 +1125,7 @@ impl Backend for RbwBackend {
         if self.rbw.is_transient() {
             return Err(Error::AppNotInstalled);
         }
-        match self.ssh_agent(account)?.service {
+        match self.ssh_service_status(account)?.service {
             SshService::Unsupported => return Err(Error::SshAgentUnsupported),
             SshService::InstalledForOther(other) => {
                 return Err(Error::SshAgentInstalledForOther(other));
@@ -926,14 +1137,14 @@ impl Backend for RbwBackend {
     }
 
     fn uninstall_ssh_agent(&self, account: &AccountId) -> Result<SshAgentStatus> {
-        if self.ssh_agent(account)?.service == SshService::Installed {
+        if self.ssh_service_status(account)?.service == SshService::Installed {
             self.run(account, &["ssh-agent", "uninstall"], Wait::Local)?;
         }
         self.ssh_agent(account)
     }
 
     fn rbw_version(&self) -> Result<String> {
-        Ok(self.rbw.version()?.text)
+        Ok(self.rbw.version()?.text.clone())
     }
 
     fn command_line_tool(&self) -> Result<Option<CommandLineTool>> {
@@ -970,11 +1181,9 @@ impl Backend for RbwBackend {
         };
         let own = self.rbw.version()?;
         // one that can't say its version is no rbw-ng
-        let version = Rbw::at(path.clone()).version().ok();
-        if version
-            .as_ref()
-            .is_some_and(|version| version.same_release(&own))
-        {
+        let other = Rbw::at(path.clone());
+        let version = other.version().ok();
+        if version.is_some_and(|version| version.same_release(own)) {
             return Ok(None);
         }
         Ok(Some(OtherRbw {

@@ -965,6 +965,21 @@ impl Backend for FakeBackend {
         Ok(state.account_mut(account)?.icons.get(&host).cloned())
     }
 
+    fn cached_website_icon_host(
+        &self,
+        account: &AccountId,
+        host: &str,
+    ) -> Result<Option<Option<WebsiteIcon>>> {
+        let mut state = self.state();
+        if !state.preferences.website_icons {
+            return Ok(Some(None));
+        }
+        let Some(host) = icon::host_from_uri(host) else {
+            return Ok(Some(None));
+        };
+        Ok(state.account_mut(account)?.icons.get(&host).cloned())
+    }
+
     fn recent_items(&self, account: &AccountId) -> Result<Vec<ItemId>> {
         Ok(self
             .call(Operation::RecentItems)?
@@ -1508,6 +1523,13 @@ mod tests {
                 fake.cached_website_icon(&id, item).unwrap(),
                 Some(icon.clone())
             );
+            if let Some(website) = item.websites.first() {
+                assert_eq!(
+                    fake.cached_website_icon_host(&id, website).unwrap(),
+                    Some(icon.clone()),
+                    "{website}"
+                );
+            }
         }
         let fresh = unlocked();
         fresh.keep_icons(&id);
