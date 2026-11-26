@@ -124,6 +124,14 @@ impl LockScreen {
             self.busy = None;
             cx.notify();
         }
+        // Another account's screen starts empty: what was typed was for
+        // the one before.
+        if account.id != self.account.id {
+            self.password
+                .update(cx, |password, cx| password.set_value("", window, cx));
+            self.problem = None;
+            self.password_waits = false;
+        }
         if account != self.account || accounts != self.accounts {
             self.account = account;
             self.accounts = accounts;
@@ -205,28 +213,39 @@ impl LockScreen {
         self.auto.started(unlocking == Unlocking::TouchId);
         self.problem = None;
         cx.notify();
-        self.task = backend::request_in(window, cx, call, |this, result, window, cx| {
-            match result {
-                // The spinner keeps going until the vault replaces this screen.
-                Ok(()) => {
-                    this.unlocked = true;
-                    this.password_waits = false;
-                    this.password
-                        .update(cx, |password, cx| password.set_value("", window, cx));
-                    crate::accounts::refresh(cx);
-                }
-                Err(error) => {
-                    this.busy = None;
-                    this.auto.ended();
-                    if std::mem::take(&mut this.password_waits) {
-                        this.unlock(window, cx);
-                    } else {
-                        this.fail(&error, window, cx);
-                    }
+        // Touch ID waits on the person, then on the server.
+        self.task = match unlocking {
+            Unlocking::TouchId => backend::request_network_in(window, cx, call, Self::answered),
+            Unlocking::Password => backend::request_in(window, cx, call, Self::answered),
+        };
+    }
+
+    fn answered(
+        &mut self,
+        result: rbw_desktop_core::Result<()>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            // The spinner keeps going until the vault replaces this screen.
+            Ok(()) => {
+                self.unlocked = true;
+                self.password_waits = false;
+                self.password
+                    .update(cx, |password, cx| password.set_value("", window, cx));
+                crate::accounts::refresh(cx);
+            }
+            Err(error) => {
+                self.busy = None;
+                self.auto.ended();
+                if std::mem::take(&mut self.password_waits) {
+                    self.unlock(window, cx);
+                } else {
+                    self.fail(&error, window, cx);
                 }
             }
-            cx.notify();
-        });
+        }
+        cx.notify();
     }
 
     fn fail(&mut self, error: &Error, window: &mut Window, cx: &mut Context<Self>) {

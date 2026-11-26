@@ -1,7 +1,8 @@
 //! The app's preferences, read once at start and shared by every window:
 //! Settings changes them, the generator remembers its options in them, the
-//! menu bar item follows them. A change applies at once and is saved; a save
-//! that fails puts them back. Views observe [`Prefs`] to follow them.
+//! menu bar item follows them. A change applies at once and is saved, one
+//! save at a time; a save that fails puts them back, unless a newer change
+//! is saved after it. Views observe [`Prefs`] to follow them.
 
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 use rbw_desktop_core::{Error, Preferences};
@@ -21,6 +22,13 @@ pub struct Prefs {
     early: Vec<Change>,
     /// What waits for them to be read.
     waiting: Vec<Then>,
+    /// The preferences as last read or saved: what a failed save puts back.
+    saved: Preferences,
+    /// Whether a save is on the way.
+    saving: bool,
+    /// Whether they changed while a save was on the way, to be saved once
+    /// it ends.
+    save_again: bool,
 }
 
 /// A change could not be saved; the preferences are back as they were.
@@ -47,8 +55,10 @@ pub fn init(cx: &mut App) {
                         for change in &early {
                             change(&mut this.preferences);
                         }
-                        if this.preferences != read {
-                            this.save(read, cx);
+                        let changed = this.preferences != read;
+                        this.saved = read;
+                        if changed {
+                            this.save(cx);
                         }
                     }
                     Err(error) => log::warn!("reading the preferences: {error}"),
@@ -66,6 +76,9 @@ pub fn init(cx: &mut App) {
             loaded: false,
             early: vec![],
             waiting: vec![],
+            saved: Preferences::default(),
+            saving: false,
+            save_again: false,
         }
     });
     cx.set_global(Shared(prefs));
@@ -96,25 +109,46 @@ impl Prefs {
         apply(&self.preferences, cx);
         cx.notify();
         if self.loaded {
-            self.save(before, cx);
+            self.save(cx);
         } else {
             self.early.push(Box::new(change));
         }
     }
 
-    /// Saves the preferences, or puts back `before` if that fails.
-    fn save(&mut self, before: Preferences, cx: &mut Context<Self>) {
-        let saved = self.preferences.clone();
+    /// Saves the preferences, after the save on the way if there is one,
+    /// so that an older save never lands after a newer one. A save that
+    /// fails puts back the preferences saved before, unless they changed
+    /// again since: the newer ones, which hold the change too, are saved
+    /// next.
+    fn save(&mut self, cx: &mut Context<Self>) {
+        if self.saving {
+            self.save_again = true;
+            return;
+        }
+        self.saving = true;
+        let saving = self.preferences.clone();
+        let sent = saving.clone();
         backend::request(
             cx,
-            move |backend| backend.set_preferences(&saved),
+            move |backend| backend.set_preferences(&sent),
             move |this, result, cx| {
-                if let Err(error) = result {
-                    log::warn!("saving the preferences: {error}");
-                    apply(&before, cx);
-                    this.preferences = before;
-                    cx.emit(SaveFailed(error));
-                    cx.notify();
+                this.saving = false;
+                let again = std::mem::take(&mut this.save_again);
+                match result {
+                    Ok(()) => this.saved = saving,
+                    Err(error) => {
+                        log::warn!("saving the preferences: {error}");
+                        if !again && this.preferences == saving {
+                            let before = this.saved.clone();
+                            apply(&before, cx);
+                            this.preferences = before;
+                            cx.emit(SaveFailed(error));
+                            cx.notify();
+                        }
+                    }
+                }
+                if again && this.preferences != this.saved {
+                    this.save(cx);
                 }
             },
         )

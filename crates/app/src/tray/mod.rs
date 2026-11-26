@@ -123,6 +123,7 @@ impl MenuBar {
             (false, true) => {
                 self.starting = None;
                 self.item = None;
+                cx.notify();
             }
             _ => {}
         }
@@ -141,9 +142,11 @@ impl MenuBar {
                     }
                     Err(error) => log::info!("no menu bar item: {error}"),
                 }
+                cx.notify();
             })
             .ok();
         }));
+        cx.notify();
     }
 
     /// Lock is there while the account the windows show is unlocked.
@@ -159,6 +162,7 @@ impl MenuBar {
 
     fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
+            // Changes nothing Settings shows about the item.
             Event::Toggle(click) => {
                 let anchor = match &self.item {
                     Some(item) => item.anchor(click, cx),
@@ -182,9 +186,9 @@ impl MenuBar {
                 .detach();
             }
             Event::Quit => cx.quit(),
+            // Whether something shows the item, which Settings says.
             #[cfg(not(target_os = "macos"))]
-            Event::HostChanged => {}
+            Event::HostChanged => cx.notify(),
         }
-        cx.notify();
     }
 }

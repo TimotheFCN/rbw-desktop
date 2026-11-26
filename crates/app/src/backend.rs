@@ -80,7 +80,50 @@ pub fn request_on_thread<V: 'static, T: Send + 'static>(
     call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
     then: impl FnOnce(&mut V, Result<T>, &mut Context<V>) + 'static,
 ) -> Task<()> {
-    let backend = cx.global::<Shared>().0.clone();
+    let answer = on_thread(name, cx.global::<Shared>().0.clone(), call);
+    cx.spawn(async move |view, cx| {
+        let result = answer.await;
+        view.update(cx, |view, cx| then(view, result, cx)).ok();
+    })
+}
+
+/// [`request`] for a call that waits on the server, such as signing in,
+/// syncing or saving an item: it runs on a thread of its own, so that
+/// however long the server takes, the quick local calls on the background
+/// executor never queue behind it.
+pub fn request_network<V: 'static, T: Send + 'static>(
+    cx: &mut Context<V>,
+    call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
+    then: impl FnOnce(&mut V, Result<T>, &mut Context<V>) + 'static,
+) -> Task<()> {
+    request_on_thread(NETWORK_THREAD, cx, call, then)
+}
+
+/// [`request_network`] for an answer that needs the window, as
+/// [`request_in`].
+pub fn request_network_in<V: 'static, T: Send + 'static>(
+    window: &Window,
+    cx: &mut Context<V>,
+    call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
+    then: impl FnOnce(&mut V, Result<T>, &mut Window, &mut Context<V>) + 'static,
+) -> Task<()> {
+    let answer = on_thread(NETWORK_THREAD, cx.global::<Shared>().0.clone(), call);
+    cx.spawn_in(window, async move |view, cx| {
+        let result = answer.await;
+        view.update_in(cx, |view, window, cx| then(view, result, window, cx))
+            .ok();
+    })
+}
+
+/// The name of the threads that wait on the server.
+const NETWORK_THREAD: &str = "rbw network";
+
+/// Runs `call` on a new thread named `name`; the future gives its answer.
+fn on_thread<T: Send + 'static>(
+    name: &str,
+    backend: Arc<dyn Backend>,
+    call: impl FnOnce(&dyn Backend) -> Result<T> + Send + 'static,
+) -> impl std::future::Future<Output = Result<T>> + Send + 'static {
     let (send, answer) = futures::channel::oneshot::channel();
     let spawned = std::thread::Builder::new()
         .name(name.to_string())
@@ -88,12 +131,11 @@ pub fn request_on_thread<V: 'static, T: Send + 'static>(
     if let Err(error) = &spawned {
         log::warn!("starting a thread: {error}");
     }
-    cx.spawn(async move |view, cx| {
-        let result = answer
+    async move {
+        answer
             .await
-            .unwrap_or_else(|_| Err(Error::Other("the call's thread ended".into())));
-        view.update(cx, |view, cx| then(view, result, cx)).ok();
-    })
+            .unwrap_or_else(|_| Err(Error::Other("the call's thread ended".into())))
+    }
 }
 
 /// Runs `call` off the main thread, for an answer that no view waits for.
@@ -154,6 +196,12 @@ impl<T> From<Result<T>> for Load<T> {
 /// A sentence for people about what went wrong. The errors' own `Display`
 /// text is for logs.
 pub fn describe(error: &Error) -> &'static str {
+    if matches!(
+        error,
+        Error::InvalidItem(_) | Error::Server(_) | Error::Other(_)
+    ) {
+        log_once(error);
+    }
     match error {
         Error::Locked => "The vault is locked.",
         Error::NotSignedIn => "This account is signed out.",
@@ -173,7 +221,23 @@ pub fn describe(error: &Error) -> &'static str {
         Error::PasswordRequired | Error::RepromptRequired => {
             "This needs your master password again."
         }
-        _ => "Something went wrong.",
+        error => {
+            log_once(error);
+            "Something went wrong."
+        }
+    }
+}
+
+/// Logs what an error says that its sentence for people leaves out, such
+/// as the server's own message, once while it stays the same: a view may
+/// describe the same error each time it draws.
+fn log_once(error: &Error) {
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let text = error.to_string();
+    let Ok(mut last) = LAST.lock() else { return };
+    if last.as_deref() != Some(text.as_str()) {
+        log::warn!("backend error: {text}");
+        *last = Some(text);
     }
 }
 

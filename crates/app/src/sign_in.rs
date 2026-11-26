@@ -67,6 +67,9 @@ pub struct SignIn {
     email_sent: bool,
     /// The account made for this sign-in, removed again if it is abandoned.
     added: Option<AccountId>,
+    /// Ends once an account made for an abandoned sign-in is removed, which
+    /// a new one for the same email waits for.
+    removed: Option<futures::channel::oneshot::Receiver<()>>,
     problem: Option<&'static str>,
     /// Counts wrong entries, each of which shakes the field.
     wrong: usize,
@@ -146,6 +149,7 @@ impl SignIn {
             method: 0,
             email_sent: false,
             added: None,
+            removed: None,
             problem: None,
             wrong: 0,
             busy: false,
@@ -229,16 +233,18 @@ impl SignIn {
             Step::Account => {}
             Step::Password if self.existing.is_none() => {
                 // The email or the server may change, so the account made
-                // for them goes.
-                if let Some(id) = self.added.take() {
-                    backend::forget(cx, move |backend| backend.remove_account(&id));
-                }
+                // for them goes, and the password typed for it.
+                self.abandon_added(cx);
+                self.password
+                    .update(cx, |password, cx| password.set_value("", window, cx));
                 self.go(Step::Account, true, window, cx);
             }
             Step::Password => {}
             Step::Verification(_) | Step::NewDevice | Step::ApiKey => {
                 self.code
                     .update(cx, |code, cx| code.set_value("", window, cx));
+                self.api_key_secret
+                    .update(cx, |secret, cx| secret.set_value("", window, cx));
                 self.email_sent = false;
                 self.go(Step::Password, true, window, cx);
             }
@@ -286,8 +292,27 @@ impl SignIn {
         }
     }
 
+    /// Removes the account made for a sign-in that went back to the
+    /// server and the email; a new one waits for it to be gone.
+    fn abandon_added(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.added.take() else {
+            return;
+        };
+        let (done, removed) = futures::channel::oneshot::channel();
+        backend::forget(cx, move |backend| {
+            let result = backend.remove_account(&id);
+            done.send(()).ok();
+            result
+        });
+        self.removed = Some(removed);
+    }
+
     fn check_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.chosen_server(cx).is_none() {
+        if self.server == SELF_HOSTED && !web_address(&self.text(&self.server_url, cx)) {
+            self.problem = Some("Enter an address that starts with https://.");
+            self.server_url
+                .update(cx, |input, cx| input.focus(window, cx));
+        } else if self.chosen_server(cx).is_none() {
             self.problem = Some("Enter the address of your server.");
             self.server_url
                 .update(cx, |input, cx| input.focus(window, cx));
@@ -321,7 +346,7 @@ impl SignIn {
             self.add_then_sign_in(code, api_key, window, cx);
             return;
         };
-        self.task = backend::request_in(
+        self.task = backend::request_network_in(
             window,
             cx,
             move |backend| {
@@ -339,6 +364,8 @@ impl SignIn {
                         this.added = None;
                         this.password
                             .update(cx, |password, cx| password.set_value("", window, cx));
+                        this.api_key_secret
+                            .update(cx, |secret, cx| secret.set_value("", window, cx));
                         cx.emit(Request::SignedIn(id));
                     }
                     Err(error) => this.fail(error, window, cx),
@@ -363,11 +390,19 @@ impl SignIn {
             return;
         };
         let email = self.email(cx);
-        self.task = backend::request_in(
-            window,
-            cx,
-            move |backend| backend.add_account(&server, &email),
-            move |this, result, window, cx| {
+        // An account made for the same email before going back may still
+        // be on its way out.
+        let removed = self.removed.take();
+        self.task = cx.spawn_in(window, async move |this, cx| {
+            if let Some(removed) = removed {
+                removed.await.ok();
+            }
+            let adding = this.update(cx, |_, cx| {
+                backend::call(cx, move |backend| backend.add_account(&server, &email))
+            });
+            let Ok(adding) = adding else { return };
+            let result = adding.await;
+            this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(id) => {
                         this.added = Some(id);
@@ -376,8 +411,9 @@ impl SignIn {
                     Err(error) => this.fail(error, window, cx),
                 }
                 cx.notify();
-            },
-        );
+            })
+            .ok();
+        });
     }
 
     fn fail(&mut self, error: Error, window: &mut Window, cx: &mut Context<Self>) {
@@ -402,9 +438,7 @@ impl SignIn {
             // The address was entered on the step before: back there to
             // correct it. The account made for it goes, as on Back.
             Error::WrongServer if self.existing.is_none() => {
-                if let Some(id) = self.added.take() {
-                    backend::forget(cx, move |backend| backend.remove_account(&id));
-                }
+                self.abandon_added(cx);
                 self.go(Step::Account, true, window, cx);
                 self.problem = Some("There's no Bitwarden server at this address.");
                 if self.server == SELF_HOSTED {
@@ -449,7 +483,7 @@ impl SignIn {
         let password = Secret::new(self.password.read(cx).value().to_string());
         self.busy = true;
         cx.notify();
-        self.task = backend::request_in(
+        self.task = backend::request_network_in(
             window,
             cx,
             move |backend| backend.send_email_code(&id, &password),
@@ -681,12 +715,16 @@ impl AccountMenu for SignIn {
 }
 
 /// The server of a choice of [`SERVERS`], with the address typed for a
-/// self-hosted one; `None` for an address that is no address.
+/// self-hosted one; `None` for an address that is no address, or that
+/// isn't a web address.
 fn server(choice: usize, url: &str) -> Option<Server> {
     match choice {
         0 => Some(Server::BitwardenCom),
         1 => Some(Server::BitwardenEu),
         _ => {
+            if !web_address(url) {
+                return None;
+            }
             let (scheme, rest) = url
                 .trim()
                 .split_once("://")
@@ -695,9 +733,37 @@ fn server(choice: usize, url: &str) -> Option<Server> {
             if rest.is_empty() || rest.contains(char::is_whitespace) {
                 return None;
             }
-            Some(Server::SelfHosted(format!("{scheme}://{rest}")))
+            Some(Server::SelfHosted(format!(
+                "{}://{rest}",
+                scheme.to_ascii_lowercase()
+            )))
         }
     }
+}
+
+/// Whether a server's address is one on the web: https, or http such as
+/// on a local network, or no scheme, which means https. Not a file, a
+/// script or anything else a browser would open.
+fn web_address(url: &str) -> bool {
+    match url.trim().split_once("://") {
+        Some((scheme, _)) => {
+            scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
+        }
+        // A colon before any slash is a scheme too, as in javascript:.
+        None => !url
+            .trim()
+            .split('/')
+            .next()
+            .is_some_and(|start| start.contains(':') && !port_only(start)),
+    }
+}
+
+/// Whether `start`, with a colon, is a host and a port, as in
+/// vault.example.com:8443.
+fn port_only(start: &str) -> bool {
+    start
+        .rsplit_once(':')
+        .is_some_and(|(host, port)| !host.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn valid_email(email: &str) -> bool {
@@ -822,8 +888,31 @@ mod tests {
             hosted("http://10.0.0.2:8080"),
             Some(Server::SelfHosted("http://10.0.0.2:8080".into()))
         );
+        assert_eq!(
+            hosted("HTTPS://vault.example.com:8443"),
+            Some(Server::SelfHosted("https://vault.example.com:8443".into()))
+        );
+        assert_eq!(
+            hosted("vault.example.com:8443"),
+            Some(Server::SelfHosted("https://vault.example.com:8443".into()))
+        );
         for nothing in ["", "https://", "vault example.com"] {
             assert_eq!(hosted(nothing), None, "{nothing}");
+        }
+    }
+
+    #[test]
+    fn a_server_is_only_on_the_web() {
+        let hosted = |url| server(SELF_HOSTED, url);
+        for elsewhere in [
+            "file:///etc/passwd",
+            "javascript://alert(1)",
+            "javascript:alert(1)",
+            "ftp://vault.example.com",
+            "data:text/html,hi",
+        ] {
+            assert_eq!(hosted(elsewhere), None, "{elsewhere}");
+            assert!(!web_address(elsewhere), "{elsewhere}");
         }
     }
 

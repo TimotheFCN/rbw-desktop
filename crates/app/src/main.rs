@@ -3,6 +3,7 @@ mod alerts;
 mod backend;
 mod clipboard;
 mod command_line;
+mod copied;
 mod demo;
 mod dock;
 #[cfg(feature = "frame-stats")]
@@ -20,11 +21,12 @@ mod sign_in;
 mod touch_id;
 mod tray;
 mod vault;
+mod vault_cache;
 mod window;
 
 use std::sync::Arc;
 
-use gpui::{App, KeyBinding, Menu, MenuItem, QuitMode, actions};
+use gpui::{App, AppContext as _, KeyBinding, Menu, MenuItem, QuitMode, actions};
 use rbw_desktop_core::{APP_NAME, Backend, Error};
 
 /// A key binding with the platform's command modifier: Command on macOS,
@@ -62,8 +64,6 @@ fn main() {
             instance::Claim::Alone => None,
         }
     };
-    let backend = backend::connect();
-
     // The app quits by itself, below.
     let app = gpui::application()
         .with_assets(rbw_desktop_ui::Assets)
@@ -102,29 +102,50 @@ fn main() {
         if let Some(instance) = instance {
             instance::listen(instance, cx);
         }
-        let missing = match backend {
-            Ok(backend) => {
-                start(backend, cx);
-                None
-            }
-            Err(error) => Some(error),
-        };
-        match missing {
-            None if demo::wants("panel") => panel::open(panel::Anchor::Centered, cx),
-            // Where the window was last comes with the preferences.
-            None => preferences::when_read(cx, |cx| open_windows(None, cx)),
-            missing => open_windows(missing, cx),
-        }
+        // Asking rbw its version takes a process: the app's loop runs
+        // meanwhile. A window opened before it answers, as from the Dock,
+        // waits for it ([`window::connected`]).
+        let connecting = cx.background_spawn(async { backend::connect() });
+        cx.spawn(async move |cx| {
+            let backend = connecting.await;
+            cx.update(|cx| connected(backend, cx));
+        })
+        .detach();
         cx.activate(true);
     });
 }
 
-/// Opens the main window, and Settings over it if the demo asks.
+/// Starts the app on the backend, or says why there is none, and opens its
+/// first window.
+fn connected(backend: rbw_desktop_core::Result<Arc<dyn Backend>>, cx: &mut App) {
+    let missing = match backend {
+        Ok(backend) => {
+            start(backend, cx);
+            None
+        }
+        Err(error) => Some(error),
+    };
+    if window::connected(missing.clone(), cx) {
+        return;
+    }
+    match missing {
+        None if demo::wants("panel") => panel::open(panel::Anchor::Centered, cx),
+        // Where the window was last comes with the preferences.
+        None => preferences::when_read(cx, |cx| open_windows(None, cx)),
+        missing => open_windows(missing, cx),
+    }
+}
+
+/// Opens the main window, and Settings over it if the demo asks, unless
+/// one opened meanwhile.
 fn open_windows(missing: Option<Error>, cx: &mut App) {
-    window::open(missing, cx);
+    if window::find_window::<window::MainWindow>(cx).is_none() {
+        window::open(missing, cx);
+    }
     if demo::wants("settings") {
         settings::open(None, cx);
     }
+    cx.activate(true);
 }
 
 /// Starts what runs on the backend, once there is one.
@@ -133,6 +154,7 @@ pub fn start(backend: Arc<dyn Backend>, cx: &mut App) {
     clipboard::init(cx);
     icons::init(cx);
     preferences::init(cx);
+    vault_cache::init(cx);
     accounts::init(cx);
     tray::init(cx);
 }
