@@ -53,6 +53,9 @@ pub const SCREEN: Duration = Duration::from_millis(340);
 pub const SCROLL: Duration = Duration::from_millis(300);
 /// How long a "Copied" confirmation stays before fading.
 pub const CONFIRMATION_HOLD: Duration = Duration::from_millis(1400);
+/// How long a load runs before something stands in for what it loads
+/// ([`appear_late`]): one quicker than this shows nothing in between.
+pub const LOADING_DELAY: Duration = Duration::from_millis(400);
 
 /// A selection moving: a list's highlight to the next row, a segmented
 /// control's thumb, a switch's knob. Critically damped: quick, and a
@@ -175,6 +178,29 @@ pub fn appear<E: IntoElement + Styled + 'static>(
         id,
         Animation::new(ARRIVE).with_easing(move |t| easing.sample(t)),
         |element, t| element.opacity(t),
+    )
+}
+
+/// Something standing in for content still loading, such as placeholder
+/// rows: it shows only once the load has taken [`LOADING_DELAY`], fading
+/// in then, so that a quick load never flashes it. While it waits it takes
+/// its place without being seen, and draws no frame of its own until the
+/// wait is over. Under reduced motion it shows at once. A new `id` restarts
+/// it, so pass one that names what loads.
+pub fn appear_late<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+) -> AnimationElement<E> {
+    let easing = ease_out();
+    element.with_animations(
+        id,
+        vec![
+            // One frame, once the wait is over, rather than one each
+            // frame while nothing shows.
+            Animation::new(LOADING_DELAY).with_max_fps(1. / LOADING_DELAY.as_secs_f32()),
+            Animation::new(ARRIVE).with_easing(move |t| easing.sample(t)),
+        ],
+        |element, step, t| element.opacity(if step == 0 { 0. } else { t }),
     )
 }
 

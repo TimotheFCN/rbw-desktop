@@ -84,6 +84,11 @@ impl Highlight {
     }
 }
 
+/// How far apart two places can be and still count as the same: a list
+/// scrolled by a fraction of a point puts its rows' tops a rounding error
+/// apart from where scrolling alone would.
+const SAME_PLACE: Pixels = px(0.01);
+
 /// Where the rows of a [`selection_track`] are, kept while they show.
 #[derive(Default)]
 pub struct SelectionTrack {
@@ -92,6 +97,10 @@ pub struct SelectionTrack {
     /// The same, as drawn in the frame before, which the highlight of this
     /// one was placed from.
     drawn: HashMap<ElementId, (Pixels, Pixels)>,
+    /// How far the first row drawn in this frame moved from where it was
+    /// drawn in the frame before: every row moving as far is the list
+    /// scrolling, which leaves the highlight where it is among them.
+    shift: Option<Pixels>,
     /// Each row's top from the topmost row's, height and distance to the
     /// next row when it follows closely, as drawn last: the same however
     /// the rows scroll.
@@ -107,6 +116,83 @@ impl SelectionTrack {
         let offset = self.at? - top;
         (offset.abs() < height).then_some(Highlight { offset, reach })
     }
+
+    /// Takes the rows drawn in the frame before as where they are, and
+    /// places them anew when they moved among themselves, which a list
+    /// scrolling doesn't do.
+    fn settle(&mut self) {
+        self.drawn = std::mem::take(&mut self.drawing);
+        self.shift = None;
+        let Some(first) = topmost(&self.drawn) else {
+            return;
+        };
+        let same = self.drawn.len() == self.rows.len()
+            && self.drawn.iter().all(|(id, &(top, height))| {
+                self.rows.get(id).is_some_and(|&(was, was_height, _)| {
+                    near(top - first, was) && was_height == height
+                })
+            });
+        if !same {
+            self.rows = place_rows(&self.drawn, first);
+        }
+    }
+
+    /// Records where row `id` is drawn in this frame, and says whether it
+    /// moved among the others since the frame before.
+    fn record(&mut self, id: ElementId, place: (Pixels, Pixels)) -> bool {
+        let moved = match self.drawn.get(&id) {
+            Some(&(top, height)) if height == place.1 => {
+                let shift = place.0 - top;
+                !near(*self.shift.get_or_insert(shift), shift)
+            }
+            _ => true,
+        };
+        self.drawing.insert(id, place);
+        moved
+    }
+}
+
+fn near(a: Pixels, b: Pixels) -> bool {
+    (a - b).abs() < SAME_PLACE
+}
+
+/// The top of the topmost of `drawn`.
+fn topmost(drawn: &HashMap<ElementId, (Pixels, Pixels)>) -> Option<Pixels> {
+    drawn
+        .values()
+        .map(|(top, _)| *top)
+        .reduce(|first, top| if top < first { top } else { first })
+}
+
+/// Each of the rows `drawn`, by top and height, as its top from `first`,
+/// its height, and how far down the highlight reaches on it: to the next
+/// row's top when that row is a few points under it, closing the gap.
+fn place_rows(
+    drawn: &HashMap<ElementId, (Pixels, Pixels)>,
+    first: Pixels,
+) -> HashMap<ElementId, (Pixels, Pixels, Pixels)> {
+    let mut sorted: Vec<(&ElementId, Pixels, Pixels)> = drawn
+        .iter()
+        .map(|(id, &(top, height))| (id, top, height))
+        .collect();
+    sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut rows = HashMap::with_capacity(sorted.len());
+    // The top of the next row further down, from the bottom up: rows that
+    // share a top share the next one under them.
+    let mut next: Option<Pixels> = None;
+    for (index, &(id, top, height)) in sorted.iter().enumerate().rev() {
+        if let Some(&(_, below, _)) = sorted.get(index + 1)
+            && below > top
+        {
+            next = Some(below);
+        }
+        let reach = next
+            .map(|next| next - top)
+            .filter(|reach| *reach <= height + px(4.))
+            .unwrap_or(height);
+        rows.insert(id.clone(), (top - first, height, reach));
+    }
+    rows
 }
 
 /// The sliding selection of rows of different places and gaps, such as a
@@ -123,31 +209,7 @@ pub fn selection_track(
     let id = id.into();
     let track = window.use_keyed_state(id.clone(), cx, |_, _| SelectionTrack::default());
     let target = track.update(cx, |track, _| {
-        track.drawn = std::mem::take(&mut track.drawing);
-        let drawn = &track.drawn;
-        let first = drawn
-            .values()
-            .map(|(top, _)| *top)
-            .reduce(|first, top| if top < first { top } else { first });
-        if let Some(first) = first {
-            let tops: Vec<Pixels> = drawn.values().map(|(top, _)| *top).collect();
-            track.rows = drawn
-                .iter()
-                .map(|(id, &(top, height))| {
-                    // A row a few points under it closes the gap.
-                    let next = tops
-                        .iter()
-                        .copied()
-                        .filter(|next| *next > top)
-                        .reduce(|next, other| if other < next { other } else { next });
-                    let reach = next
-                        .map(|next| next - top)
-                        .filter(|reach| *reach <= height + px(4.))
-                        .unwrap_or(height);
-                    (id.clone(), (top - first, height, reach))
-                })
-                .collect();
-        }
+        track.settle();
         selected
             .and_then(|selected| track.rows.get(selected))
             .map(|(top, height, _)| (*top, *height))
@@ -160,19 +222,16 @@ pub fn selection_track(
 }
 
 /// Records a row's place in its track as it is drawn. A row drawn
-/// elsewhere than in the frame before, as when a heading comes in above
-/// it, draws again: the highlight was placed from where it was.
+/// elsewhere among the others than in the frame before, as when a heading
+/// comes in above it, draws again: the highlight was placed from where it
+/// was. Rows that all moved as far, as a list scrolling moves them, draw
+/// nothing more.
 fn track_row(track: &Entity<SelectionTrack>, id: ElementId) -> impl IntoElement {
     let track = track.clone();
     canvas(
         move |bounds, window, cx| {
             let place = (bounds.top(), bounds.size.height);
-            let moved = track.update(cx, |track, _| {
-                let moved = track.drawn.get(&id) != Some(&place);
-                track.drawing.insert(id, place);
-                moved
-            });
-            if moved {
+            if track.update(cx, |track, _| track.record(id, place)) {
                 window.request_animation_frame();
             }
         },
@@ -532,6 +591,104 @@ pub struct ListRow {
     on_click: Option<ClickHandler>,
 }
 
+/// Rows standing in for a list's while it loads, such as the item list's
+/// before the vault is read: a tile and two lines of text, as quiet
+/// shapes in the theme's neutral fill. They show only once the load has
+/// taken a moment, and fade in then ([`motion::appear_late`]), so a quick
+/// load goes straight from nothing to the list. Nothing in them moves.
+///
+/// [`motion::appear_late`]: crate::motion::appear_late
+#[derive(IntoElement)]
+pub struct LoadingRows {
+    id: ElementId,
+    count: usize,
+    compact: bool,
+    gap: Pixels,
+}
+
+/// `count` placeholder rows, as tall and as far apart as [`list_row`]'s.
+/// `id` names what loads: another restarts the wait.
+pub fn loading_rows(id: impl Into<ElementId>, count: usize) -> LoadingRows {
+    LoadingRows {
+        id: id.into(),
+        count,
+        compact: false,
+        gap: px(0.),
+    }
+}
+
+impl LoadingRows {
+    /// Rows of a panel's list, as [`ListRow::compact`].
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
+    /// Space between the rows, as the list they stand in for has.
+    pub fn gap(mut self, gap: Pixels) -> Self {
+        self.gap = gap;
+        self
+    }
+}
+
+impl RenderOnce for LoadingRows {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Names of different lengths, so that the rows read as a list
+        // rather than a pattern.
+        const NAMES: [f32; 5] = [0.62, 0.45, 0.7, 0.52, 0.38];
+        let theme = cx.theme();
+        let shape = theme.colors.fill;
+        let (height, size, padding) = if self.compact {
+            (COMPACT_ROW_HEIGHT, px(28.), px(7.))
+        } else {
+            (ROW_HEIGHT, px(32.), px(9.))
+        };
+        let radius = size
+            * match theme.look {
+                Look::MacOs => 0.28,
+                Look::Gnome => 0.22,
+            };
+        let line = |width: f32, tall: Pixels| {
+            div()
+                .w(relative(width))
+                .h(tall)
+                .rounded(tall / 2.)
+                .bg(shape)
+        };
+        let rows = (0..self.count).map(|index| {
+            let name = NAMES[index % NAMES.len()];
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(10.))
+                .h(height)
+                .px(padding)
+                .child(div().flex_none().size(size).rounded(radius).bg(shape))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(line(name, px(9.)))
+                        .when(!self.compact, |d| d.child(line(name * 0.6, px(7.)))),
+                )
+        });
+        m::appear_late(
+            self.id,
+            div()
+                .flex()
+                .flex_col()
+                .gap(self.gap)
+                .w_full()
+                .overflow_hidden()
+                .children(rows),
+        )
+    }
+}
+
 /// The height of a row of the item list.
 pub const ROW_HEIGHT: Pixels = px(46.);
 /// The height of a row of a panel's list, [`ListRow::compact`].
@@ -737,5 +894,89 @@ impl RenderOnce for ListRow {
                     }),
             )
             .children(trailing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(name: &'static str) -> ElementId {
+        ElementId::Name(name.into())
+    }
+
+    /// A sidebar's rows, at `scroll` from where they started: two rows a
+    /// point apart, a heading's gap, and a last row.
+    fn sidebar(scroll: f32) -> Vec<(ElementId, (Pixels, Pixels))> {
+        [("a", 100.), ("b", 129.), ("c", 180.), ("d", 209.)]
+            .into_iter()
+            .map(|(name, top)| (id(name), (px(top + scroll), px(28.))))
+            .collect()
+    }
+
+    fn draw(track: &mut SelectionTrack, rows: &[(ElementId, (Pixels, Pixels))]) -> Vec<bool> {
+        rows.iter()
+            .map(|(row, place)| track.record(row.clone(), *place))
+            .collect()
+    }
+
+    #[test]
+    fn rows_are_placed_from_the_topmost_and_reach_the_row_under_them() {
+        let drawn: HashMap<_, _> = sidebar(0.).into_iter().collect();
+        let rows = place_rows(&drawn, px(100.));
+        // A row a point above the next reaches down to it; one over a
+        // heading's gap stops at its own height.
+        assert_eq!(rows[&id("a")], (px(0.), px(28.), px(29.)));
+        assert_eq!(rows[&id("b")], (px(29.), px(28.), px(28.)));
+        assert_eq!(rows[&id("c")], (px(80.), px(28.), px(29.)));
+        assert_eq!(rows[&id("d")], (px(109.), px(28.), px(28.)));
+    }
+
+    #[test]
+    fn rows_side_by_side_reach_the_row_under_both() {
+        let drawn: HashMap<_, _> = [
+            (id("left"), (px(0.), px(28.))),
+            (id("right"), (px(0.), px(28.))),
+            (id("under"), (px(30.), px(28.))),
+        ]
+        .into_iter()
+        .collect();
+        let rows = place_rows(&drawn, px(0.));
+        assert_eq!(rows[&id("left")].2, px(30.));
+        assert_eq!(rows[&id("right")].2, px(30.));
+        assert_eq!(rows[&id("under")].2, px(28.));
+    }
+
+    #[test]
+    fn a_list_scrolling_moves_no_row_among_the_others() {
+        let mut track = SelectionTrack::default();
+        // Drawn for the first time: every row is somewhere new.
+        assert!(draw(&mut track, &sidebar(0.)).iter().all(|moved| *moved));
+        track.settle();
+        let placed = track.rows.clone();
+        // Scrolled, by a fraction of a point too: nothing moved.
+        for scroll in [-40., -40.25, 13.5] {
+            assert!(
+                draw(&mut track, &sidebar(scroll))
+                    .iter()
+                    .all(|moved| !moved)
+            );
+            track.settle();
+            assert_eq!(track.rows, placed);
+        }
+        // A heading coming in above the last two rows moves them.
+        let mut rows = sidebar(13.5);
+        for row in &mut rows[2..] {
+            row.1.0 += px(24.);
+        }
+        assert_eq!(draw(&mut track, &rows), [false, false, true, true]);
+        track.settle();
+        assert_eq!(track.rows[&id("c")].0, px(104.));
+        // A row that wasn't drawn before is new.
+        let mut more = sidebar(0.);
+        more.push((id("e"), (px(238.), px(28.))));
+        draw(&mut track, &sidebar(0.));
+        track.settle();
+        assert_eq!(draw(&mut track, &more), [false, false, false, false, true]);
     }
 }
