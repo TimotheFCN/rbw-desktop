@@ -26,7 +26,9 @@ const SCROLL_HOLD: Duration = Duration::from_millis(100);
 #[derive(Clone, Copy, Debug)]
 pub struct ListRows {
     pub count: usize,
-    /// How tall a row is: the pointer in the gap under it is on no row.
+    /// How tall a row is. The pointer in the gap between two rows stays
+    /// on the row above, so that crossing from one row to the next goes
+    /// straight from one to the other; past the last row it is on none.
     pub height: Pixels,
     /// How far apart the rows' tops are.
     pub pitch: Pixels,
@@ -136,7 +138,10 @@ impl ListPointer {
 }
 
 /// The row under `pointer`, in a list at `list` scrolled by `offset` (up
-/// from its top, so negative once it scrolled down).
+/// from its top, so negative once it scrolled down). The gap between two
+/// rows belongs to the row above it: were it on no row, the pointer
+/// crossing it would leave the row and come onto the next, and the list
+/// would draw twice for one move.
 fn row_at(
     pointer: Point<Pixels>,
     list: Bounds<Pixels>,
@@ -151,8 +156,11 @@ fn row_at(
         return None;
     }
     let row = (y / rows.pitch).floor() as usize;
+    if row >= rows.count {
+        return None;
+    }
     let within = y - rows.pitch * row as f32;
-    (row < rows.count && within < rows.height).then_some(row)
+    (row + 1 < rows.count || within < rows.height).then_some(row)
 }
 
 #[cfg(test)]
@@ -173,8 +181,12 @@ mod tests {
         // At the top: the rows from the list's top.
         assert_eq!(at(51., 0.), Some(0));
         assert_eq!(at(50. + 48. * 3. + 10., 0.), Some(3));
-        // In the gap under a row: none.
-        assert_eq!(at(50. + 47., 0.), None);
+        // In the gap under a row: still on it, rather than on none
+        // between two rows.
+        assert_eq!(at(50. + 46., 0.), Some(0));
+        assert_eq!(at(50. + 47.9, 0.), Some(0));
+        assert_eq!(at(50. + 48., 0.), Some(1));
+        assert_eq!(at(50. + 48. * 3. + 47., -0.5), Some(3));
         // Scrolled down by two rows and a half: the same place is on
         // another row.
         assert_eq!(at(51., -120.), Some(2));
@@ -184,5 +196,13 @@ mod tests {
         assert_eq!(row_at(point(px(100.), px(60.)), list, px(0.), rows), None);
         let few = ListRows { count: 2, ..rows };
         assert_eq!(row_at(point(px(300.), px(160.)), list, px(0.), few), None);
+        // The gap under the last row is past the list's end.
+        let last = |y: f32| row_at(point(px(300.), px(y)), list, px(0.), few);
+        assert_eq!(last(50. + 48. + 45.), Some(1));
+        assert_eq!(last(50. + 48. + 46.), None);
+        assert_eq!(last(50. + 48. + 47.), None);
+        // A list with no rows has none to be on.
+        let none = ListRows { count: 0, ..rows };
+        assert_eq!(row_at(point(px(300.), px(51.)), list, px(0.), none), None);
     }
 }

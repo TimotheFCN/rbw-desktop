@@ -8,6 +8,10 @@
 //! items without leaving the menu; [`Popover::submenu`] opens more items
 //! beside it. A [`Popover::dialog`] holds controls instead, such as the
 //! generator's options.
+//!
+//! A popover is in every frame of its owner, open or not. Its items can be
+//! made only while it shows, with [`Popover::when_shown`], so that a closed
+//! menu costs nothing of what fills it.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -73,6 +77,7 @@ pub enum Opening {
 }
 
 type DismissHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+type Build = Box<dyn FnOnce(Popover, &mut Window, &mut App) -> Popover>;
 
 enum Child {
     Element(AnyElement),
@@ -89,6 +94,8 @@ pub struct Popover {
     label: SharedString,
     dialog: bool,
     children: Vec<Child>,
+    /// What adds its items once it shows, from [`Popover::when_shown`].
+    builds: Vec<Build>,
     on_dismiss: Option<DismissHandler>,
 }
 
@@ -108,6 +115,7 @@ pub fn popover(
         label: label.into(),
         dialog: false,
         children: vec![],
+        builds: vec![],
         on_dismiss: None,
     }
 }
@@ -128,6 +136,36 @@ impl Popover {
     /// and it takes the width of its content.
     pub fn dialog(mut self) -> Self {
         self.dialog = true;
+        self
+    }
+
+    /// Fills the popover with `build` while it shows, opening or closing,
+    /// and not at all while it is closed: for a menu whose items take work
+    /// to make, such as one row per folder or account, each with its click.
+    /// `build` gets the popover and adds to it with [`child`], [`children`]
+    /// and [`submenu`] as anywhere else; it runs when the popover is drawn,
+    /// after its owner's `render`, so it reads what it needs from an entity
+    /// rather than borrowing the owner:
+    ///
+    /// ```ignore
+    /// let view = cx.entity();
+    /// popover("folder-menu", self.menu_open, &self.menu_focus, "Folder")
+    ///     .when_shown(move |menu, _, cx| {
+    ///         view.update(cx, |view, cx| view.folder_items(menu, cx))
+    ///     })
+    /// ```
+    ///
+    /// Items added both ways keep their order: these come after those added
+    /// before the popover was drawn.
+    ///
+    /// [`child`]: ParentElement::child
+    /// [`children`]: ParentElement::children
+    /// [`submenu`]: Popover::submenu
+    pub fn when_shown(
+        mut self,
+        build: impl FnOnce(Self, &mut Window, &mut App) -> Self + 'static,
+    ) -> Self {
+        self.builds.push(Box::new(build));
         self
     }
 
@@ -267,10 +305,16 @@ fn measure(
 }
 
 impl RenderOnce for Popover {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let presence = m::presence((self.id.clone(), "presence"), self.open, window, cx);
         if !presence.should_render() {
             return div().into_any_element();
+        }
+        // A build may add another.
+        while !self.builds.is_empty() {
+            for build in std::mem::take(&mut self.builds) {
+                self = build(self, window, cx);
+            }
         }
         let p = presence.progress;
         let gap = px(4.);
@@ -601,11 +645,14 @@ impl Submenu {
                                 .p(padding)
                                 .rounded(px(10.))
                                 .child(
-                                    scroll_area((self.popover.clone(), "submenu-items"))
-                                        .min_h_0()
-                                        .flex()
-                                        .flex_col()
-                                        .children(items),
+                                    scroll_area((
+                                        self.popover.clone(),
+                                        format!("submenu-items-{}", self.index),
+                                    ))
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .children(items),
                                 )
                                 .child(measure(&self.state, |state, bounds| {
                                     state.submenu = Some(bounds)

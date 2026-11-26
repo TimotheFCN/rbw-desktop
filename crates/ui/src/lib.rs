@@ -45,8 +45,9 @@ pub use menu::{MenuItem, Opening, Popover, menu_item, menu_separator, popover};
 pub use notice::{Notice, notice};
 pub use pointer::{ListPointer, ListRows, follow_pointer};
 pub use rows::{
-    COMPACT_ROW_HEIGHT, Highlight, ListRow, NavRow, ROW_HEIGHT, SelectionTrack, Tile, TileIcon,
-    app_icon, avatar, list_row, nav_row, section_label, selection_track, tile,
+    COMPACT_ROW_HEIGHT, Highlight, ListRow, LoadingRows, NavRow, ROW_HEIGHT, SelectionTrack, Tile,
+    TileIcon, app_icon, avatar, list_row, loading_rows, nav_row, section_label, selection_track,
+    tile,
 };
 pub use scroll::{ScrollArea, scroll_area, scrollbar};
 pub use select::{Select, Selected};

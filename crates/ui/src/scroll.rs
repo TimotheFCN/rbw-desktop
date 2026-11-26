@@ -189,7 +189,11 @@ fn glide(
     paging.update(cx, |paging, _| {
         *paging = (t < 1.).then_some(Paging { last: y, ..run })
     });
-    window.request_animation_frame();
+    // The content was drawn before this moved it, so a frame more draws
+    // where it is now; once at its end and drawn there, none is needed.
+    if t < 1. || y != offset.y {
+        window.request_animation_frame();
+    }
 }
 
 /// The track of a handle's viewport, when its content is taller than it.
@@ -203,10 +207,15 @@ fn track(handle: &impl ScrollbarHandle) -> Option<Bounds<Pixels>> {
     })
 }
 
-/// The offset a click at `y` in the track pages to, or `None` on the thumb.
+/// The offset a click at `y` in the track pages to, or `None` on the thumb,
+/// or when there is nothing to scroll any more, as after the viewport grew
+/// since the track was laid out.
 fn page(handle: &impl ScrollbarHandle, track: Bounds<Pixels>, y: Pixels) -> Option<Pixels> {
     let viewport = handle.viewport_bounds().size.height;
     let extent = handle.content_size().height - viewport;
+    if extent <= px(0.) {
+        return None;
+    }
     let length = track.size.height;
     let thumb = (viewport / (extent + viewport) * length)
         .max(MIN_THUMB)
@@ -275,5 +284,75 @@ impl RenderOnce for ScrollArea {
             .overflow_y_scroll()
             .track_scroll(&handle)
             .child(bar)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use gpui::{Point, Size, size};
+
+    use super::*;
+
+    /// A viewport 100 points tall at the window's top, over content
+    /// `content` tall, scrolled by `offset`.
+    struct Handle {
+        content: Pixels,
+        offset: Cell<Pixels>,
+    }
+
+    impl ScrollbarHandle for Handle {
+        fn viewport_bounds(&self) -> Bounds<Pixels> {
+            Bounds::new(point(px(0.), px(0.)), size(px(200.), px(100.)))
+        }
+
+        fn offset(&self) -> Point<Pixels> {
+            point(px(0.), self.offset.get())
+        }
+
+        fn set_offset(&self, offset: Point<Pixels>) {
+            self.offset.set(offset.y);
+        }
+
+        fn content_size(&self) -> Size<Pixels> {
+            size(px(200.), self.content)
+        }
+    }
+
+    fn track() -> Bounds<Pixels> {
+        Bounds::new(point(px(186.), px(0.)), size(TRACK, px(100.)))
+    }
+
+    #[test]
+    fn a_click_in_the_track_pages_towards_it() {
+        let handle = Handle {
+            content: px(1000.),
+            offset: Cell::new(px(-450.)),
+        };
+        // The thumb is 28 points from 36 down: under it, a page down;
+        // over it, a page up; on it, nothing.
+        assert_eq!(page(&handle, track(), px(90.)), Some(px(-540.)));
+        assert_eq!(page(&handle, track(), px(10.)), Some(px(-360.)));
+        assert_eq!(page(&handle, track(), px(55.)), None);
+        // Never past either end.
+        handle.offset.set(px(-880.));
+        assert_eq!(page(&handle, track(), px(99.)), Some(px(-900.)));
+        handle.offset.set(px(-50.));
+        assert_eq!(page(&handle, track(), px(2.)), Some(px(0.)));
+    }
+
+    #[test]
+    fn a_click_in_a_track_with_nothing_left_to_scroll_pages_nowhere() {
+        // The viewport grew to the content's height, or past it, since the
+        // track was laid out.
+        for content in [px(100.), px(60.)] {
+            let handle = Handle {
+                content,
+                offset: Cell::new(px(0.)),
+            };
+            assert_eq!(page(&handle, track(), px(90.)), None);
+            assert_eq!(page(&handle, track(), px(10.)), None);
+        }
     }
 }
