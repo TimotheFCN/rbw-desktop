@@ -75,6 +75,16 @@ impl Reprompt {
             .update(cx, |password, cx| password.focus(window, cx));
     }
 
+    /// Clears any typed password and stops an in-flight unlock, as when the
+    /// prompt is dismissed or the account locks.
+    pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.task = Task::ready(());
+        self.busy = false;
+        self.problem = None;
+        self.password
+            .update(cx, |password, cx| password.set_value("", window, cx));
+    }
+
     fn unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let password = Secret::new(self.password.read(cx).value().to_string());
         if self.busy || password.is_empty() {

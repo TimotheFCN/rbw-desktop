@@ -4,10 +4,10 @@
 //! are for hosts that don't look names up.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use futures::channel::mpsc::UnboundedSender;
-use gpui::{App, AppContext as _, DevicePixels, SvgSize, Task, point, px, size};
+use gpui::{App, AppContext as _, DevicePixels, SvgRenderer, SvgSize, Task, point, px, size};
 use ksni::TrayMethods as _;
 use ksni::menu::{MenuItem, StandardItem};
 
@@ -44,14 +44,18 @@ impl Item {
         cx: &mut App,
     ) -> Task<Result<Self, String>> {
         let hosted = Arc::new(AtomicBool::new(true));
+        let renderer = cx.svg_renderer();
         let mut tray = Tray {
             events,
             hosted: hosted.clone(),
             theme_path: String::new(),
-            pixmaps: pixmaps(icon, cx),
+            pixmaps: vec![],
             can_lock: false,
         };
+        // Drawing the icon at each size and writing it out take a moment,
+        // which the app's windows don't wait for.
         cx.background_spawn(async move {
+            tray.pixmaps = pixmaps(icon, &renderer);
             tray.theme_path = write_icon(icon).unwrap_or_default();
             let handle = tray
                 .assume_sni_available(true)
@@ -80,18 +84,28 @@ impl Item {
             return Anchor::Centered;
         }
         // The host gives pixels, windows open in points; every window of
-        // the app has the same scale on X11.
+        // the app has the same scale on X11. With none open, the scale seen
+        // last, or none.
         let scale = cx
             .windows()
             .into_iter()
             .find_map(|handle| handle.update(cx, |_, window, _| window.scale_factor()).ok());
-        match scale {
-            Some(scale) => Anchor::Pointer(point(
-                px(click.x as f32 / scale),
-                px(click.y as f32 / scale),
-            )),
-            None => Anchor::Centered,
-        }
+        let scale = match scale {
+            Some(scale) => {
+                LAST_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+                scale
+            }
+            None => f32::from_bits(LAST_SCALE.load(Ordering::Relaxed)),
+        };
+        let scale = if scale.is_finite() && scale > 0. {
+            scale
+        } else {
+            1.
+        };
+        Anchor::Pointer(point(
+            px(click.x as f32 / scale),
+            px(click.y as f32 / scale),
+        ))
     }
 }
 
@@ -205,10 +219,13 @@ fn write_icon(svg: &[u8]) -> Option<String> {
     Some(dir.to_string_lossy().into_owned())
 }
 
+/// The scale of the app's windows when one was seen last, as an `f32`'s
+/// bits.
+static LAST_SCALE: AtomicU32 = AtomicU32::new(f32::to_bits(1.));
+
 /// The icon at a few sizes, in a grey that shows on light and dark panels.
-fn pixmaps(svg: &[u8], cx: &App) -> Vec<ksni::Icon> {
+fn pixmaps(svg: &[u8], renderer: &SvgRenderer) -> Vec<ksni::Icon> {
     const GREY: u8 = 0x8c;
-    let renderer = cx.svg_renderer();
     let Ok(parsed) = renderer.parse_svg(svg) else {
         return vec![];
     };

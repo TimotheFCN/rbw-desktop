@@ -11,7 +11,7 @@ mod store;
 
 use gpui::base::Button as BaseButton;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle, Focusable,
+    AnyElement, AnyView, App, AppContext as _, Context, ElementId, Entity, FocusHandle, Focusable,
     FontWeight, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowOptions, actions,
     div, prelude::FluentBuilder as _, px, size,
@@ -85,17 +85,7 @@ pub fn open(page: Option<Page>, cx: &mut App) {
     if !backend::ready(cx) {
         return;
     }
-    for handle in cx.windows() {
-        let Some(root) = handle.downcast::<gpui::base::Root>() else {
-            continue;
-        };
-        let Some(settings) = root
-            .read(cx)
-            .ok()
-            .and_then(|root| root.view().clone().downcast::<SettingsWindow>().ok())
-        else {
-            continue;
-        };
+    if let Some((root, settings)) = crate::window::find_window::<SettingsWindow>(cx) {
         root.update(cx, |_, window, cx| {
             window.activate_window();
             if let Some(page) = page {
@@ -122,12 +112,15 @@ pub fn open(page: Option<Page>, cx: &mut App) {
     }
 }
 
+/// Each page is made the first time it shows, and asks rbw only then.
 pub struct SettingsWindow {
     page: Page,
-    general: Entity<GeneralPage>,
-    accounts: Entity<AccountsPage>,
-    ssh: Entity<SshPage>,
-    about: Entity<AboutPage>,
+    /// Each account's settings, read once a page that shows them does.
+    store: Option<Entity<Store>>,
+    general: Option<Entity<GeneralPage>>,
+    accounts: Option<Entity<AccountsPage>>,
+    ssh: Option<Entity<SshPage>>,
+    about: Option<Entity<AboutPage>>,
     alerts: Entity<Alerts>,
     focus: FocusHandle,
 }
@@ -145,19 +138,20 @@ impl SettingsWindow {
                 return;
             }
             match this.page {
-                Page::SshAgent => this.ssh.update(cx, |ssh, cx| ssh.refresh(cx)),
+                Page::SshAgent => {
+                    if let Some(ssh) = &this.ssh {
+                        ssh.update(cx, |ssh, cx| ssh.refresh(cx));
+                    }
+                }
                 // The command line tool or another rbw may have changed in a
                 // terminal.
-                Page::General => this
-                    .general
-                    .update(cx, |general, cx| general.refresh_command_line(cx)),
+                Page::General => {
+                    if let Some(general) = &this.general {
+                        general.update(cx, |general, cx| general.refresh_command_line(cx));
+                    }
+                }
                 _ => {}
             }
-        })
-        .detach();
-        let store = cx.new(Store::new);
-        cx.subscribe_in(&store, window, |_, _, SaveFailed(error), window, cx| {
-            alerts::toast(backend::describe(error), window, cx);
         })
         .detach();
         cx.subscribe_in(
@@ -170,26 +164,66 @@ impl SettingsWindow {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        // They may have changed while no window asked for them.
-        crate::accounts::refresh(cx);
-        let ssh = cx.new(|cx| SshPage::new(store.clone(), window, cx));
-        ssh.update(cx, |ssh, cx| ssh.set_shown(page == Page::SshAgent, cx));
-        Self {
+        // They may have changed while no window asked for them; an answer
+        // already on the way will do.
+        crate::accounts::refresh_if_idle(cx);
+        let mut this = Self {
             page,
-            general: cx.new(|cx| GeneralPage::new(store.clone(), cx)),
-            accounts: cx.new(|cx| AccountsPage::new(store, cx)),
-            ssh,
-            about: cx.new(AboutPage::new),
+            store: None,
+            general: None,
+            accounts: None,
+            ssh: None,
+            about: None,
             alerts: Alerts::new(window, cx),
             focus,
+        };
+        this.make_page(page, window, cx);
+        this
+    }
+
+    /// The accounts' settings, read from now on.
+    fn store(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Store> {
+        if let Some(store) = &self.store {
+            return store.clone();
+        }
+        let store = cx.new(Store::new);
+        cx.subscribe_in(&store, window, |_, _, SaveFailed(error), window, cx| {
+            alerts::toast(backend::describe(error), window, cx);
+        })
+        .detach();
+        self.store = Some(store.clone());
+        store
+    }
+
+    /// Makes the page if it hasn't shown yet.
+    fn make_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        match page {
+            Page::General if self.general.is_none() => {
+                let store = self.store(window, cx);
+                self.general = Some(cx.new(|cx| GeneralPage::new(store, cx)));
+            }
+            Page::Accounts if self.accounts.is_none() => {
+                let store = self.store(window, cx);
+                self.accounts = Some(cx.new(|cx| AccountsPage::new(store, cx)));
+            }
+            Page::SshAgent if self.ssh.is_none() => {
+                let store = self.store(window, cx);
+                self.ssh = Some(cx.new(|cx| SshPage::new(store, window, cx)));
+            }
+            Page::About if self.about.is_none() => {
+                self.about = Some(cx.new(AboutPage::new));
+            }
+            _ => {}
+        }
+        if let Some(ssh) = &self.ssh {
+            ssh.update(cx, |ssh, cx| ssh.set_shown(page == Page::SshAgent, cx));
         }
     }
 
-    fn show(&mut self, page: Page, _: &mut Window, cx: &mut Context<Self>) {
+    fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         if self.page != page {
             self.page = page;
-            self.ssh
-                .update(cx, |ssh, cx| ssh.set_shown(page == Page::SshAgent, cx));
+            self.make_page(page, window, cx);
             cx.notify();
         }
     }
@@ -199,12 +233,13 @@ impl SettingsWindow {
     }
 
     fn page_view(&self) -> AnyElement {
-        match self.page {
-            Page::General => self.general.clone().into_any_element(),
-            Page::Accounts => self.accounts.clone().into_any_element(),
-            Page::SshAgent => self.ssh.clone().into_any_element(),
-            Page::About => self.about.clone().into_any_element(),
-        }
+        let view: Option<AnyView> = match self.page {
+            Page::General => self.general.clone().map(Into::into),
+            Page::Accounts => self.accounts.clone().map(Into::into),
+            Page::SshAgent => self.ssh.clone().map(Into::into),
+            Page::About => self.about.clone().map(Into::into),
+        };
+        view.map_or_else(|| div().into_any_element(), IntoElement::into_any_element)
     }
 
     fn page_name(&self) -> &'static str {

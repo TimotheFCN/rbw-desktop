@@ -1,10 +1,13 @@
 //! Copying to the clipboard. A copied secret is cleared again after the
 //! time the preferences allow, when the account it came from locks or signs
-//! out, and when the app quits, unless something else was copied since.
+//! out, once no account is unlocked, and when the app quits, unless
+//! something else was copied since. On macOS a secret is marked concealed
+//! and transient, so that clipboard managers and Universal Clipboard leave
+//! it alone.
 
 use std::time::Duration;
 
-use gpui::{App, ClipboardItem, Global};
+use gpui::{App, ClipboardEntry, ClipboardItem, Global};
 use rbw_desktop_core::{AccountId, Preferences, Secret};
 
 struct Clipboard {
@@ -43,6 +46,8 @@ pub fn copy_text(text: &str, cx: &mut App) {
 /// locks or signs out.
 pub fn copy_secret(value: &Secret, account: Option<&AccountId>, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(value.expose().to_string()));
+    #[cfg(target_os = "macos")]
+    macos::conceal();
     let clipboard = cx.global_mut::<Clipboard>();
     let turn = clipboard.pending.copied(value, account);
     let Some(delay) = clipboard.clear_after else {
@@ -60,14 +65,58 @@ pub fn account_closed(account: &AccountId, cx: &mut App) {
     clear(Reason::Closed(account), cx);
 }
 
+/// No account is unlocked any more: any secret goes, also one that came
+/// from no account, such as a generated password.
+pub fn all_closed(cx: &mut App) {
+    clear(Reason::AllClosed, cx);
+}
+
+/// Whether a secret the app copied may still be on the clipboard, waiting
+/// to go.
+pub fn has_pending_secret(cx: &App) -> bool {
+    cx.try_global::<Clipboard>()
+        .is_some_and(|clipboard| clipboard.pending.copied.is_some())
+}
+
 fn clear(reason: Reason, cx: &mut App) {
-    let current = cx.read_from_clipboard().and_then(|item| item.text());
+    let Some(clipboard) = cx.try_global::<Clipboard>() else {
+        return;
+    };
+    // Nothing to read when no secret waits.
+    if clipboard.pending.copied.is_none() {
+        return;
+    }
+    let current = cx.read_from_clipboard().and_then(text);
     if cx
         .global_mut::<Clipboard>()
         .pending
-        .clears(reason, current.as_deref())
+        .clears(reason, current.as_ref().map(Secret::expose))
     {
         cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+    }
+}
+
+/// The text on the clipboard, which may be the secret, kept so that it is
+/// wiped once compared: its parts are moved, not copied, and joined in a
+/// string that never grows.
+fn text(item: ClipboardItem) -> Option<Secret> {
+    let parts: Vec<Secret> = item
+        .into_entries()
+        .filter_map(|entry| match entry {
+            ClipboardEntry::String(string) => Some(Secret::new(string.text)),
+            _ => None,
+        })
+        .collect();
+    match parts.len() {
+        0 => None,
+        1 => parts.into_iter().next(),
+        _ => {
+            let mut joined = String::with_capacity(parts.iter().map(|p| p.expose().len()).sum());
+            for part in &parts {
+                joined.push_str(part.expose());
+            }
+            Some(Secret::new(joined))
+        }
     }
 }
 
@@ -77,6 +126,8 @@ enum Reason<'a> {
     /// The time for the copy of this turn is up.
     Expired(u64),
     Closed(&'a AccountId),
+    /// No account is unlocked any more.
+    AllClosed,
     Quit,
 }
 
@@ -121,7 +172,7 @@ impl Pending {
         let concerned = match reason {
             Reason::Expired(turn) => copied.turn == turn,
             Reason::Closed(account) => copied.account.as_ref() == Some(account),
-            Reason::Quit => true,
+            Reason::AllClosed | Reason::Quit => true,
         };
         if !concerned {
             return false;
@@ -129,6 +180,33 @@ impl Pending {
         let held = current == Some(copied.value.expose());
         self.copied = None;
         held
+    }
+}
+
+/// Marks what is on the pasteboard as a secret, by the markers of
+/// nspasteboard.org: clipboard managers don't record it, and it doesn't go
+/// to the person's other devices.
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::{NSData, NSString};
+
+    const MARKERS: [&str; 2] = [
+        "org.nspasteboard.ConcealedType",
+        "org.nspasteboard.TransientType",
+    ];
+
+    /// Adds the markers to what GPUI just wrote, which is on the general
+    /// pasteboard's first item.
+    pub fn conceal() {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let empty = NSData::new();
+        for marker in MARKERS {
+            let marker = NSString::from_str(marker);
+            if !pasteboard.setData_forType(Some(&empty), &marker) {
+                log::info!("marking a copied secret as concealed failed");
+            }
+        }
     }
 }
 
@@ -153,6 +231,20 @@ mod tests {
         assert!(!pending.clears(Reason::Closed(&work), Some("hunter2")));
         assert!(pending.clears(Reason::Closed(&personal), Some("hunter2")));
         assert!(!pending.clears(Reason::Quit, Some("hunter2")));
+    }
+
+    #[test]
+    fn the_last_lock_clears_a_generated_secret() {
+        let mut pending = Pending::default();
+        pending.copied(&"hunter2".into(), None);
+        assert!(!pending.clears(Reason::Closed(&AccountId::new("work")), Some("hunter2")));
+        assert!(pending.clears(Reason::AllClosed, Some("hunter2")));
+    }
+
+    #[test]
+    fn the_clipboard_text_is_its_strings_joined() {
+        let item = ClipboardItem::new_string("hunter2".into());
+        assert_eq!(text(item).as_ref().map(Secret::expose), Some("hunter2"));
     }
 
     #[test]

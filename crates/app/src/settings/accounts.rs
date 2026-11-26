@@ -84,6 +84,7 @@ impl AccountsPage {
                 button(ElementId::Name(format!("sign-out-{id}").into()))
                     .label("Sign Out…")
                     .size(px(26.))
+                    .disabled(accounts::signing_out(&account.id, cx))
                     .accessibility_label(format!("Sign out of {name}"))
                     .on_click(move |_, window, cx| {
                         accounts::sign_out(&removed, window, cx, |error, window, cx| {

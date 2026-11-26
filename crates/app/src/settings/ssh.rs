@@ -13,8 +13,8 @@ use rbw_desktop_core::{
 };
 use rbw_desktop_ui::{
     ActiveTheme as _, ButtonStyle, Confirmation, IconName, Select, Selected, button, card,
-    copied_badge, field_error, field_row, icon, setting_row, setting_row_with, settings_group,
-    switch,
+    copied_badge, field_error, field_row, icon, loading_rows, setting_row, setting_row_with,
+    settings_group, switch,
 };
 
 use super::note;
@@ -23,6 +23,7 @@ use crate::accounts::{self, Accounts};
 use crate::alerts;
 use crate::backend::{self, Load};
 use crate::clipboard;
+use crate::copied::CopiedSlot;
 
 /// What was copied from the page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,7 +51,7 @@ pub struct SshPage {
     busy: Option<Busy>,
     problem: Option<&'static str>,
     /// What was just copied: the line to paste, or a key.
-    copied: Option<Copied>,
+    copied: CopiedSlot<Copied>,
     /// Whether the account shown was chosen by the person, rather than
     /// guessed: a guess follows the account the agent is set up for.
     chosen: bool,
@@ -58,7 +59,6 @@ pub struct SshPage {
     shown: bool,
     load_task: Task<()>,
     task: Task<()>,
-    copied_timer: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,10 +73,11 @@ impl SshPage {
                     this.show(id, cx);
                 }
             }),
-            // Unlocking shows the keys, locking hides them.
+            // Unlocking shows the keys, locking hides them; what is being
+            // set up or removed says so itself once done.
             cx.observe(&accounts, |this, _, cx| {
                 this.follow_accounts(cx);
-                if this.shown {
+                if this.shown && this.busy.is_none() {
                     this.refresh(cx);
                 }
             }),
@@ -90,12 +91,11 @@ impl SshPage {
             status: Load::Loading,
             busy: None,
             problem: None,
-            copied: None,
+            copied: CopiedSlot::new(),
             chosen: false,
             shown: false,
             load_task: Task::ready(()),
             task: Task::ready(()),
-            copied_timer: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.follow_accounts(cx);
@@ -126,11 +126,20 @@ impl SshPage {
             .as_ref()
             .is_none_or(|id| !accounts.iter().any(|a| a.id == *id))
         {
-            self.account = accounts
+            let account = accounts
                 .iter()
                 .find(|account| account.state == LockState::Unlocked)
                 .or_else(|| accounts.first())
                 .map(|account| account.id.clone());
+            if account != self.account {
+                // What showed, or was under way, was for the account that
+                // went.
+                self.task = Task::ready(());
+                self.busy = None;
+                self.status = Load::Loading;
+                self.problem = None;
+            }
+            self.account = account;
             self.chosen = false;
         }
         self.choices = accounts.iter().map(|account| account.id.clone()).collect();
@@ -146,6 +155,10 @@ impl SshPage {
 
     fn show(&mut self, account: AccountId, cx: &mut Context<Self>) {
         if self.account.as_ref() != Some(&account) {
+            // What was under way was for the other account: its answer
+            // goes nowhere.
+            self.task = Task::ready(());
+            self.busy = None;
             self.account = Some(account);
             self.status = Load::Loading;
             self.problem = None;
@@ -154,17 +167,24 @@ impl SshPage {
         }
     }
 
-    /// Asks the agent's state again.
+    /// Asks the agent's state again, unless it is being set up or removed.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
         let Some(account) = self.account.clone() else {
             self.status = Load::Failed(Error::AccountNotFound);
             cx.notify();
             return;
         };
+        let asked = account.clone();
         self.load_task = backend::request(
             cx,
-            move |backend| backend.ssh_agent(&account),
-            |this, result, cx| {
+            move |backend| backend.ssh_agent(&asked),
+            move |this, result, cx| {
+                if this.account.as_ref() != Some(&account) {
+                    return;
+                }
                 // Until someone chooses, show the account whose agent it is.
                 if let Ok(SshAgentStatus {
                     service: SshService::InstalledForOther(other),
@@ -222,12 +242,16 @@ impl SshPage {
             confirm: "Remove".into(),
             destructive: true,
         };
+        // The account asked about, whichever shows once the person answers.
+        let Some(account) = self.account.clone() else {
+            return;
+        };
         let this = cx.entity().downgrade();
         alerts::confirm(confirmation, window, cx, move |_, cx| {
             this.update(cx, |this, cx| {
-                let Some(account) = this.account.clone() else {
+                if this.account.as_ref() != Some(&account) {
                     return;
-                };
+                }
                 this.run(
                     Busy::Removing,
                     move |backend| backend.uninstall_ssh_agent(&account),
@@ -249,10 +273,16 @@ impl SshPage {
         if self.busy.is_some() {
             return;
         }
+        let Some(account) = self.account.clone() else {
+            return;
+        };
         self.busy = Some(busy);
         self.problem = None;
         cx.notify();
-        self.task = backend::request(cx, call, |this, result, cx| {
+        self.task = backend::request(cx, call, move |this, result, cx| {
+            if this.account.as_ref() != Some(&account) {
+                return;
+            }
             this.busy = None;
             match result {
                 Ok(status) => this.status = Load::Ready(status),
@@ -278,18 +308,7 @@ impl SshPage {
 
     fn copy(&mut self, what: Copied, text: &str, cx: &mut Context<Self>) {
         clipboard::copy_text(text, cx);
-        self.copied = Some(what);
-        self.copied_timer = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(rbw_desktop_ui::motion::CONFIRMATION_HOLD)
-                .await;
-            this.update(cx, |this, cx| {
-                this.copied = None;
-                cx.notify();
-            })
-            .ok();
-        });
-        cx.notify();
+        self.copied.set(what, cx, |this| &mut this.copied);
     }
 
     fn render_status(&self, status: &SshAgentStatus, cx: &mut Context<Self>) -> AnyElement {
@@ -414,7 +433,7 @@ impl SshPage {
                 .truncate()
                 .child(line),
         )
-        .copied(self.copied == Some(Copied::Line))
+        .copied(self.copied.is(&Copied::Line))
         .action(icon(IconName::Copy))
         .on_click(cx.listener(move |this, _, _, cx| this.copy(Copied::Line, &copy, cx)));
         Some(
@@ -471,7 +490,7 @@ impl SshPage {
                     .child(key.fingerprint.clone()),
             );
         let copied = Copied::Key(key.item.clone());
-        let control = if self.copied.as_ref() == Some(&copied) {
+        let control = if self.copied.is(&copied) {
             copied_badge(cx).into_any_element()
         } else {
             let public_key = key.public_key.clone();
@@ -532,7 +551,19 @@ impl Render for SshPage {
             cx,
         );
         let body: Vec<AnyElement> = match &self.status {
-            Load::Loading => vec![],
+            // Quiet rows, once the agent takes a moment to answer.
+            Load::Loading => vec![
+                div()
+                    .child(loading_rows("ssh-loading", 2))
+                    .into_any_element(),
+            ],
+            Load::Failed(_) if self.account.is_none() => vec![
+                note(
+                    "Sign in to an account to use the SSH keys in its vault.",
+                    cx,
+                )
+                .into_any_element(),
+            ],
             Load::Failed(error) => vec![
                 note(backend::describe(error), cx).into_any_element(),
                 div()

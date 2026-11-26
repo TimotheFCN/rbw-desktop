@@ -9,14 +9,15 @@ use std::time::Duration;
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, DisplayId, Entity,
     FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Size,
-    Styled as _, Subscription, Task, Window, WindowBounds, WindowOptions, actions, div, point,
-    prelude::FluentBuilder as _, px, size,
+    Styled as _, Subscription, Task, Window, WindowBounds, WindowHandle, WindowOptions, actions,
+    div, point, prelude::FluentBuilder as _, px, size,
 };
 use rbw_desktop_core::{
     APP_ID, APP_NAME, Account, AccountId, Error, ItemId, LockState, REQUIRED_RBW, WindowPlace,
 };
 use rbw_desktop_ui::{
-    ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, motion, screen_title,
+    ActiveTheme as _, ButtonStyle, Theme, app_icon, button, chrome, loading_rows, motion,
+    screen_title,
 };
 
 use crate::CloseWindow;
@@ -135,23 +136,23 @@ fn place(bounds: WindowBounds, display: Option<String>) -> WindowPlace {
     }
 }
 
+/// The first window whose view, inside gpui-base's Root, is a `V`, with
+/// that view.
+pub fn find_window<V: 'static>(cx: &App) -> Option<(WindowHandle<gpui::base::Root>, Entity<V>)> {
+    cx.windows().into_iter().find_map(|handle| {
+        let root = handle.downcast::<gpui::base::Root>()?;
+        let view = root.read(cx).ok()?.view().clone().downcast::<V>().ok()?;
+        Some((root, view))
+    })
+}
+
 /// Brings the main window forward and runs `then` on it, opening it first
 /// if it was closed, as it is while the app waits in the menu bar.
 pub fn with_main_window(
     cx: &mut App,
     then: impl FnOnce(&mut MainWindow, &mut Window, &mut Context<MainWindow>) + 'static,
 ) {
-    for handle in cx.windows() {
-        let Some(root) = handle.downcast::<gpui::base::Root>() else {
-            continue;
-        };
-        let Some(main) = root
-            .read(cx)
-            .ok()
-            .and_then(|root| root.view().clone().downcast::<MainWindow>().ok())
-        else {
-            continue;
-        };
+    if let Some((root, main)) = find_window::<MainWindow>(cx) {
         root.update(cx, |_, window, cx| {
             window.activate_window();
             main.update(cx, |main, cx| then(main, window, cx));
@@ -169,6 +170,35 @@ pub fn with_main_window(
                 .ok();
         });
     }
+}
+
+/// The app found rbw, or found it missing, after the main window opened,
+/// as one opened from the Dock while it looked: the window follows the
+/// accounts, or says what is missing. Whether a main window was there.
+pub fn connected(missing: Option<Error>, cx: &mut App) -> bool {
+    let Some((root, main)) = find_window::<MainWindow>(cx) else {
+        return false;
+    };
+    root.update(cx, |_, window, cx| {
+        main.update(cx, |main, cx| {
+            if main.accounts.is_some() || !matches!(main.screen, Screen::Loading) {
+                return;
+            }
+            match missing {
+                Some(error) => main.show(Screen::Unavailable(error), window, cx),
+                None => main.follow_accounts(window, cx),
+            }
+        })
+    })
+    .ok();
+    true
+}
+
+/// What the window shows until the accounts are known: nothing at first,
+/// then, if that takes a moment, quiet rows that fade in.
+fn render_loading(window: &mut Window, cx: &mut App) -> AnyElement {
+    let rows = div().w(px(270.)).child(loading_rows("loading-accounts", 3));
+    chrome::plain_screen("loading", rows, window, cx)
 }
 
 enum Screen {
@@ -271,6 +301,9 @@ impl MainWindow {
         };
         match missing {
             Some(error) => this.screen = Screen::Unavailable(error),
+            // Opened while the app still looks for rbw, as from the Dock:
+            // it waits for [`connected`].
+            None if !backend::ready(cx) => {}
             None => this.follow_accounts(window, cx),
         }
         this
@@ -280,8 +313,9 @@ impl MainWindow {
         if self.other_rbw.is_none() {
             self.other_rbw = Some(cx.new(OtherRbwNotice::new));
         }
-        // They may have changed while no window asked for them.
-        accounts::refresh(cx);
+        // They may have changed while no window asked for them; an answer
+        // already on the way will do.
+        accounts::refresh_if_idle(cx);
         let accounts = Accounts::global(cx);
         self._accounts_events = Some(cx.subscribe_in(
             &accounts,
@@ -517,10 +551,19 @@ impl MainWindow {
         self.add_account(window, cx);
     }
 
-    /// Replaces the screen: the old one fades out, then the new one in.
+    /// Replaces the screen: the old one fades out, then the new one in. A
+    /// vault that locks or signs out goes at once, with what it showed
+    /// and any editor open in it.
     fn show(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<Self>) {
+        let closes_vault = matches!(
+            screen,
+            Screen::Lock(_) | Screen::SignIn(_) | Screen::Unavailable(_)
+        );
         let old = std::mem::replace(&mut self.screen, screen);
-        self.leaving = old.view();
+        self.leaving = match old {
+            Screen::Vault(_) if closes_vault => None,
+            old => old.view(),
+        };
         self.generation += 1;
         // Nothing of a vault stays behind it once it has gone.
         self.alerts.update(cx, |alerts, cx| alerts.dismiss(cx));
@@ -633,7 +676,7 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current: Option<AnyElement> = match &self.screen {
-            Screen::Loading => None,
+            Screen::Loading => Some(render_loading(window, cx)),
             Screen::Unavailable(error) => {
                 let error = error.clone();
                 Some(self.render_unavailable(&error, window, cx))

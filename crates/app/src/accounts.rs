@@ -35,7 +35,16 @@ pub struct Accounts {
     /// follows too.
     chosen: Option<AccountId>,
     refresh_task: Task<()>,
-    asked_at: Instant,
+    /// Whether the accounts are being asked for. One call at a time: rbw
+    /// may take longer than the poll, and a call is never dropped for
+    /// another, which would leave its process running.
+    in_flight: bool,
+    /// Whether something asked again while a call was on the way, which
+    /// may have read the accounts before what changed them: its answer
+    /// gives way to one more call.
+    pending_refresh: bool,
+    /// When the last answer came.
+    completed_at: Instant,
     _poll: Task<()>,
 }
 
@@ -55,12 +64,17 @@ pub fn init(cx: &mut App) {
             loop {
                 cx.background_executor().timer(POLL).await;
                 let asked = this.update(cx, |this: &mut Accounts, cx| {
-                    let every = if any_window_shows(cx) {
+                    if this.in_flight {
+                        return;
+                    }
+                    // A secret on the clipboard goes soon after its account
+                    // locks, even while no window shows.
+                    let every = if any_window_shows(cx) || clipboard::has_pending_secret(cx) {
                         POLL
                     } else {
                         POLL_HIDDEN
                     };
-                    if this.asked_at.elapsed() >= every {
+                    if this.completed_at.elapsed() >= every {
                         this.refresh(cx);
                     }
                 });
@@ -73,7 +87,9 @@ pub fn init(cx: &mut App) {
             list: Load::Loading,
             chosen: None,
             refresh_task: Task::ready(()),
-            asked_at: Instant::now(),
+            in_flight: false,
+            pending_refresh: false,
+            completed_at: Instant::now(),
             _poll: poll,
         };
         this.refresh(cx);
@@ -115,36 +131,27 @@ impl Accounts {
         }
     }
 
-    /// Asks for the accounts again now, such as after unlocking one.
+    /// Asks for the accounts again now, such as after unlocking one. While
+    /// a call is on the way, one more follows it, whose answer is the one
+    /// shown.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.asked_at = Instant::now();
+        if self.in_flight {
+            self.pending_refresh = true;
+            return;
+        }
+        self.in_flight = true;
         self.refresh_task = backend::request(
             cx,
             |backend| backend.accounts(),
             |this, result, cx| {
+                this.in_flight = false;
+                this.completed_at = Instant::now();
+                if std::mem::take(&mut this.pending_refresh) {
+                    this.refresh(cx);
+                    return;
+                }
                 match result {
-                    Ok(accounts) => {
-                        if this.list.ready() != Some(&accounts) {
-                            // A secret copied from an account that locked
-                            // or signed out goes with it.
-                            let closed: Vec<AccountId> = this
-                                .list()
-                                .iter()
-                                .filter(|before| {
-                                    before.state == LockState::Unlocked
-                                        && !accounts.iter().any(|now| {
-                                            now.id == before.id && now.state == LockState::Unlocked
-                                        })
-                                })
-                                .map(|account| account.id.clone())
-                                .collect();
-                            for account in &closed {
-                                clipboard::account_closed(account, cx);
-                            }
-                            this.list = Load::Ready(accounts);
-                            cx.notify();
-                        }
-                    }
+                    Ok(accounts) => this.settle(accounts, cx),
                     // A poll failing once leaves the accounts as they were;
                     // only a list that was never read says why.
                     Err(error) => {
@@ -158,6 +165,50 @@ impl Accounts {
             },
         );
     }
+
+    /// Asks for the accounts unless an answer is already on the way, for
+    /// a window that wants them fresh without anything having changed.
+    pub fn refresh_if_idle(&mut self, cx: &mut Context<Self>) {
+        if !self.in_flight {
+            self.refresh(cx);
+        }
+    }
+
+    fn settle(&mut self, accounts: Vec<Account>, cx: &mut Context<Self>) {
+        if self.list.ready() == Some(&accounts) {
+            return;
+        }
+        // A secret copied from an account that locked or signed out goes
+        // with it, and once none is unlocked, any secret.
+        let closed = closed(self.list(), &accounts);
+        for account in &closed {
+            clipboard::account_closed(account, cx);
+        }
+        let none_unlocked = !accounts
+            .iter()
+            .any(|account| account.state == LockState::Unlocked);
+        if !closed.is_empty() && none_unlocked {
+            clipboard::all_closed(cx);
+        }
+        crate::vault_cache::follow_accounts(self.list(), &accounts, cx);
+        self.list = Load::Ready(accounts);
+        cx.notify();
+    }
+}
+
+/// The accounts unlocked `before` that aren't any more `now`: locked,
+/// signed out or removed.
+fn closed(before: &[Account], now: &[Account]) -> Vec<AccountId> {
+    before
+        .iter()
+        .filter(|before| {
+            before.state == LockState::Unlocked
+                && !now
+                    .iter()
+                    .any(|now| now.id == before.id && now.state == LockState::Unlocked)
+        })
+        .map(|account| account.id.clone())
+        .collect()
 }
 
 /// Whether any of the app's windows is on screen.
@@ -187,6 +238,17 @@ pub fn refresh(cx: &mut App) {
     Accounts::global(cx).update(cx, |accounts, cx| accounts.refresh(cx));
 }
 
+/// [`Accounts::refresh_if_idle`] from anywhere.
+pub fn refresh_if_idle(cx: &mut App) {
+    Accounts::global(cx).update(cx, |accounts, cx| accounts.refresh_if_idle(cx));
+}
+
+/// The accounts being signed out of, so that asking twice signs out once.
+#[derive(Default)]
+struct SigningOut(std::collections::HashSet<AccountId>);
+
+impl Global for SigningOut {}
+
 /// Asks, then signs out of the account and removes it from this computer.
 /// `failed` hears of a failure, to say so in the window that asked.
 pub fn sign_out(
@@ -204,21 +266,37 @@ pub fn sign_out(
         destructive: true,
     };
     let id = account.id.clone();
+    if cx.default_global::<SigningOut>().0.contains(&id) {
+        return;
+    }
     alerts::confirm(confirmation, window, cx, move |window, cx| {
-        let removed = backend::call(cx, move |backend| backend.remove_account(&id));
-        window
-            .spawn(cx, async move |cx| {
-                let result = removed.await;
-                cx.update(|window, cx| {
-                    if let Err(error) = result {
-                        failed(error, window, cx);
-                    }
-                    refresh(cx);
-                })
-                .ok();
-            })
-            .detach();
+        if !cx.default_global::<SigningOut>().0.insert(id.clone()) {
+            return;
+        }
+        let removing = id.clone();
+        let removed = backend::call(cx, move |backend| backend.remove_account(&removing));
+        // The window that asked hears of a failure if it is still open.
+        let asked = window.window_handle();
+        cx.spawn(async move |cx| {
+            let result = removed.await;
+            cx.update(|cx| {
+                cx.default_global::<SigningOut>().0.remove(&id);
+                if let Err(error) = result {
+                    asked
+                        .update(cx, |_, window, cx| failed(error, window, cx))
+                        .ok();
+                }
+                refresh(cx);
+            });
+        })
+        .detach();
     });
+}
+
+/// Whether the account is being signed out of.
+pub fn signing_out(id: &AccountId, cx: &App) -> bool {
+    cx.try_global::<SigningOut>()
+        .is_some_and(|signing_out| signing_out.0.contains(id))
 }
 
 /// What a screen asks of the window that shows it.
@@ -292,13 +370,15 @@ fn close<V: AccountMenu>(view: &mut V, window: &mut Window, cx: &mut Context<V>)
 /// The account menu of a screen showing `current`.
 pub fn menu<V: AccountMenu>(
     view: &V,
-    accounts: &[Account],
+    _accounts: &[Account],
     current: &AccountId,
     opening: Opening,
     cx: &mut Context<V>,
 ) -> Popover {
     let this = cx.entity().downgrade();
-    let mut menu = popover(
+    let owner = cx.entity();
+    let current = current.clone();
+    popover(
         "account-menu",
         view.menu_open(),
         view.menu_focus(),
@@ -307,30 +387,35 @@ pub fn menu<V: AccountMenu>(
     .opening(opening)
     .on_dismiss(move |window, cx| {
         this.update(cx, |this, cx| close(this, window, cx)).ok();
-    });
-    for account in accounts {
-        let name = name(account);
-        menu = menu.child(
-            menu_item(
-                gpui::ElementId::Name(format!("account-{}", account.id.profile()).into()),
-                name.clone(),
-            )
-            .leading(avatar(&name, cx))
-            .detail(state(account))
-            .checked(account.id == *current)
-            .on_click(choose(Request::Show(account.id.clone()), cx)),
-        );
-    }
-    menu.child(menu_separator(cx))
-        .child(
-            menu_item("add-account", "Add Account…")
-                .icon(IconName::Plus)
-                .on_click(choose(Request::AddAccount, cx)),
-        )
-        .child(
-            menu_item("sign-out", "Sign Out…")
-                .on_click(choose(Request::SignOut(current.clone()), cx)),
-        )
+    })
+    .when_shown(move |mut menu, _, cx| {
+        let accounts: Vec<Account> = Accounts::global(cx).read(cx).list().to_vec();
+        owner.update(cx, |_, cx| {
+            for account in &accounts {
+                let name = name(account);
+                menu = menu.child(
+                    menu_item(
+                        gpui::ElementId::Name(format!("account-{}", account.id.profile()).into()),
+                        name.clone(),
+                    )
+                    .leading(avatar(&name, cx))
+                    .detail(state(account))
+                    .checked(account.id == current)
+                    .on_click(choose(Request::Show(account.id.clone()), cx)),
+                );
+            }
+            menu.child(menu_separator(cx))
+                .child(
+                    menu_item("add-account", "Add Account…")
+                        .icon(IconName::Plus)
+                        .on_click(choose(Request::AddAccount, cx)),
+                )
+                .child(
+                    menu_item("sign-out", "Sign Out…")
+                        .on_click(choose(Request::SignOut(current.clone()), cx)),
+                )
+        })
+    })
 }
 
 /// A menu item's click: closes the menu and makes the request.

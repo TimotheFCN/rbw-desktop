@@ -27,12 +27,21 @@ use crate::tray::{self, MenuBar};
 const LOCK_AFTER: [u64; 7] = [60, 5 * 60, 15 * 60, 30 * 60, 3600, 4 * 3600, 24 * 3600];
 const CLEAR_AFTER: [Option<u64>; 6] = [Some(10), Some(30), Some(60), Some(120), Some(300), None];
 
+/// An account's lock timeout menu.
+struct LockAfter {
+    select: Entity<Select>,
+    /// The choices it offers: the usual ones and, if it is set to
+    /// something else, that.
+    choices: Vec<Duration>,
+    _selected: Subscription,
+}
+
 pub struct GeneralPage {
     store: Entity<Store>,
     clear_after: Entity<Select>,
-    /// For each account, how long it stays unlocked, with the choices it
-    /// offers: the usual ones and, if it is set to something else, that.
-    lock_after: HashMap<AccountId, (Entity<Select>, Vec<Duration>)>,
+    /// For each account, how long it stays unlocked. An account that goes
+    /// takes its menu and what follows the menu with it.
+    lock_after: HashMap<AccountId, LockAfter>,
     /// The command line tool; `None` until known, or when the app has no
     /// rbw of its own to link.
     tool: Option<CommandLineTool>,
@@ -68,7 +77,8 @@ impl GeneralPage {
                 cx.notify();
             }),
             cx.observe(&store, |this, _, cx| this.follow_store(cx)),
-            cx.observe(&Accounts::global(cx), |_, _, cx| cx.notify()),
+            // An account that goes takes its lock timeout's menu with it.
+            cx.observe(&Accounts::global(cx), |this, _, cx| this.follow_store(cx)),
         ];
         let subscriptions = subscriptions
             .into_iter()
@@ -235,31 +245,37 @@ impl GeneralPage {
                 .unwrap_or_default();
             let labels: Vec<String> = choices.iter().copied().map(duration_label).collect();
             match self.lock_after.get_mut(&id) {
-                Some((select, known)) => {
-                    if *known != choices || select.read(cx).selected() != selected {
-                        select.update(cx, |select, cx| select.set_options(labels, selected, cx));
-                        *known = choices;
+                Some(known) => {
+                    if known.choices != choices || known.select.read(cx).selected() != selected {
+                        known
+                            .select
+                            .update(cx, |select, cx| select.set_options(labels, selected, cx));
+                        known.choices = choices;
                     }
                 }
                 None => {
                     let select = cx.new(|cx| Select::new("Lock after", labels, selected, cx));
                     let account = id.clone();
-                    self._subscriptions.push(cx.subscribe(
-                        &select,
-                        move |this, _, Selected(index), cx| {
-                            let Some(timeout) = this
-                                .lock_after
-                                .get(&account)
-                                .and_then(|(_, choices)| choices.get(*index).copied())
-                            else {
-                                return;
-                            };
-                            this.store.update(cx, |store, cx| {
-                                store.update(&account, |s| s.lock_timeout = timeout, cx)
-                            });
+                    let selected = cx.subscribe(&select, move |this, _, Selected(index), cx| {
+                        let Some(timeout) = this
+                            .lock_after
+                            .get(&account)
+                            .and_then(|known| known.choices.get(*index).copied())
+                        else {
+                            return;
+                        };
+                        this.store.update(cx, |store, cx| {
+                            store.update(&account, |s| s.lock_timeout = timeout, cx)
+                        });
+                    });
+                    self.lock_after.insert(
+                        id,
+                        LockAfter {
+                            select,
+                            choices,
+                            _selected: selected,
                         },
-                    ));
-                    self.lock_after.insert(id, (select, choices));
+                    );
                 }
             }
         }
@@ -320,7 +336,7 @@ impl Render for GeneralPage {
         let lock_rows: Vec<_> = accounts
             .iter()
             .filter_map(|account| {
-                let (select, _) = self.lock_after.get(&account.id)?;
+                let select = &self.lock_after.get(&account.id)?.select;
                 Some(if several {
                     setting_row(accounts::name(account), None, select.clone(), cx)
                 } else {

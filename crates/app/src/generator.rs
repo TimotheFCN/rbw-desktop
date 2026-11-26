@@ -21,6 +21,7 @@ use rbw_desktop_ui::{
 
 use crate::backend;
 use crate::clipboard;
+use crate::copied::CopiedSlot;
 use crate::preferences::{self, Prefs};
 
 /// What the generator makes, in the order of its segmented control.
@@ -210,8 +211,7 @@ pub struct Generator {
     /// Whether the options changed while a value was on the way.
     again: bool,
     problem: Option<&'static str>,
-    copied: bool,
-    copied_timer: Task<()>,
+    copied: CopiedSlot<()>,
     request: Task<()>,
     _slider_events: Subscription,
 }
@@ -233,8 +233,7 @@ impl Generator {
             in_flight: false,
             again: false,
             problem: None,
-            copied: false,
-            copied_timer: Task::ready(()),
+            copied: CopiedSlot::new(),
             request: Task::ready(()),
             _slider_events: slider_events,
         };
@@ -310,7 +309,7 @@ impl Generator {
                     Ok(value) => {
                         this.values += 1;
                         this.problem = None;
-                        this.copied = false;
+                        this.copied.clear();
                         this.value = Some(value.clone());
                         cx.emit(Generated(value));
                     }
@@ -346,18 +345,7 @@ impl Generator {
     fn copy(&mut self, cx: &mut Context<Self>) {
         let Some(value) = &self.value else { return };
         clipboard::copy_secret(value, None, cx);
-        self.copied = true;
-        self.copied_timer = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(motion::CONFIRMATION_HOLD)
-                .await;
-            this.update(cx, |this, cx| {
-                this.copied = false;
-                cx.notify();
-            })
-            .ok();
-        });
-        cx.notify();
+        self.copied.set((), cx, |this| &mut this.copied);
     }
 
     /// The value, large, over the room the widest value would take, with
@@ -568,6 +556,7 @@ pub fn strength_look(strength: Strength, cx: &App) -> (Hsla, &'static str) {
 impl Render for Generator {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let copy_label = format!("Copy {}", self.noun());
+        let copied = self.copied.is(&());
         div()
             .flex()
             .flex_col()
@@ -580,8 +569,8 @@ impl Render for Generator {
                     .child(
                         div().flex_1().child(
                             button("copy-generated")
-                                .label(if self.copied { "Copied" } else { "Copy" })
-                                .when(self.copied, |b| b.icon(IconName::Check))
+                                .label(if copied { "Copied" } else { "Copy" })
+                                .when(copied, |b| b.icon(IconName::Check))
                                 .accessibility_label(copy_label)
                                 .style(ButtonStyle::Primary)
                                 .wide()
