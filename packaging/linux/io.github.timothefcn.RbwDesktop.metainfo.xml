@@ -70,6 +70,11 @@
     <color type="primary" scheme_preference="dark">#0b3f8c</color>
   </branding>
   <releases>
+    <release version="0.1.0" date="2026-11-26">
+      <description>
+        <p>Security hardening, faster syncs and polls with rbw-ng 1.19.0, and smoother rendering across large vaults.</p>
+      </description>
+    </release>
     <release version="0.0.1" date="2026-11-25">
       <description>
         <p>The first release.</p>
