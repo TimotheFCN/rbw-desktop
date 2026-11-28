@@ -39,9 +39,6 @@ find a password, copy it and save a new one without reading anything.
    system's reduced motion only fades remain.
 6. **Plain words.** "Verification code", not "TOTP". "Website", not "URI".
 
-The mockups in `design/mockups` are the reference for look and density.
-Open the `.html` files, or rebuild them with `design/mockups/src/build.py`.
-
 ## What it does
 
 ### Accounts

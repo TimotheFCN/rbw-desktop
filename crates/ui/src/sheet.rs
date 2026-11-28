@@ -109,7 +109,7 @@ impl SheetSlot {
 
 /// The surface of sheets, alerts and popovers, without placement: opaque,
 /// since GPUI can't blur what is under it, with a hairline edge and the
-/// shadows of the mockups. Its children stack in a column.
+/// shadows of the platform's own sheets. Its children stack in a column.
 #[derive(IntoElement)]
 pub struct Surface {
     base: Div,

@@ -693,7 +693,7 @@ impl RenderOnce for LoadingRows {
 pub const ROW_HEIGHT: Pixels = px(46.);
 /// The height of a row of a panel's list, [`ListRow::compact`].
 pub const COMPACT_ROW_HEIGHT: Pixels = px(40.);
-/// Text in rows reads at the mockups' line height. gpui-base's buttons set
+/// Text in rows reads at a 1.35 line height. gpui-base's buttons set
 /// it to the font size, which presses a name onto its subtitle.
 pub(crate) const ROW_LINE_HEIGHT: f32 = 1.35;
 

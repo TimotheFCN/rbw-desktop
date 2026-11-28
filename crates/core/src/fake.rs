@@ -579,7 +579,7 @@ fn totp(secret: &str, now: SystemTime) -> VerificationCode {
     }
 }
 
-// The icon of a demo website, drawn for the demo (design/demo-icons), so
+// The icon of a demo website, drawn for the demo, so
 // that the interface shows icons without a server. Only the made-up
 // websites have one: the others show their letter.
 fn demo_icon(host: &str) -> Option<WebsiteIcon> {

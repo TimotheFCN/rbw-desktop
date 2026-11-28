@@ -59,13 +59,12 @@ xcompmgr hsetroot x11-utils mesa-vulkan-drivers imagemagick ffmpeg`, and
 
 ## Screenshots
 
-Look at a screenshot after every visual change, next to the mockup it
-implements.
+Look at a screenshot after every visual change.
 
 ```sh
 tools/shot vault out.png                          # tools/shot --help lists the states
 tools/shot --theme gnome-dark sheet out.png
-tools/shot --size 680x470 vault out.png           # the mockups' window size
+tools/shot --size 680x470 vault out.png           # a given window size
 tools/shot --then 'type "Netflix"' --then 'key ctrl+Return' sheet out.png
 tools/shot --record 0.9 sheet out.png             # also out-frames/NNN.png at 30 fps, to check motion
 tools/shot --demo slow lock-busy out.png          # more RBW_DESKTOP_DEMO words
